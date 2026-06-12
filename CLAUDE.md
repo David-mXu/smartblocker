@@ -13,8 +13,12 @@ companion) lives in the plan, not here yet.
 - `npm run typecheck` — `tsc --noEmit`
 - `node scripts/smoke-test.mjs [modelId]` — Node-side model quality/speed test
   (no browser needed; first run downloads the model)
+- `node scripts/e2e-test.mjs` — full e2e in a real Chromium (Playwright):
+  boots the SW, runs Test Pair, fakes YouTube pages via network interception
+  to verify block/allow + latency, seeds and runs the history scan. First run
+  downloads the model into `.e2e-profile/` (~70MB, persists across runs).
 
-There are no automated tests; verification is manual (see README "Try it").
+Run typecheck + build + e2e before considering any background change done.
 
 ## Architecture
 

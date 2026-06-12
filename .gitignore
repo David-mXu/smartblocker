@@ -1,4 +1,5 @@
 node_modules/
 dist/
+.e2e-profile/
 *.local
 .DS_Store

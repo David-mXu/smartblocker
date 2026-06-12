@@ -51,12 +51,16 @@ npm run build        # -> dist/chrome (also Edge) and dist/firefox
    (`pageDelay` = the page's own title lag; `load` = model cold start;
    `infer` = classification; cached repeats are ~0ms).
 
-## Model quality check (no browser needed)
+## Automated checks
 
 ```sh
-node scripts/smoke-test.mjs                                # default model
-node scripts/smoke-test.mjs Xenova/mobilebert-uncased-mnli # compare others
+node scripts/smoke-test.mjs   # model quality/speed in Node (no browser)
+node scripts/e2e-test.mjs     # full extension e2e in a real Chromium
 ```
+
+Measured on this machine (real Chromium service worker): cached titles block
+in 5–13ms; uncached titles take ~0.4–1.5s of inference; a cold service worker
+adds ~1.3–3.1s to reload the model from cache (no re-download).
 
 Current default `Xenova/nli-deberta-v3-xsmall` scores 9/10 on realistic
 titles at ~60–100ms each. Known limitation: tiny NLI models don't recognize
