@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "FlowGuard POC",
+  "version": "0.1.0",
+  "description": "Local-AI distraction classifier proof of concept",
+  "minimum_chrome_version": "116",
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "FlowGuard"
+  },
+  "permissions": [
+    "history",
+    "scripting",
+    "storage",
+    "unlimitedStorage",
+    "webNavigation",
+    "tabs"
+  ],
+  "host_permissions": ["*://*.youtube.com/*", "*://*.reddit.com/*"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
+}
