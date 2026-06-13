@@ -1,10 +1,13 @@
-# FlowGuard (Phase 1 POC)
+# FlowGuard
 
 Smart distraction blocker: a fully-local AI model classifies YouTube/Reddit
 page titles (zero-shot) and blocks off-topic content without blocking whole
-sites. This repo is the Phase 1 proof-of-concept; the long-term roadmap
-(onboarding UI, session-context detection, paid tamper-proof desktop
-companion) lives in the plan, not here yet.
+sites. **The full multi-phase roadmap lives in `ROADMAP.md`** (Phase 1 POC done;
+Phase 2 "Ambient MVP" — onboarding/settings, richer signals, offscreen cold-start
+fix, block screen + override — in progress).
+
+Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
+`gh` CLI is not installed).
 
 ## Commands
 
