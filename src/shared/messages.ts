@@ -1,8 +1,33 @@
-// popup <-> background message contract.
+// popup/options/offscreen <-> background message contract.
+import type { Settings } from './settings';
+
+/** Classifier input. Phase 2 widens it from a bare title to richer page
+ *  signals (channel, description/post-body snippet) — see build-input.ts. */
+export interface ClassifyInput {
+  title: string;
+  channel?: string;
+  context?: string;
+}
+
+/** A user correction: a title the user forced through the block screen. */
+export interface Override {
+  title: string;
+  ts: number;
+}
 
 export type Request =
   | { type: 'TEST_PAIR' }
-  | { type: 'SCAN_HISTORY' };
+  | { type: 'SCAN_HISTORY' }
+  | { type: 'GET_SETTINGS' }
+  | { type: 'SET_SETTINGS'; patch: Partial<Settings> }
+  | { type: 'CLASSIFY'; input: ClassifyInput }
+  | { type: 'OVERRIDE'; title: string; url?: string };
+
+export interface SettingsResponse {
+  ok: boolean;
+  settings?: Settings;
+  error?: string;
+}
 
 export interface ClassifyOutcome {
   text: string;
