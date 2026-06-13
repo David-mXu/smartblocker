@@ -20,13 +20,25 @@ export type Request =
   | { type: 'SCAN_HISTORY' }
   | { type: 'GET_SETTINGS' }
   | { type: 'SET_SETTINGS'; patch: Partial<Settings> }
-  | { type: 'CLASSIFY'; input: ClassifyInput }
+  // Offscreen-document RPC: pure inference primitives, so the offscreen worker
+  // stays decoupled from settings + text assembly (those live SW-side).
+  | { type: 'CLASSIFY'; text: string; labels: string[] }
   | { type: 'OVERRIDE'; title: string; url?: string };
 
 export interface SettingsResponse {
   ok: boolean;
   settings?: Settings;
   error?: string;
+}
+
+/** Raw inference result from the model (pre-cache, pre-verdict). */
+export interface InferResult {
+  label: string;
+  score: number;
+  all: { labels: string[]; scores: number[] };
+  /** Pipeline (re)load time — 0 when the model was already warm. */
+  loadMs: number;
+  inferMs: number;
 }
 
 export interface ClassifyOutcome {
