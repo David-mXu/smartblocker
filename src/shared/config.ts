@@ -1,10 +1,13 @@
-// Every tuning knob in one place.
+// Default values. These are the DEFAULTS for src/shared/settings.ts, which is
+// the runtime source of truth (user-overridable from the options page).
 
 // Chosen by smoke test (scripts/smoke-test.mjs): DeBERTa scored 9/10 vs
 // MobileBERT's 5/10 at comparable speed (~60-100ms/title in Node).
 // Known ceiling: the model doesn't recognize newer proper nouns — e.g.
-// "Elden Ring Boss Fight" classifies as sports. Richer page signals
-// (channel name, longer titles) are the Phase 2 mitigation.
+// "Elden Ring Boss Fight" classifies as sports. Phase 2 plumbed richer page
+// signals (channel + description) through, but on this tiny model that does NOT
+// reliably fix it (and can backfire — see the CLAUDE.md richer-signal caveat);
+// a stronger model is the Phase 3 plan.
 export const MODEL_ID = 'Xenova/nli-deberta-v3-xsmall';
 
 export const HYPOTHESIS_TEMPLATE = 'This video or post is about {}.';

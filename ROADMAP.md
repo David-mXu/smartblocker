@@ -33,42 +33,49 @@ richer page signals (channel name, description), not a bigger model.
 
 ---
 
-## Phase 2 — Ambient MVP 🛠️ (in progress)
+## Phase 2 — Ambient MVP ✅ (implemented 2026-06-13, v0.2.0)
 
-Turn the POC into something a real user configures and lives with. Four fronts,
+Turned the POC into something a real user configures and lives with. Four fronts,
 built by a coordinated agent team against a shared foundation (typed settings store
-+ expanded popup⇄background message contract).
++ expanded message contract). All four are integrated; `typecheck`, dual-target
+`build`, and the real-Chromium `e2e` pass.
 
-1. **Onboarding + user-configurable categories.** First-run flow opens a settings
-   page, scans history to surface the user's top "kryptonite" vs "productive"
-   categories, and lets them choose what to block. Replaces every hardcoded knob in
-   `src/shared/config.ts` (labels, blocked set, threshold, enable) with a
-   `storage.local`-backed `Settings` object read live by the classifier/blocker.
+1. **Onboarding + user-configurable categories.** ✅ First-run opens a settings
+   page (`src/options/`, `options_ui`) with category block toggles, a threshold
+   slider, a master enable switch, and a history-scan helper. Every hardcoded knob
+   in `config.ts` is now a `storage.local`-backed `Settings` object
+   (`src/shared/settings.ts`) read live by the classifier/blocker.
 
-2. **Richer classifier signals.** Feed channel name + a description/post-body
-   snippet (extracted from the page DOM via a self-contained injected function, the
-   `overlay.ts` pattern) into the model so it stops mislabeling proper nouns. Widens
-   the classify input + cache key from bare title to `{ title, channel, context }`.
+2. **Richer classifier signals.** ⚠️ *Plumbed, accuracy inconclusive.* Channel +
+   description/post-body snippets are scraped from the DOM (`extractMeta`),
+   assembled (`buildClassifierText`), and fed to the model; the cache key widened
+   to `{ title, channel, context }`. The path is proven by the e2e, **but on the
+   current tiny NLI model it does not reliably fix proper-noun blindness** — the
+   enriched smoke cases score ~1/4, and enrichment can even backfire (e.g.
+   "FromSoftware" contains "Software" → *programming*). The real fix is a stronger
+   model — carried into Phase 3 as an open problem.
 
-3. **Service-worker cold-start fix.** The SW dies after ~30 s idle, costing a
-   1–3 s model reload on the next classification. Move the Transformers pipeline
-   into an **offscreen document** (persistent, has a real `document`) on Chrome/Edge;
-   the SW becomes a thin RPC client. Firefox has no offscreen API → keep the
-   in-process path as a first-class fallback.
+3. **Service-worker cold-start fix.** ✅ The Transformers pipeline now runs in an
+   **offscreen document** (`src/background/offscreen/`) on Chrome/Edge; the SW is a
+   thin RPC client (`classify-client.ts`). The e2e confirms warm-but-uncached
+   classifications show `load 0ms` (no reload). Firefox keeps the in-process path
+   (no offscreen API).
 
-4. **Full block screen + override.** Replace the throwaway "click to dismiss"
-   overlay with a real block screen showing the category and a **"This is actually
-   productive — let me through"** override. The override is recorded in a local
-   correction store so the same title is allowed in future — a lightweight way to
-   "teach" the system without on-device fine-tuning.
+4. **Full block screen + override.** ✅ `blockscreen.ts` (replacing `overlay.ts`)
+   shows the category + a **"This is actually productive — let me through"**
+   override; corrections are stored (`src/shared/overrides.ts`) so the same title
+   is allowed thereafter — lightweight "teaching" without on-device fine-tuning.
 
-Also in scope: `version` → 0.2.0; docs (`CLAUDE.md`, `README.md`) updated for the
-new architecture.
+Done alongside: `version` → 0.2.0, `CLAUDE.md` + `README.md` updated.
 
 ---
 
 ## Phase 3 — Public beta
 
+- **Open problem carried from Phase 2: model quality.** The tiny NLI model
+  (`nli-deberta-v3-xsmall`) misses newer proper nouns and richer signals don't
+  fix it reliably. Evaluate a stronger local model (larger NLI, or a small
+  embed-and-classify approach) against the RAM/latency budget before launch.
 - Open-source GitHub release + Chrome Web Store beta listing.
 - Watch RAM/battery, false-positive rate, and model download UX in the wild.
 - Stay telemetry-free; all classification + history analysis remain local.

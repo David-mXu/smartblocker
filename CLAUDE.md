@@ -2,9 +2,10 @@
 
 Smart distraction blocker: a fully-local AI model classifies YouTube/Reddit
 page titles (zero-shot) and blocks off-topic content without blocking whole
-sites. **The full multi-phase roadmap lives in `ROADMAP.md`** (Phase 1 POC done;
-Phase 2 "Ambient MVP" — onboarding/settings, richer signals, offscreen cold-start
-fix, block screen + override — in progress).
+sites. **The full multi-phase roadmap lives in `ROADMAP.md`.** Phase 1 POC and
+Phase 2 "Ambient MVP" are implemented: user-configurable categories + onboarding
+(options page), richer page signals, an offscreen-document cold-start fix
+(Chrome/Edge), and a block screen with a "this is actually productive" override.
 
 Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
 `gh` CLI is not installed).
@@ -25,16 +26,38 @@ Run typecheck + build + e2e before considering any background change done.
 
 ## Architecture
 
-- `src/background/` — MV3 background. `classifier.ts` holds ALL the
-  Transformers.js risk (singleton pipeline + env config + title cache);
-  `blocker.ts` is the SPA-aware navigation/title listener + latency log;
-  `history-ingester.ts` scans chrome.history; `index.ts` wires listeners.
+- `src/background/` — MV3 background.
+  - `classifier.ts` — the classify() entry point: title cache + verdict assembly.
+    On Chrome/Edge it delegates inference to the **offscreen document** via
+    `classify-client.ts`; on Firefox it runs the Transformers.js pipeline
+    in-process (`getClassifier()` singleton + env config still live here).
+  - `classify-client.ts` — SW-side offscreen RPC: `supportsOffscreen()` +
+    `classifyViaOffscreen(text, labels)` (ensures the doc, sends `CLASSIFY`).
+  - `offscreen/offscreen.{html,ts}` — Chrome-only document that HOSTS the
+    Transformers pipeline (pure inference; no caching/settings). Survives SW idle.
+  - `blocker.ts` — SPA-aware nav/title listener; gathers richer signals
+    (`extractMeta`), checks settings + overrides, injects `blockscreen.ts`.
+  - `blockscreen.ts` — injected full block screen with the override button
+    (replaced the old `overlay.ts`).
+  - `history-ingester.ts` scans chrome.history; `index.ts` wires listeners,
+    first-run onboarding (`openOptionsPage`), and the `OVERRIDE` handler.
 - `src/popup/` — framework-less diagnostic UI (test pair, history scan, latency log).
-- `src/shared/` — `config.ts` (every tuning knob: model id, labels, thresholds),
-  `api.ts` (cross-browser shim), `messages.ts` (popup⇄background contract),
+- `src/options/` — settings + onboarding page (`options_ui`, open-in-tab):
+  category block toggles, threshold slider, master enable, history-scan helper.
+- `src/content/extract-meta.ts` — self-contained injected function that scrapes
+  channel/subreddit + description snippet from the page DOM.
+- `src/shared/` — `config.ts` (DEFAULTS: model id, labels, thresholds),
+  `settings.ts` (user-overridable `Settings` in storage.local — the runtime
+  source of truth), `overrides.ts` (user-correction store), `build-input.ts`
+  (`buildClassifierText` + `inputCacheKey` from a `ClassifyInput`),
+  `api.ts` (cross-browser shim + `IS_FIREFOX`), `messages.ts` (message contract),
   `titles.ts` (URL/title filters).
-- `manifests/chrome.json` + `manifests/firefox.json` → copied to
-  `dist/<target>/manifest.json` by `scripts/copy-assets.mjs`.
+- Build passes (one Vite config each, since `inlineDynamicImports` forbids
+  multi-input): `vite.config.background.ts`, `vite.config.offscreen.ts`
+  (chrome only), `vite.config.popup.ts`, `vite.config.options.ts`.
+- `manifests/{chrome,firefox}.json` → `dist/<target>/manifest.json` via
+  `scripts/copy-assets.mjs`, which ALSO hand-copies `offscreen.html` for Chrome
+  (the offscreen Vite pass emits only `offscreen.js`).
 
 ## Load-bearing constraints (violate these and the extension breaks)
 
@@ -48,7 +71,8 @@ Run typecheck + build + e2e before considering any background change done.
    manifest, `format: 'es'` in Vite): ORT resolves its `.wasm` asset against
    `import.meta.url`, and Vite's IIFE fallback uses `document.baseURI` —
    `document` doesn't exist in a SW. Firefox stays IIFE (its background event
-   page HAS a `document`).
+   page HAS a `document`); the **offscreen** bundle is also IIFE (the offscreen
+   document HAS a `document`, so `document.baseURI` resolves the `.wasm`).
 3. **Cross-browser API**: always `import { api } from '../shared/api'`, never
    bare `chrome.*` — Firefox's promise APIs live on `browser.*`.
 4. **MV3 listeners** must be registered synchronously at SW startup
@@ -58,6 +82,16 @@ Run typecheck + build + e2e before considering any background change done.
 6. Pipeline = `@huggingface/transformers@3.8.1` **pinned**: the official
    extension example still uses v3; v4 is a runtime rewrite, unproven in MV3
    SWs. Don't bump casually.
+7. **Offscreen (Chrome/Edge only).** The model runs in `offscreen.html` so it
+   survives SW idle. `chrome.offscreen` needs the `"offscreen"` permission and
+   a valid `reasons` enum value (`WORKERS`). The offscreen doc keeps the SAME
+   wasm constraints (#1) — its Vite pass also sets `inlineDynamicImports` and
+   never touches `wasmPaths`. **Do NOT put a tight `<meta>` CSP in
+   `offscreen.html`** (e.g. `default-src 'none'`) — it would block fetching the
+   bundled `.wasm` from the `chrome-extension://` origin; rely on the manifest's
+   `extension_pages` CSP. Firefox has no offscreen API → it stays on the
+   in-process path (`classify-client.ts` `supportsOffscreen()` gate). CacheStorage
+   is origin-scoped, so the SW and offscreen doc SHARE the `transformers-cache`.
 
 ## Model facts (from scripts/smoke-test.mjs runs, 2026-06)
 
@@ -69,13 +103,27 @@ Run typecheck + build + e2e before considering any background change done.
   "Elden Ring Boss Fight" → sports. Kept in TEST_TITLES deliberately.
 - Zero-shot = one forward pass per label (8 labels = 8 inferences/title);
   trimming labels is a linear speedup.
+- **Richer-signal caveat (Phase 2 finding).** Feeding channel + description into
+  the model is now plumbed end-to-end (`extractMeta` → `buildClassifierText`),
+  and the e2e proves the path, but on this tiny model it does NOT reliably fix
+  proper-noun blindness — the enriched smoke cases score ~1/4. Enrichment is
+  double-edged: e.g. "Elden Ring … FromSoftware soulslike" classifies as
+  *programming* because **"FromSoftware" contains the token "Software."** The
+  real fix is a stronger model (Phase 3), not more context on this one. Note the
+  smoke-test script DEFAULTS to the rejected `mobilebert`; pass
+  `Xenova/nli-deberta-v3-xsmall` to test the model the extension actually ships.
 
 ## Gotchas
 
-- Service worker dies after ~30s idle → next classification pays a 1-3s
-  pipeline reload (`loadMs` in the latency log isolates this). Phase 2 fix:
-  offscreen document or keepalive.
-- Firefox may lack the Cache API in extension contexts; `classifier.ts`
-  probes and falls back to per-session model downloads (warns in console).
+- SW idle cold-start (the 1-3s `loadMs` reload) is FIXED on Chrome/Edge by the
+  offscreen document (e2e shows `load 0ms` on warm-but-uncached titles). Firefox
+  still pays it (no offscreen API) — keepalive there is future work.
+- Firefox may lack the Cache API in extension contexts; both `classifier.ts` and
+  `offscreen.ts` probe and fall back to per-session model downloads (warns).
 - The title cache (storage.local `titleCache`) makes repeat classifications
-  ~0ms — clear storage when re-testing latency.
+  ~0ms — clear storage when re-testing latency. The cache key now spans every
+  signal (`inputCacheKey`: title+channel+context), not just the title.
+- Settings + overrides are storage.local-backed with in-memory caches
+  invalidated via `storage.onChanged`; on Chrome the model code is bundled into
+  BOTH `background.js` and `offscreen.js` (the in-process path is just never
+  taken there) — a known size trade-off, not a bug.

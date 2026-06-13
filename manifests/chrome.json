@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "FlowGuard POC",
-  "version": "0.1.0",
-  "description": "Local-AI distraction classifier proof of concept",
+  "name": "FlowGuard",
+  "version": "0.2.0",
+  "description": "Local-AI distraction blocker — classifies what you watch, blocks only your bad habits",
   "minimum_chrome_version": "116",
   "background": {
     "service_worker": "background.js",

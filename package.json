@@ -1,8 +1,8 @@
 {
   "name": "flowguard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "FlowGuard - local-AI distraction blocker (Phase 1 POC)",
+  "description": "FlowGuard - local-AI distraction blocker (Phase 2 Ambient MVP)",
   "type": "module",
   "scripts": {
     "build": "npm run build:chrome && npm run build:firefox",

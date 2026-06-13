@@ -1,23 +1,31 @@
-# FlowGuard — Phase 1 Proof of Concept
+# FlowGuard
 
 A smart distraction blocker that runs a zero-shot text-classification model
 **100% locally in your browser** (Transformers.js + ONNX WASM). Instead of
 blocking all of YouTube or Reddit, it classifies each page title — "React
 Router Tutorial" passes, "I spent 100 days in Hardcore Minecraft" gets a
-block overlay.
+block screen.
 
-This POC proves three things:
+Phase 1 (POC) and Phase 2 ("Ambient MVP") are implemented; the full plan is in
+[`ROADMAP.md`](ROADMAP.md). What works today:
 
 1. Transformers.js runs inside a Manifest V3 background (service worker on
-   Chrome/Edge, event page on Firefox).
-2. Your existing history can be scanned and categorized locally
-   (popup → "Scan History").
+   Chrome/Edge, event page on Firefox). On Chrome/Edge the model lives in an
+   **offscreen document** so it survives the service worker's idle shutdown.
+2. **Configurable categories + onboarding** — a settings page (opens on install)
+   lets you pick which categories to block, set the threshold, and scan your
+   history to spot your top distractions.
 3. Page-visit classification is fast enough to block "instantly"
-   (popup → "Latency Log" after browsing).
+   (popup → "Latency Log" after browsing), with a **block screen** whose
+   "this is actually productive" override remembers your correction.
 
 Nothing ever leaves your machine: the model (~70MB, one-time) is downloaded
 from the Hugging Face Hub and cached; all inference and history analysis are
 local.
+
+> Note: the bundled tiny NLI model still misclassifies some newer proper nouns
+> (e.g. "Elden Ring Boss Fight" → sports); a stronger local model is the planned
+> Phase 3 fix. See `ROADMAP.md`.
 
 ## Build
 
@@ -40,16 +48,22 @@ npm run build        # -> dist/chrome (also Edge) and dist/firefox
    to youtube.com/reddit.com (Firefox treats MV3 host permissions as opt-in).
 
 **Then, in any browser:**
-1. Click the toolbar popup → **Test Pair**. First click downloads the model
+1. On first install the **settings page opens automatically** (onboarding):
+   toggle which categories to block, set the block threshold, and hit
+   **Scan my history** to see your top distraction vs productive categories.
+   Reopen it anytime from the extensions menu → "Options" (or the popup).
+2. Click the toolbar popup → **Test Pair**. First click downloads the model
    (~70MB, watch the background console); you'll see label distributions and
    per-title timings.
-2. **Scan History** → live progress + a category histogram of your recent
+3. **Scan History** → live progress + a category histogram of your recent
    YouTube/Reddit browsing.
-3. Visit a gaming video on YouTube → red overlay (click to dismiss). Click
-   through to another video via the sidebar (SPA navigation) → it re-blocks.
-   A programming tutorial → no overlay. **Latency Log** shows the breakdown
-   (`pageDelay` = the page's own title lag; `load` = model cold start;
-   `infer` = classification; cached repeats are ~0ms).
+4. Visit a gaming video on YouTube → **block screen**. Click *"This is actually
+   productive — let me through"* and the correction sticks (that title won't be
+   blocked again); *"Stay focused"* just dismisses. Click through to another
+   video via the sidebar (SPA navigation) → it re-blocks. A programming tutorial
+   → no block. **Latency Log** shows the breakdown (`pageDelay` = the page's own
+   title lag; `load` = model cold start — ~0 on Chrome thanks to the offscreen
+   document; `infer` = classification; cached repeats are ~0ms).
 
 ## Automated checks
 
