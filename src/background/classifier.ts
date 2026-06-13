@@ -1,12 +1,10 @@
 import { env, pipeline } from '@huggingface/transformers';
 import { api } from '../shared/api';
-import {
-  HYPOTHESIS_TEMPLATE,
-  LABELS,
-  MODEL_ID,
-  TITLE_CACHE_MAX,
-} from '../shared/config';
-import type { ClassifyOutcome } from '../shared/messages';
+import { buildClassifierText, inputCacheKey } from '../shared/build-input';
+import { HYPOTHESIS_TEMPLATE, MODEL_ID, TITLE_CACHE_MAX } from '../shared/config';
+import { getSettings } from '../shared/settings';
+import type { ClassifyInput, ClassifyOutcome, InferResult } from '../shared/messages';
+import { classifyViaOffscreen, supportsOffscreen } from './classify-client';
 
 // ---- MV3 environment config (load-bearing) ----
 // Model weights come from the HF Hub (data, not code — Web Store legal); the
@@ -80,35 +78,48 @@ function persistTitleCache(cache: Map<string, CacheEntry>) {
   void api.storage.local.set({ titleCache: Object.fromEntries(cache) });
 }
 
-export async function classify(text: string): Promise<ClassifyOutcome> {
-  const cache = await getTitleCache();
-  const hit = cache.get(text);
-  if (hit) {
-    return { text, ...hit, loadMs: 0, inferMs: 0, cached: true };
-  }
-
+// In-process inference (Firefox, or Chrome before the offscreen doc is wired).
+async function classifyInProcess(text: string, labels: string[]): Promise<InferResult> {
   const t0 = performance.now();
   const clf = await getClassifier();
   const tLoaded = performance.now();
-  const out = await clf(text, LABELS, {
+  const out = await clf(text, labels, {
     hypothesis_template: HYPOTHESIS_TEMPLATE,
     multi_label: false,
   });
   const tDone = performance.now();
-
-  const entry: CacheEntry = {
+  return {
     label: out.labels[0],
     score: out.scores[0],
     all: { labels: out.labels, scores: out.scores },
-  };
-  cache.set(text, entry);
-  persistTitleCache(cache);
-
-  return {
-    text,
-    ...entry,
     loadMs: tLoaded - t0,
     inferMs: tDone - tLoaded,
-    cached: false,
   };
+}
+
+export async function classify(input: ClassifyInput): Promise<ClassifyOutcome> {
+  // Cache key spans every signal (title/channel/context); the model sees the
+  // assembled text. Both come from build-input so they stay in lockstep.
+  const key = inputCacheKey(input);
+  const text = buildClassifierText(input);
+
+  const cache = await getTitleCache();
+  const hit = cache.get(key);
+  if (hit) {
+    return { text, ...hit, loadMs: 0, inferMs: 0, cached: true };
+  }
+
+  // Labels are user-configurable (settings page); read them per classification
+  // so changes apply without a reload. Offscreen on Chrome/Edge keeps the model
+  // alive past SW idle; Firefox runs the pipeline in-process.
+  const { labels } = await getSettings();
+  const infer = supportsOffscreen()
+    ? await classifyViaOffscreen(text, labels)
+    : await classifyInProcess(text, labels);
+
+  const entry: CacheEntry = { label: infer.label, score: infer.score, all: infer.all };
+  cache.set(key, entry);
+  persistTitleCache(cache);
+
+  return { text, ...entry, loadMs: infer.loadMs, inferMs: infer.inferMs, cached: false };
 }

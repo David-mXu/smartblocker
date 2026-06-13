@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- No meta CSP: rely on the manifest's extension_pages CSP (script-src
+         'self' 'wasm-unsafe-eval'). A tighter meta policy here (e.g.
+         default-src 'none') would block fetching the bundled ORT .wasm asset
+         from the chrome-extension:// origin and break model load. -->
+    <title>FlowGuard Offscreen Classifier</title>
+  </head>
+  <body>
+    <!-- IIFE bundle: no type=module, plain script tag -->
+    <script src="offscreen.js"></script>
+  </body>
+</html>

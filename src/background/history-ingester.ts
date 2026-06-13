@@ -50,7 +50,7 @@ export async function scanHistory(): Promise<void> {
     for (let i = 0; i < targets.length; i += CHUNK_SIZE) {
       const chunk = targets.slice(i, i + CHUNK_SIZE);
       for (const { title, url } of chunk) {
-        const r = await classify(title);
+        const r = await classify({ title });
         state.items.push({ title, url, label: r.label, score: r.score });
         state.categoryCounts[r.label] = (state.categoryCounts[r.label] ?? 0) + 1;
         state.done++;

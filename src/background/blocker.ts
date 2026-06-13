@@ -1,9 +1,12 @@
 import { api } from '../shared/api';
-import { BLOCKED_LABELS, BLOCK_THRESHOLD, LATENCY_LOG_MAX } from '../shared/config';
-import type { LatencySample } from '../shared/messages';
+import { LATENCY_LOG_MAX } from '../shared/config';
+import { getSettings } from '../shared/settings';
+import { isOverridden } from '../shared/overrides';
+import type { ClassifyInput, LatencySample } from '../shared/messages';
 import { cleanTitle, isContentUrl } from '../shared/titles';
+import { extractMeta } from '../content/extract-meta';
 import { classify } from './classifier';
-import { showOverlay } from './overlay';
+import { showBlockScreen } from './blockscreen';
 
 // YouTube/Reddit are SPAs: most "navigations" never reload the page, and the
 // document title only lands well after the navigation event. Strategy:
@@ -47,17 +50,40 @@ async function logSample(sample: LatencySample) {
   );
 }
 
+// Pull richer page signals (channel, description/post-body snippet) from the
+// live DOM. extractMeta is self-contained so it serializes for executeScript.
+async function gatherMeta(tabId: number): Promise<{ channel?: string; context?: string }> {
+  try {
+    const [inj] = await api.scripting.executeScript({ target: { tabId }, func: extractMeta });
+    return (inj?.result as { channel?: string; context?: string } | undefined) ?? {};
+  } catch {
+    return {}; // page not injectable / navigated away — classify on the title alone
+  }
+}
+
 async function onTitle(tabId: number, rawTitle: string, url: string) {
   const title = cleanTitle(rawTitle);
   if (!title || lastClassified.get(tabId) === title) return;
   lastClassified.set(tabId, title);
 
+  const settings = await getSettings();
+  if (!settings.enabled) {
+    armedAt.delete(tabId);
+    return; // master switch off — never classify or block
+  }
+
   const tTitle = Date.now();
   const pageDelayMs = tTitle - (armedAt.get(tabId) ?? tTitle);
   armedAt.delete(tabId);
 
-  const result = await classify(title);
-  const blocked = BLOCKED_LABELS.has(result.label) && result.score >= BLOCK_THRESHOLD;
+  const { channel, context } = await gatherMeta(tabId);
+  const input: ClassifyInput = { title, channel, context };
+  const result = await classify(input);
+
+  let blocked =
+    settings.blockedLabels.includes(result.label) && result.score >= settings.blockThreshold;
+  // A prior "this is actually productive" correction wins over the model.
+  if (blocked && (await isOverridden(title))) blocked = false;
 
   let injectMs = 0;
   if (blocked) {
@@ -65,11 +91,11 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
     try {
       await api.scripting.executeScript({
         target: { tabId },
-        func: showOverlay,
-        args: [result.label, result.score, Date.now() - tTitle],
+        func: showBlockScreen,
+        args: [result.label, result.score, title, Date.now() - tTitle],
       });
     } catch (e) {
-      console.warn('[FlowGuard] overlay injection failed:', e);
+      console.warn('[FlowGuard] block screen injection failed:', e);
     }
     injectMs = Date.now() - tInject;
   }
