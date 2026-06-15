@@ -26,6 +26,7 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   downloads the model into `.e2e-profile/` (~70MB, persists across runs).
 
 Run typecheck + build + e2e before considering any background change done.
+Commit and push when appropriate.
 
 ## Architecture
 
