@@ -1,11 +1,14 @@
 # FlowGuard
 
-Smart distraction blocker: a fully-local AI model classifies YouTube/Reddit
-page titles (zero-shot) and blocks off-topic content without blocking whole
-sites. **The full multi-phase roadmap lives in `ROADMAP.md`.** Phase 1 POC and
-Phase 2 "Ambient MVP" are implemented: user-configurable categories + onboarding
-(options page), richer page signals, an offscreen-document cold-start fix
-(Chrome/Edge), and a block screen with a "this is actually productive" override.
+Smart distraction blocker: a fully-local AI model classifies page titles
+(zero-shot) and blocks off-topic content without blocking whole sites.
+**FlowGuard watches every `http(s)` site except the user's whitelist** (domain +
+subdomain match, seeded with a safe default list in `config.ts`
+`DEFAULT_WHITELIST`; user-editable on the options page). **The full multi-phase
+roadmap lives in `ROADMAP.md`.** Phase 1 POC and Phase 2 "Ambient MVP" are
+implemented: user-configurable categories + onboarding (options page), richer
+page signals, an offscreen-document cold-start fix (Chrome/Edge), and a block
+screen with a "this is actually productive" override.
 
 Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
 `gh` CLI is not installed).
@@ -35,23 +38,29 @@ Run typecheck + build + e2e before considering any background change done.
     `classifyViaOffscreen(text, labels)` (ensures the doc, sends `CLASSIFY`).
   - `offscreen/offscreen.{html,ts}` — Chrome-only document that HOSTS the
     Transformers pipeline (pure inference; no caching/settings). Survives SW idle.
-  - `blocker.ts` — SPA-aware nav/title listener; gathers richer signals
-    (`extractMeta`), checks settings + overrides, injects `blockscreen.ts`.
+  - `blocker.ts` — SPA-aware nav/title listener; arms ANY `http(s)` tab
+    (`isClassifiableUrl`), exempts whitelisted hosts (`isWhitelisted`), gathers
+    richer signals (`extractMeta`), checks settings + overrides, injects
+    `blockscreen.ts`.
   - `blockscreen.ts` — injected full block screen with the override button
     (replaced the old `overlay.ts`).
   - `history-ingester.ts` scans chrome.history; `index.ts` wires listeners,
     first-run onboarding (`openOptionsPage`), and the `OVERRIDE` handler.
 - `src/popup/` — framework-less diagnostic UI (test pair, history scan, latency log).
 - `src/options/` — settings + onboarding page (`options_ui`, open-in-tab):
-  category block toggles, threshold slider, master enable, history-scan helper.
+  category block toggles, threshold slider, master enable, whitelist textarea,
+  history-scan helper.
 - `src/content/extract-meta.ts` — self-contained injected function that scrapes
-  channel/subreddit + description snippet from the page DOM.
-- `src/shared/` — `config.ts` (DEFAULTS: model id, labels, thresholds),
-  `settings.ts` (user-overridable `Settings` in storage.local — the runtime
-  source of truth), `overrides.ts` (user-correction store), `build-input.ts`
+  channel/subreddit + description snippet from the page DOM; falls back to
+  `og:site_name`/`og:description`/`description` meta on generic (non-YT/Reddit) sites.
+- `src/shared/` — `config.ts` (DEFAULTS: model id, labels, thresholds,
+  `DEFAULT_WHITELIST`), `settings.ts` (user-overridable `Settings` in
+  storage.local incl. `whitelist` — the runtime source of truth),
+  `overrides.ts` (user-correction store), `build-input.ts`
   (`buildClassifierText` + `inputCacheKey` from a `ClassifyInput`),
   `api.ts` (cross-browser shim + `IS_FIREFOX`), `messages.ts` (message contract),
-  `titles.ts` (URL/title filters).
+  `titles.ts` (`isClassifiableUrl` http(s) gate + `isWhitelisted` domain/subdomain
+  match + `cleanTitle`).
 - Build passes (one Vite config each, since `inlineDynamicImports` forbids
   multi-input): `vite.config.background.ts`, `vite.config.offscreen.ts`
   (chrome only), `vite.config.popup.ts`, `vite.config.options.ts`.

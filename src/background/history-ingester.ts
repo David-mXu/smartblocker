@@ -1,7 +1,8 @@
 import { api } from '../shared/api';
 import { HISTORY_CAP } from '../shared/config';
 import type { HistoryScanState } from '../shared/messages';
-import { cleanTitle, isContentUrl } from '../shared/titles';
+import { getSettings } from '../shared/settings';
+import { cleanTitle, isClassifiableUrl, isWhitelisted } from '../shared/titles';
 import { classify } from './classifier';
 
 const CHUNK_SIZE = 10;
@@ -27,17 +28,18 @@ export async function scanHistory(): Promise<void> {
   };
 
   try {
-    // Separate queries so each domain gets the full result cap.
-    const [yt, rd] = await Promise.all([
-      api.history.search({ text: 'youtube.com', startTime: 0, maxResults: 1000 }),
-      api.history.search({ text: 'reddit.com', startTime: 0, maxResults: 1000 }),
-    ]);
+    // FlowGuard now watches all sites, so scan all history (empty query) and
+    // filter to classifiable, non-whitelisted pages — same gates as the live
+    // blocker. Most-recent first; capped at HISTORY_CAP.
+    const { whitelist } = await getSettings();
+    const items = await api.history.search({ text: '', startTime: 0, maxResults: 1000 });
 
     const seen = new Set<string>();
     const targets: { title: string; url: string }[] = [];
-    for (const item of [...yt, ...rd]) {
+    for (const item of items) {
       if (targets.length >= HISTORY_CAP) break;
-      if (!item.url || !item.title || !isContentUrl(item.url)) continue;
+      if (!item.url || !item.title || !isClassifiableUrl(item.url)) continue;
+      if (isWhitelisted(item.url, whitelist)) continue;
       const title = cleanTitle(item.title);
       if (!title || seen.has(title)) continue;
       seen.add(title);

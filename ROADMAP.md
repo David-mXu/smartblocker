@@ -2,9 +2,11 @@
 
 FlowGuard is a smart distraction blocker. A zero-shot text-classification model
 runs **100% locally in the browser** (Transformers.js + ONNX WASM) and classifies
-each YouTube/Reddit page *title* — so "React Router Tutorial" passes while "I spent
-100 days in Hardcore Minecraft" gets blocked. The pitch: **stop blocking the whole
-internet; start blocking your bad habits.**
+each page *title* — so "React Router Tutorial" passes while "I spent 100 days in
+Hardcore Minecraft" gets blocked. It now watches **every `http(s)` site except a
+user-editable whitelist** (Cold-Turkey-style "allow these, block the rest"; seeded
+with safe defaults). The pitch: **stop blocking the whole internet; start blocking
+your bad habits.**
 
 This file is the canonical, in-repo roadmap. It exists because an earlier version
 of the plan lived only outside the repo and was lost; keep it here and current.
@@ -67,6 +69,25 @@ built by a coordinated agent team against a shared foundation (typed settings st
    is allowed thereafter — lightweight "teaching" without on-device fine-tuning.
 
 Done alongside: `version` → 0.2.0, `CLAUDE.md` + `README.md` updated.
+
+---
+
+## Phase 2.5 — All sites + whitelist ✅ (v0.3.0)
+
+Flipped the watch model from YouTube/Reddit-only to **every `http(s)` site except a
+user whitelist** (Cold-Turkey-style "allow these, block the rest").
+
+- `host_permissions` → `<all_urls>` (both manifests). The YT/Reddit `WATCHED_HOST`
+  and `isContentUrl` gates are gone; the blocker arms any classifiable tab
+  (`isClassifiableUrl`) and exempts whitelisted hosts (`isWhitelisted`, domain +
+  subdomain match) before classifying.
+- New `whitelist` setting (`config.ts` `DEFAULT_WHITELIST` seeds search/mail/docs/
+  dev-work tools/localhost), editable from a textarea on the options page.
+- History scan generalized to all history, filtered by the same gates.
+- `extractMeta` gains a generic `og:`/`description` fallback for non-YT/Reddit pages.
+- Caveat carried forward: classifying every page is ~8 inferences per visited page
+  and the tiny model is error-prone on arbitrary content — the whitelist, threshold,
+  and override button are the mitigations; the real fix is the Phase 3 model upgrade.
 
 ---
 

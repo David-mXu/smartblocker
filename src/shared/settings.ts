@@ -5,6 +5,7 @@ import { api } from './api';
 import {
   BLOCKED_LABELS,
   BLOCK_THRESHOLD,
+  DEFAULT_WHITELIST,
   LABELS,
 } from './config';
 
@@ -19,6 +20,8 @@ export interface Settings {
   enabled: boolean;
   /** Set once the first-run onboarding flow has completed. */
   onboarded: boolean;
+  /** Hostnames never classified/blocked. Matched by domain + subdomains. */
+  whitelist: string[];
 }
 
 export const DEFAULTS: Settings = {
@@ -27,6 +30,7 @@ export const DEFAULTS: Settings = {
   blockThreshold: BLOCK_THRESHOLD,
   enabled: true,
   onboarded: false,
+  whitelist: [...DEFAULT_WHITELIST],
 };
 
 const STORAGE_KEY = 'settings';

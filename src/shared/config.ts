@@ -10,7 +10,40 @@
 // a stronger model is the Phase 3 plan.
 export const MODEL_ID = 'Xenova/nli-deberta-v3-xsmall';
 
-export const HYPOTHESIS_TEMPLATE = 'This video or post is about {}.';
+export const HYPOTHESIS_TEMPLATE = 'This web page is about {}.';
+
+// Default whitelist: sites that are never classified or blocked out of the box.
+// FlowGuard now watches ALL http(s) sites; these essentials (search, mail, docs,
+// dev/work tools, localhost) are exempted so common productive pages are never
+// false-positive blocked. Matched by domain + subdomains (see isWhitelisted in
+// titles.ts) — "google.com" also exempts mail.google.com, docs.google.com, etc.
+// The user edits this list from the options page.
+export const DEFAULT_WHITELIST: string[] = [
+  // Search
+  'google.com',
+  'bing.com',
+  'duckduckgo.com',
+  // Mail
+  'outlook.com',
+  'outlook.live.com',
+  'proton.me',
+  // Productivity / docs / dev / work tools
+  'github.com',
+  'gitlab.com',
+  'stackoverflow.com',
+  'notion.so',
+  'slack.com',
+  'atlassian.net',
+  'figma.com',
+  'zoom.us',
+  'teams.microsoft.com',
+  // AI assistants
+  'chatgpt.com',
+  'claude.ai',
+  // Local development
+  'localhost',
+  '127.0.0.1',
+];
 
 // Zero-shot NLI runs ONE forward pass PER label — 8 labels = 8 inferences per
 // title. Trimming to 5 labels is a free 38% speedup if latency disappoints.

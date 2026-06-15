@@ -20,6 +20,7 @@ const enabledToggle = document.getElementById('enabled-toggle') as HTMLInputElem
 const labelList = document.getElementById('label-list') as HTMLUListElement;
 const thresholdInput = document.getElementById('threshold') as HTMLInputElement;
 const thresholdVal = document.getElementById('threshold-val') as HTMLSpanElement;
+const whitelistInput = document.getElementById('whitelist') as HTMLTextAreaElement;
 const scanBtn = document.getElementById('scan-btn') as HTMLButtonElement;
 const blockTopBtn = document.getElementById('block-top-btn') as HTMLButtonElement;
 const scanStatus = document.getElementById('scan-status') as HTMLDivElement;
@@ -43,6 +44,24 @@ let pollTimer: ReturnType<typeof setInterval> | undefined;
 // ---------------------------------------------------------------------------
 function pct(n: number): string {
   return `${Math.round(n * 100)}%`;
+}
+
+/** Parse the whitelist textarea into normalized, deduped hostnames. */
+function parseWhitelist(raw: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const line of raw.split('\n')) {
+    const host = line
+      .trim()
+      .toLowerCase()
+      .replace(/^[a-z]+:\/\//, '') // strip scheme if pasted as a URL
+      .replace(/\/.*$/, '') // strip path
+      .replace(/^www\./, '');
+    if (!host || seen.has(host)) continue;
+    seen.add(host);
+    out.push(host);
+  }
+  return out;
 }
 
 function buildLabelRows(): void {
@@ -94,6 +113,8 @@ async function loadSettings(): Promise<void> {
   thresholdInput.value = String(s.blockThreshold);
   thresholdVal.textContent = pct(s.blockThreshold);
 
+  whitelistInput.value = s.whitelist.join('\n');
+
   buildLabelRows();
 
   if (!isOnboarded) {
@@ -116,11 +137,14 @@ thresholdInput.addEventListener('input', () => {
 // Save
 // ---------------------------------------------------------------------------
 saveBtn.addEventListener('click', async () => {
+  const whitelist = parseWhitelist(whitelistInput.value);
+  whitelistInput.value = whitelist.join('\n'); // reflect the normalized list back
   const patch: Parameters<typeof setSettings>[0] = {
     enabled: enabledToggle.checked,
     labels: currentLabels,
     blockedLabels: [...checkedBlocked],
     blockThreshold: parseFloat(thresholdInput.value),
+    whitelist,
   };
   if (!isOnboarded) {
     patch.onboarded = true;

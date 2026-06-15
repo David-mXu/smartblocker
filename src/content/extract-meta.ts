@@ -160,9 +160,18 @@ export function extractMeta(): { channel?: string; context?: string } {
       return result;
     }
 
-    // ── Unrecognised page ────────────────────────────────────────────────────
-    // Return empty — the caller treats all fields as optional.
-    return {};
+    // ── Generic page (any other site) ────────────────────────────────────────
+    // FlowGuard now classifies all sites; give the model whatever signal the
+    // page exposes via standard metadata. All fields stay optional.
+    const channel = metaContent('og:site_name') || metaContent('author');
+    const context = trimTo(
+      metaContent('description') || metaContent('og:description'),
+      SNIPPET_LEN,
+    );
+    const result: { channel?: string; context?: string } = {};
+    if (channel) result.channel = channel;
+    if (context) result.context = context;
+    return result;
   } catch {
     return {};
   }

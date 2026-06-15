@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FlowGuard",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Local-AI distraction blocker — classifies what you watch, blocks only your bad habits",
   "background": {
     "scripts": ["background.js"]
@@ -28,7 +28,7 @@
     "webNavigation",
     "tabs"
   ],
-  "host_permissions": ["*://*.youtube.com/*", "*://*.reddit.com/*"],
+  "host_permissions": ["<all_urls>"],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   }

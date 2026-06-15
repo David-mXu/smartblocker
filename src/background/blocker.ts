@@ -3,34 +3,24 @@ import { LATENCY_LOG_MAX } from '../shared/config';
 import { getSettings } from '../shared/settings';
 import { isOverridden } from '../shared/overrides';
 import type { ClassifyInput, LatencySample } from '../shared/messages';
-import { cleanTitle, isContentUrl } from '../shared/titles';
+import { cleanTitle, isClassifiableUrl, isWhitelisted } from '../shared/titles';
 import { extractMeta } from '../content/extract-meta';
 import { classify } from './classifier';
 import { showBlockScreen } from './blockscreen';
 
-// YouTube/Reddit are SPAs: most "navigations" never reload the page, and the
-// document title only lands well after the navigation event. Strategy:
-//  - onCommitted (full loads) and onHistoryStateUpdated (SPA navs) ARM the tab
-//    and timestamp the navigation. The title is NOT ready at this point.
+// FlowGuard watches EVERY http(s) site (whitelist exemption applied later, in
+// onTitle). Many sites are SPAs: most "navigations" never reload the page, and
+// the document title only lands well after the navigation event. Strategy:
+//  - onCommitted (full loads) and onHistoryStateUpdated (SPA / in-tab route
+//    changes) ARM the tab and timestamp the navigation. Title NOT ready yet.
 //  - tabs.onUpdated with changeInfo.title is the actual classification
 //    trigger, with a per-tab last-title guard against title flicker.
 
 const armedAt = new Map<number, number>(); // tabId -> nav commit epoch ms
 const lastClassified = new Map<number, string>();
 
-const WATCHED_HOST = /(^|\.)((youtube)|(reddit))\.com$/;
-
-function isWatched(url: string | undefined): boolean {
-  if (!url) return false;
-  try {
-    return WATCHED_HOST.test(new URL(url).hostname);
-  } catch {
-    return false;
-  }
-}
-
 function arm(tabId: number, url: string) {
-  if (isWatched(url)) {
+  if (isClassifiableUrl(url)) {
     armedAt.set(tabId, Date.now());
     lastClassified.delete(tabId);
   }
@@ -70,6 +60,10 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
   if (!settings.enabled) {
     armedAt.delete(tabId);
     return; // master switch off — never classify or block
+  }
+  if (isWhitelisted(url, settings.whitelist)) {
+    armedAt.delete(tabId);
+    return; // user-exempted site — never classify or block
   }
 
   const tTitle = Date.now();
@@ -124,7 +118,7 @@ export function initBlocker() {
     if (d.frameId === 0) arm(d.tabId, d.url);
   });
   api.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    if (changeInfo.title && tab.url && isContentUrl(tab.url)) {
+    if (changeInfo.title && tab.url && isClassifiableUrl(tab.url)) {
       void onTitle(tabId, changeInfo.title, tab.url).catch((e) =>
         console.error('[FlowGuard] classification failed:', e),
       );
