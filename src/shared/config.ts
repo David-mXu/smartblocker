@@ -40,6 +40,8 @@ export const DEFAULT_WHITELIST: string[] = [
   // AI assistants
   'chatgpt.com',
   'claude.ai',
+  // Banking / Finance
+  'mbna.ca',
   // Local development
   'localhost',
   '127.0.0.1',
