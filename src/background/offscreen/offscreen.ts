@@ -3,25 +3,33 @@
 // ONLY pure inference — no caching, no settings, no title assembly. All of
 // that lives SW-side in classify-client.ts + classifier.ts.
 //
-// Load-bearing constraints mirrored from classifier.ts + CLAUDE.md:
-//   - inlineDynamicImports: true in the Vite config (never a reachable dynamic import())
-//   - NEVER set env.backends.onnx.wasm.wasmPaths (forces ORT dynamic-import path)
-//   - numThreads=1, proxy=false (offscreen page cannot spawn nested Workers)
+// Load-bearing constraints (see also vite.config.offscreen.ts + CLAUDE.md):
+//   - inlineDynamicImports: true in the Vite config
+//   - wasmPaths MUST be overridden to extension-local files here (unlike the
+//     SW, where they must stay unset) — see the env config below
 //   - Probe Cache API before Transformers.js uses it
-//   - format: 'iife' — the offscreen page HAS a document, so ORT can use
-//     document.baseURI to resolve the .wasm asset; ES module not required here.
+//   - format: 'es' + <script type=module> (matches the background bundle)
 
 import { env, pipeline } from '@huggingface/transformers';
 import { api } from '../../shared/api';
 import { EMBED_MODEL_ID, HYPOTHESIS_TEMPLATE, MODEL_ID } from '../../shared/config';
 import type { EmbedResult, InferResult, Request } from '../../shared/messages';
 
-// ---- MV3 environment config (mirrored from classifier.ts) ----
-// Do NOT set env.backends.onnx.wasm.wasmPaths: any override forces ORT down
-// its dynamic-import() code path, which fails in restricted extension contexts.
+// ---- MV3 environment config ----
+// The SW rule is "never set wasmPaths" — transformers.js leaves them unset
+// only inside a ServiceWorkerGlobalScope, where the bundler-inlined glue is
+// used. The offscreen document is NOT a service worker, so transformers
+// defaults wasmPaths to its jsdelivr CDN, which the extension CSP blocks
+// ("Failed to fetch dynamically imported module ... jsep.mjs"). Override to
+// the extension-local copies that copy-assets.mjs ships under their unhashed
+// names; dynamic import() of a same-origin module is fine in a real document.
 env.allowLocalModels = false;
 const ortWasm = env.backends.onnx.wasm!;
-ortWasm.numThreads = 1; // offscreen pages cannot spawn nested Workers
+ortWasm.wasmPaths = {
+  mjs: api.runtime.getURL('ort-wasm-simd-threaded.jsep.mjs'),
+  wasm: api.runtime.getURL('ort-wasm-simd-threaded.jsep.wasm'),
+};
+ortWasm.numThreads = 1; // 4 threads measured only ~11ms -> ~9ms p50 per embed — not worth 3 workers
 ortWasm.proxy = false;
 
 type ZeroShotPipeline = (

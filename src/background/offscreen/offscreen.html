@@ -9,7 +9,8 @@
     <title>FlowGuard Offscreen Classifier</title>
   </head>
   <body>
-    <!-- IIFE bundle: no type=module, plain script tag -->
-    <script src="offscreen.js"></script>
+    <!-- ES module bundle (load-bearing): a plain-script IIFE build makes ORT
+         dynamic-import its wasm glue from the CDN, which the CSP blocks. -->
+    <script type="module" src="offscreen.js"></script>
   </body>
 </html>

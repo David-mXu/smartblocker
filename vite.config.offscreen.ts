@@ -4,9 +4,13 @@ import { defineConfig } from 'vite';
 // key differences:
 //   - input: src/background/offscreen/offscreen.ts
 //   - output: offscreen.js
-//   - format: 'iife' (the offscreen page HAS a real document, so ORT can use
-//     document.baseURI to resolve the .wasm asset; ES module not needed here,
-//     and offscreen.html loads it via a plain <script src="offscreen.js"> tag)
+//   - format: 'es' + <script type="module"> in offscreen.html. This MUST stay
+//     an ES module: in an IIFE bundle `import.meta.url` is unavailable and
+//     onnxruntime-web falls back to dynamic-import()ing its wasm glue from the
+//     jsdelivr CDN ("Failed to fetch dynamically imported module ...
+//     ort-wasm-simd-threaded.jsep.mjs"), which the extension CSP blocks — the
+//     model never loads. The ES build resolves everything against
+//     chrome-extension:// exactly like the background bundle does.
 //   - emptyOutDir: false — this runs AFTER the background build into the same
 //     dist/<mode>/ directory; we must not wipe what the background build wrote
 //
@@ -30,7 +34,7 @@ export default defineConfig(({ mode }) => ({
       input: 'src/background/offscreen/offscreen.ts',
       output: {
         entryFileNames: 'offscreen.js',
-        format: 'iife',
+        format: 'es',
         inlineDynamicImports: true,
       },
     },

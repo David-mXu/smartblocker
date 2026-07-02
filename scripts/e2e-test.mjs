@@ -15,20 +15,41 @@ const MODEL_TIMEOUT_MS = 5 * 60_000; // first run downloads the model (~35MB)
 // CacheStorage (the downloaded model) must survive across runs.
 rmSync(resolve(PROFILE, 'Default/Service Worker/ScriptCache'), { recursive: true, force: true });
 
-const context = await chromium.launchPersistentContext(PROFILE, {
-  channel: 'chromium',
-  headless: true,
-  args: [
-    `--disable-extensions-except=${EXT_PATH}`,
-    `--load-extension=${EXT_PATH}`,
-  ],
-});
+// Launching immediately after a previous run sometimes yields a context where
+// the extension never loads (no SW ever appears, and navigations can't wake
+// what isn't registered) — retry with a fresh launch when that happens.
+async function launchWithServiceWorker() {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const ctx = await chromium.launchPersistentContext(PROFILE, {
+      channel: 'chromium',
+      headless: true,
+      args: [
+        `--disable-extensions-except=${EXT_PATH}`,
+        `--load-extension=${EXT_PATH}`,
+      ],
+    });
+    // MV3 SWs are lazy; a real navigation fires webNavigation.onCommitted,
+    // which the blocker listens to, forcing the SW to start.
+    let worker = ctx.serviceWorkers()[0];
+    if (!worker) {
+      const swPromise = ctx.waitForEvent('serviceworker', { timeout: 10_000 }).catch(() => null);
+      const waker = await ctx.newPage();
+      await waker.goto('https://example.com').catch(() => {});
+      worker = ctx.serviceWorkers()[0] ?? (await swPromise);
+      await waker.close();
+    }
+    if (worker) return { context: ctx, sw: worker };
+    console.log(`… extension did not load (attempt ${attempt}), relaunching`);
+    await ctx.close();
+    await new Promise((r) => setTimeout(r, 2_000));
+  }
+  throw new Error('service worker did not boot after 3 launches');
+}
+
+const { context, sw } = await launchWithServiceWorker();
 
 try {
-  // 1. Service worker must boot (this alone proves the ES-module bundle parses).
-  const sw =
-    context.serviceWorkers()[0] ??
-    (await context.waitForEvent('serviceworker', { timeout: 15_000 }));
+  // 1. Service worker booted (this alone proves the ES-module bundle parses).
   console.log('PASS service worker booted:', sw.url());
   const extensionId = new URL(sw.url()).host;
 
