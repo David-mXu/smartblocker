@@ -50,11 +50,38 @@ api.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes[STORAGE_KEY]) cache = null;
 });
 
+/**
+ * `labels`/`blockedLabels` are persisted snapshots taken at onboarding time,
+ * so they go stale whenever config.ts's LABELS/BLOCKED_LABELS grow (e.g. the
+ * 13-category expansion) — an existing user's stored settings would silently
+ * keep classifying against only their old label set forever. Append any
+ * canonical label missing from the stored snapshot (preserving user order/
+ * edits otherwise), carrying over the new label's default blocked-ness.
+ */
+function migrateLabels(stored: Partial<Settings> | undefined): Pick<Settings, 'labels' | 'blockedLabels'> {
+  if (!stored?.labels) {
+    return { labels: [...DEFAULTS.labels], blockedLabels: [...DEFAULTS.blockedLabels] };
+  }
+  const known = new Set(stored.labels);
+  const newLabels = LABELS.filter((l) => !known.has(l));
+  if (newLabels.length === 0) {
+    return { labels: stored.labels, blockedLabels: stored.blockedLabels ?? [...DEFAULTS.blockedLabels] };
+  }
+  return {
+    labels: [...stored.labels, ...newLabels],
+    blockedLabels: [
+      ...(stored.blockedLabels ?? []),
+      ...newLabels.filter((l) => BLOCKED_LABELS.has(l)),
+    ],
+  };
+}
+
 /** Read settings (cached), falling back to DEFAULTS for any missing field. */
 export async function getSettings(): Promise<Settings> {
   if (cache) return cache;
   const stored = await api.storage.local.get(STORAGE_KEY);
-  cache = { ...DEFAULTS, ...(stored[STORAGE_KEY] as Partial<Settings> | undefined) };
+  const storedSettings = stored[STORAGE_KEY] as Partial<Settings> | undefined;
+  cache = { ...DEFAULTS, ...storedSettings, ...migrateLabels(storedSettings) };
   return cache;
 }
 

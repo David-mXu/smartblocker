@@ -65,6 +65,10 @@ export interface HistoryScanState {
   status: 'idle' | 'running' | 'done' | 'error';
   done: number;
   total: number;
+  /** Raw entries chrome.history.search returned, before the classifiable/
+   *  whitelist/dedupe filters — lets the UI explain a 0 `total` (empty
+   *  history vs. everything filtered out, e.g. by the whitelist). */
+  historyCount: number;
   items: { title: string; url: string; label: string; score: number }[];
   categoryCounts: Record<string, number>;
   elapsedMs: number;

@@ -22,6 +22,7 @@ export async function scanHistory(): Promise<void> {
     status: 'running',
     done: 0,
     total: 0,
+    historyCount: 0,
     items: [],
     categoryCounts: {},
     elapsedMs: 0,
@@ -33,6 +34,7 @@ export async function scanHistory(): Promise<void> {
     // blocker. Most-recent first; capped at HISTORY_CAP.
     const { whitelist, blocklist } = await getSettings();
     const items = await api.history.search({ text: '', startTime: 0, maxResults: 1000 });
+    state.historyCount = items.length;
 
     const seen = new Set<string>();
     const targets: { title: string; url: string }[] = [];
