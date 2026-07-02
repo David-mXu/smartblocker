@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FlowGuard",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Local-AI distraction blocker — classifies what you watch, blocks only your bad habits",
   "background": {
     "scripts": ["background.js"]

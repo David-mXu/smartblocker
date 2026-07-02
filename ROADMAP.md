@@ -150,14 +150,52 @@ learning with no fine-tuning (Phase 2.8).
 
 ---
 
+## Phase 2.8 — Feedback loop + offscreen resurrection ✅ (2026-07-02, v0.4.0)
+
+**Feedback loop** (accuracy improves from real usage, privacy-first):
+
+- Rich correction records (`src/shared/feedback.ts`, local, capped at 500):
+  block-screen override → false positive; new popup "Should've been blocked"
+  report (with category picker) → false negative. Hostname only, never URLs.
+- Corrections TEACH the classifier: false negatives extend the corrected
+  category's centroid, false positives feed a "user approved" neutral
+  centroid — on-device personalization with zero fine-tuning.
+- Options page Feedback section: count, Export JSON (attach to a GitHub
+  issue), Clear, and an **opt-in** "share my corrections" toggle
+  (`shareFeedback`, default OFF). A daily alarm uploads unsent records to
+  `feedback-worker/` (Cloudflare Worker + D1; validated, idempotent, tested
+  against a stubbed D1). `PRIVACY.md` documents the exact data flow.
+  **Deploy is a manual step**: create the D1 db, `wrangler deploy`, then set
+  `FEEDBACK_ENDPOINT` in `config.ts` (empty = uploads hard-disabled).
+- Shared/exported records feed `eval-dataset.json` → future model decisions.
+
+**Offscreen resurrection.** The Phase 2 cold-start fix had never actually run:
+Chrome 138+ added a `browser` global (breaking the `IS_FIREFOX` detection), and
+transformers.js defaults ORT `wasmPaths` to a CSP-blocked CDN outside service
+workers. Fixed (Firefox-only-API detection; extension-local glue + ES-module
+offscreen bundle) — Chrome/Edge now truly host inference in the offscreen doc
+(~11ms/embed, verified via `getContexts`).
+
+**Latency probes** (Track D findings, recorded for posterity): WASM
+`numThreads=4` → p50 11ms→8.8ms, not worth 3 worker threads (kept 1); WebGPU
+has no adapter in headless Chromium and is irrelevant at ~10ms/title;
+SharedArrayBuffer IS available in extension pages without cross-origin
+isolation (Chrome exempts extensions) if threading is ever revisited.
+
+---
+
 ## Phase 3 — Public beta
 
 - ~~Open problem carried from Phase 2: model quality.~~ **Resolved in
   Phase 2.7** by the embedding-prototype backend (see table above). Remaining
   model work is dataset-driven: grow `eval-dataset.json` from real feedback.
-- Open-source GitHub release + Chrome Web Store beta listing.
+- Open-source GitHub release + Chrome Web Store beta listing (needs a privacy
+  policy — `PRIVACY.md` exists; deploy `feedback-worker/` and set
+  `FEEDBACK_ENDPOINT` before the listing if opt-in sharing should be live).
 - Watch RAM/battery, false-positive rate, and model download UX in the wild.
-- Stay telemetry-free; all classification + history analysis remain local.
+- Telemetry-free by default; the ONLY network write is the explicit opt-in
+  feedback sharing (off by default, hostname-only records — see PRIVACY.md).
+  All classification + history analysis remain local.
 - Marketing: Show HN, r/ADHD, r/productivity, Product Hunt. Hook: *"Stop blocking
   the whole internet. Start blocking your bad habits."*
 

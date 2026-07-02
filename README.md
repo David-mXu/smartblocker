@@ -1,13 +1,13 @@
 # FlowGuard
 
-A smart distraction blocker that runs a zero-shot text-classification model
+A smart distraction blocker that runs a text-classification model
 **100% locally in your browser** (Transformers.js + ONNX WASM). Instead of
 blocking whole sites, it classifies each page title — "React Router Tutorial"
 passes, "I spent 100 days in Hardcore Minecraft" gets a block screen. It watches
 **every site except a whitelist you control** (Cold-Turkey-style "allow these,
 block the rest"; seeded with safe defaults like search, mail, docs, and dev tools).
 
-Phase 1 (POC) and Phase 2 ("Ambient MVP") are implemented; the full plan is in
+Implemented through Phase 2.8; the full plan is in
 [`ROADMAP.md`](ROADMAP.md). What works today:
 
 1. Transformers.js runs inside a Manifest V3 background (service worker on
@@ -17,17 +17,19 @@ Phase 1 (POC) and Phase 2 ("Ambient MVP") are implemented; the full plan is in
    lets you pick which categories to block, set the threshold, edit the
    whitelist of never-blocked sites, and scan your history to spot your top
    distractions.
-3. Page-visit classification is fast enough to block "instantly"
+3. Page-visit classification blocks in ~10ms once warm
    (popup → "Latency Log" after browsing), with a **block screen** whose
    "this is actually productive" override remembers your correction.
+4. **The classifier learns from you.** Corrections (the override button, and
+   the popup's "Should've been blocked" report) are stored on-device and fold
+   into the classifier's category prototypes. The options page can export
+   them as JSON — and an **opt-in, off-by-default** toggle can share them to
+   improve the model for everyone ([`PRIVACY.md`](PRIVACY.md)).
 
-Nothing ever leaves your machine: the model (~70MB, one-time) is downloaded
+Nothing ever leaves your machine (the model, ~35MB one-time, is downloaded
 from the Hugging Face Hub and cached; all inference and history analysis are
-local.
-
-> Note: the bundled tiny NLI model still misclassifies some newer proper nouns
-> (e.g. "Elden Ring Boss Fight" → sports); a stronger local model is the planned
-> Phase 3 fix. See `ROADMAP.md`.
+local) — with exactly one exception: the explicit opt-in feedback sharing
+described in [`PRIVACY.md`](PRIVACY.md), which is off by default.
 
 ## Build
 
@@ -55,7 +57,7 @@ npm run build        # -> dist/chrome (also Edge) and dist/firefox
    **Scan my history** to see your top distraction vs productive categories.
    Reopen it anytime from the extensions menu → "Options" (or the popup).
 2. Click the toolbar popup → **Test Pair**. First click downloads the model
-   (~70MB, watch the background console); you'll see label distributions and
+   (~35MB, watch the background console); you'll see label distributions and
    per-title timings.
 3. **Scan History** → live progress + a category histogram of your recent
    browsing (all sites except the whitelist).
@@ -70,18 +72,20 @@ npm run build        # -> dist/chrome (also Edge) and dist/firefox
 ## Automated checks
 
 ```sh
-node scripts/smoke-test.mjs   # model quality/speed in Node (no browser)
-node scripts/e2e-test.mjs     # full extension e2e in a real Chromium
+node scripts/benchmark.mjs embed:Xenova/bge-small-en-v1.5   # model eval (223 labeled cases)
+node scripts/e2e-test.mjs                                   # full extension e2e in a real Chromium
+node feedback-worker/test/local-test.mjs                    # feedback worker (stubbed D1)
 ```
 
-Measured on this machine (real Chromium service worker): cached titles block
-in 5–13ms; uncached titles take ~0.4–1.5s of inference; a cold service worker
-adds ~1.3–3.1s to reload the model from cache (no re-download).
+The shipped classifier is an **embedding-prototype** model
+(`Xenova/bge-small-en-v1.5`, ~34MB): the page text is embedded once and
+matched against per-category prototype embeddings, so adding categories is
+free and inference is ~3ms in Node / ~10ms live. On the 223-case eval it
+scores 87.8% top-1 with a 1.8% false-positive rate on productive pages —
+versus 65.2% / 7.1% at ~111ms for the zero-shot NLI model it replaced (which
+remains available as a config fallback). It also knows its proper nouns:
+"Elden Ring Boss Fight" → video games at 0.89.
 
-Current default `Xenova/nli-deberta-v3-xsmall` scores 9/10 on realistic
-titles at ~60–100ms each. Known limitation: tiny NLI models don't recognize
-newer proper nouns ("Elden Ring Boss Fight" → sports); richer page signals
-(channel name, description) are the planned Phase 2 mitigation.
-
-All tuning knobs (model id, category labels, blocked categories, thresholds)
-live in `src/shared/config.ts`.
+All tuning knobs (backend, model ids, category labels, blocked categories,
+thresholds) live in `src/shared/config.ts`; prototype seed texts live in
+`src/shared/prototype-seeds.json`.
