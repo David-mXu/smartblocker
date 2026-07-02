@@ -1,0 +1,211 @@
+{
+  "$note": "Seed texts for the embedding-prototype classifier candidate (Track B bake-off). Per category: a description sentence + example page titles; each category's centroid = normalized mean of the embeddings of all its seeds. `neutral` centroids catch productive/utility pages so unclear text isn't force-fit into a distraction category — a neutral top-1 never blocks. Keep seeds DISJOINT from scripts/eval-dataset.json titles (train/test separation). Category keys must match LABELS in config.ts.",
+  "categories": {
+    "programming and software development": {
+      "description": "Software engineering, coding tutorials, programming languages, frameworks, developer tools and computer science.",
+      "examples": [
+        "Understanding async/await in JavaScript once and for all",
+        "Git rebase vs merge: a practical guide",
+        "I rewrote my API in Rust and here's what happened",
+        "CSS grid layout crash course",
+        "Debugging memory leaks in Node.js production apps",
+        "How relational databases store data on disk",
+        "Vim motions that will change how you edit code"
+      ]
+    },
+    "video games": {
+      "description": "Video games, gaming playthroughs, game reviews, esports matches and gaming culture.",
+      "examples": [
+        "Dark Souls 3 all bosses no-hit run",
+        "The best RPGs of the decade, ranked",
+        "Cyberpunk 2077 Phantom Liberty ending choices",
+        "Beating Minecraft without ever crafting tools",
+        "CS2 Major grand finals highlights",
+        "New Pokémon game leaks and rumors roundup",
+        "Animal Crossing island tour: 5-star paradise"
+      ]
+    },
+    "finance and investing": {
+      "description": "Personal finance, stock market investing, retirement accounts, cryptocurrency and economic analysis for investors.",
+      "examples": [
+        "Dividend investing for beginners: my full portfolio",
+        "What the inverted yield curve means for your money",
+        "ETF overlap: are you actually diversified?",
+        "Crypto tax rules explained for 2026",
+        "How I paid off $80k of debt in three years",
+        "Value investing in an AI-driven market",
+        "Emergency fund: how much is actually enough?"
+      ]
+    },
+    "memes and entertainment": {
+      "description": "Memes, funny videos, viral clips, pranks, reaction content and internet humor.",
+      "examples": [
+        "Funniest game show moments of all time",
+        "AI voices read cursed fanfiction",
+        "Prank wars: office edition",
+        "The best of r/whoosh this month",
+        "Daily dose of internet - today's weirdest clips",
+        "Vine compilation that raised a generation",
+        "Streamer can't stop laughing for 10 minutes"
+      ]
+    },
+    "news and politics": {
+      "description": "Breaking news, current events, elections, government policy and political commentary.",
+      "examples": [
+        "Parliament passes the new budget after marathon session",
+        "White House responds to overnight developments",
+        "What the ceasefire deal actually contains",
+        "Local election results: what changed and why",
+        "Press briefing live: minister takes questions",
+        "Analysis: the polling shift nobody predicted",
+        "Global summit ends with joint climate statement"
+      ]
+    },
+    "science and education": {
+      "description": "Science explainers, academic lectures, online courses, study techniques and educational content.",
+      "examples": [
+        "Why the speed of light is the universe's speed limit",
+        "Organic chemistry mechanisms made simple",
+        "Stanford lecture: introduction to statistical learning",
+        "How vaccines train your immune system",
+        "The math behind gerrymandering",
+        "Plate tectonics: the engine under our feet",
+        "Spaced repetition: the studying technique that works"
+      ]
+    },
+    "music": {
+      "description": "Songs, albums, music videos, artists, concerts, playlists and music production.",
+      "examples": [
+        "Official music video for the new single",
+        "Jazz standards for late night studying",
+        "Producer breaks down how the hit was made",
+        "Live at Glastonbury: full headline set",
+        "Top 50 songs of the year so far",
+        "Learning piano: chord progressions every player needs",
+        "Album review: the long-awaited comeback record"
+      ]
+    },
+    "sports": {
+      "description": "Professional and amateur sports, matches, highlights, athletes, leagues and fitness competition.",
+      "examples": [
+        "Champions League semifinal extended highlights",
+        "Trade deadline tracker: every deal graded",
+        "Marathon world record broken in Berlin",
+        "Inside the locker room after the title win",
+        "Tennis grand slam final: point by point",
+        "Hockey playoffs: overtime thriller recap",
+        "Draft night winners and losers"
+      ]
+    },
+    "online shopping": {
+      "description": "E-commerce product pages, deals, discounts, hauls, carts, checkouts and buying guides.",
+      "examples": [
+        "Limited time offer: 50% off everything in the sale section",
+        "Product page: wireless earbuds with noise cancelling",
+        "My spring wardrobe haul try-on",
+        "Deal alert: robot vacuum at its lowest price ever",
+        "Add to cart: the kitchen gadgets I use daily",
+        "Comparing the best budget standing desks to buy",
+        "Free shipping on orders over $35"
+      ]
+    },
+    "social media and networking": {
+      "description": "Social media feeds, profiles, followers, posts, stories, direct messages and social networking apps.",
+      "examples": [
+        "Notifications - see what your friends are posting",
+        "Your daily feed: trending posts right now",
+        "Direct messages and story replies",
+        "Follower growth tips for your profile",
+        "What's trending today on the timeline",
+        "New followers, likes and mentions",
+        "Explore page: accounts you might like"
+      ]
+    },
+    "gambling and betting": {
+      "description": "Casinos, slots, poker, sports betting, odds, jackpots and wagering.",
+      "examples": [
+        "Tonight's odds and best bets for the card",
+        "Slot bonus round pays out the jackpot",
+        "Poker tournament final table highlights",
+        "How betting lines move and why",
+        "Roulette strategy myths debunked by the math",
+        "Claim your deposit bonus and free spins",
+        "High stakes blackjack session at the casino"
+      ]
+    },
+    "movies and tv shows": {
+      "description": "Films, television series, streaming shows, trailers, episode recaps and reviews.",
+      "examples": [
+        "Official trailer: the sequel nobody expected",
+        "Episode 6 recap: the twist that changes everything",
+        "The best films of the decade so far",
+        "Director breaks down the opening scene",
+        "What to stream this month: new releases",
+        "Cast interview: behind the scenes of season two",
+        "Box office report: weekend numbers are in"
+      ]
+    },
+    "adult content": {
+      "description": "Pornography, explicit adult videos, NSFW content and adult entertainment sites.",
+      "examples": [
+        "Explicit adult video streaming site",
+        "NSFW gallery: adults only",
+        "Adult creator subscription content",
+        "Live adult webcam shows",
+        "Age verification: you must be 18 to continue",
+        "Adult video category listing page",
+        "Premium adult membership signup"
+      ]
+    }
+  },
+  "neutral": {
+    "work and productivity": {
+      "description": "Work tools, project management, meetings, documents, email, dashboards and professional tasks.",
+      "examples": [
+        "Standup notes - action items for the week",
+        "Shared spreadsheet: budget tracking Q2",
+        "Ticket queue: three bugs assigned to you",
+        "Design review meeting agenda",
+        "Draft: quarterly report for leadership",
+        "Deployment dashboard: all services green",
+        "Team calendar and time-off planner"
+      ]
+    },
+    "documentation and reference": {
+      "description": "Technical documentation, API references, manuals, encyclopedias, research papers and how-to references.",
+      "examples": [
+        "API reference: authentication endpoints",
+        "Library changelog and migration notes",
+        "Research paper abstract and citations",
+        "Encyclopedia entry: history of the printing press",
+        "User manual: getting started guide",
+        "Language documentation: standard library modules",
+        "Style guide and contribution guidelines"
+      ]
+    },
+    "everyday errands and utilities": {
+      "description": "Everyday practical tasks: banking, taxes, health appointments, travel booking, maps, deliveries, recipes and household how-tos.",
+      "examples": [
+        "Online banking: recent transactions",
+        "Book an appointment with your doctor",
+        "Package tracking: out for delivery",
+        "Directions and estimated arrival time",
+        "Simple dinner recipes for busy weeknights",
+        "How to unclog a drain without a plumber",
+        "Flight check-in and boarding pass"
+      ]
+    },
+    "career and learning": {
+      "description": "Job searching, resumes, interviews, professional courses, certifications and skill development.",
+      "examples": [
+        "Job posting: software engineer, hybrid",
+        "Resume tips that get interviews",
+        "Interview prep: common behavioral questions",
+        "Certification exam study plan",
+        "Language learning: daily practice session",
+        "Online course progress: module 4 of 8",
+        "Networking event for early-career engineers"
+      ]
+    }
+  }
+}

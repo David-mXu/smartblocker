@@ -2,7 +2,8 @@
 // Usage: node scripts/smoke-test.mjs [modelId]
 import { pipeline } from '@huggingface/transformers';
 
-const MODEL_ID = process.argv[2] ?? 'Xenova/mobilebert-uncased-mnli';
+// Default to the model the extension actually ships (config.ts MODEL_ID).
+const MODEL_ID = process.argv[2] ?? 'Xenova/nli-deberta-v3-xsmall';
 
 const LABELS = [
   'programming and software development',
