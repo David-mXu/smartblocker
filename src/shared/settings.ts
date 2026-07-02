@@ -22,6 +22,12 @@ export interface Settings {
   onboarded: boolean;
   /** Hostnames never classified/blocked. Matched by domain + subdomains. */
   whitelist: string[];
+  /**
+   * Deterministic block rules: substrings matched against the full URL + page
+   * title. A match blocks immediately, skipping the ML classifier entirely.
+   * Empty by default — opt-in, unlike the model-driven category blocking.
+   */
+  blocklist: string[];
 }
 
 export const DEFAULTS: Settings = {
@@ -31,6 +37,7 @@ export const DEFAULTS: Settings = {
   enabled: true,
   onboarded: false,
   whitelist: [...DEFAULT_WHITELIST],
+  blocklist: [],
 };
 
 const STORAGE_KEY = 'settings';

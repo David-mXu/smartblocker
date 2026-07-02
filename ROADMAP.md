@@ -91,6 +91,32 @@ user whitelist** (Cold-Turkey-style "allow these, block the rest").
 
 ---
 
+## Phase 2.6 — More categories + deterministic blocklist ✅
+
+Cold-Turkey-style category coverage plus a second, non-ML blocking layer for
+unambiguous cases — the two complement each other: the NLI classifier handles
+nuanced sites (YouTube/Reddit mix productive and distracting content), the
+blocklist handles sites/searches the user wants blocked with zero ambiguity.
+
+- `LABELS` grows from 8 to 13: `online shopping`, `social media and
+  networking`, `gambling and betting`, `movies and tv shows`, `adult content`.
+  Four of the five are blocked by default (`BLOCKED_LABELS`); `movies and tv
+  shows` ships unchecked, same treatment as `music`/`sports`, since it's the
+  most debatable addition. Options page needed no code changes — category
+  checkboxes already render dynamically from `settings.labels`.
+- New opt-in `blocklist` setting (empty by default): free-text entries matched
+  as a substring against the full URL + page title (`matchedBlocklistEntry` in
+  `titles.ts`). Covers "block this domain" and "block searches containing X"
+  with one mechanism, since search queries live in the URL's query string. A
+  match skips the ML classifier entirely and blocks instantly — mirrors how
+  `isWhitelisted` already short-circuits, just for the opposite outcome.
+  Wired into the live blocker (`blocker.ts`) and the history scanner
+  (`history-ingester.ts`); editable from a new textarea on the options page.
+- Latency cost accepted: 13 labels ≈ 120-140ms/title in Node vs ~90-100ms at
+  8 (see CLAUDE.md Model facts) — not optimized away per user decision.
+
+---
+
 ## Phase 3 — Public beta
 
 - **Open problem carried from Phase 2: model quality.** The tiny NLI model

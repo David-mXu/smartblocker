@@ -45,6 +45,30 @@ export function isWhitelisted(url: string | undefined, whitelist: string[]): boo
   return false;
 }
 
+/**
+ * Deterministic keyword/URL blocklist match — the complement to isWhitelisted.
+ * Each entry is a plain substring matched against the full lowercased URL AND
+ * the page title, so one mechanism covers "URL contains X", "domain is X" (a
+ * domain is itself a URL substring), and "search query contains X" (search
+ * engines put the query in the URL, e.g. ?q=... or ?search_query=...) without
+ * per-engine parsing. Returns the matched entry (for the block screen), or
+ * null. Intentionally simpler than isWhitelisted's hostname-only matching —
+ * this is an opt-in power-user rule list, not a safe default.
+ */
+export function matchedBlocklistEntry(
+  url: string | undefined,
+  title: string | null,
+  blocklist: string[],
+): string | null {
+  if (!url) return null;
+  const haystack = (url + ' ' + (title ?? '')).toLowerCase();
+  for (const raw of blocklist) {
+    const needle = raw.trim().toLowerCase();
+    if (needle && haystack.includes(needle)) return raw.trim();
+  }
+  return null;
+}
+
 const GENERIC_TITLES = new Set(['youtube', 'reddit', 'new tab']);
 
 /** Strip site suffixes; return null for titles too generic to classify. */

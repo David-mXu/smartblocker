@@ -4,10 +4,14 @@ Smart distraction blocker: a fully-local AI model classifies page titles
 (zero-shot) and blocks off-topic content without blocking whole sites.
 **FlowGuard watches every `http(s)` site except the user's whitelist** (domain +
 subdomain match, seeded with a safe default list in `config.ts`
-`DEFAULT_WHITELIST`; user-editable on the options page). **The full multi-phase
-roadmap lives in `ROADMAP.md`.** Phase 1 POC and Phase 2 "Ambient MVP" are
-implemented: user-configurable categories + onboarding (options page), richer
-page signals, an offscreen-document cold-start fix (Chrome/Edge), and a block
+`DEFAULT_WHITELIST`; user-editable on the options page). It also supports an
+**opt-in deterministic blocklist** (`config.ts`/`settings.ts` `blocklist`,
+empty by default): substring matches against the URL + title skip the ML
+classifier entirely and block instantly — the fast, zero-ambiguity complement
+to the 13-category NLI classifier. **The full multi-phase roadmap lives in
+`ROADMAP.md`.** Phase 1 POC and Phase 2 "Ambient MVP" are implemented:
+user-configurable categories + onboarding (options page), richer page
+signals, an offscreen-document cold-start fix (Chrome/Edge), and a block
 screen with a "this is actually productive" override.
 
 Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
@@ -40,8 +44,10 @@ Commit and push when appropriate.
   - `offscreen/offscreen.{html,ts}` — Chrome-only document that HOSTS the
     Transformers pipeline (pure inference; no caching/settings). Survives SW idle.
   - `blocker.ts` — SPA-aware nav/title listener; arms ANY `http(s)` tab
-    (`isClassifiableUrl`), exempts whitelisted hosts (`isWhitelisted`), gathers
-    richer signals (`extractMeta`), checks settings + overrides, injects
+    (`isClassifiableUrl`), exempts whitelisted hosts (`isWhitelisted`), then
+    checks the deterministic blocklist (`matchedBlocklistEntry`) — a hit skips
+    straight to the block screen with no inference. Otherwise gathers richer
+    signals (`extractMeta`), classifies, checks settings + overrides, injects
     `blockscreen.ts`.
   - `blockscreen.ts` — injected full block screen with the override button
     (replaced the old `overlay.ts`).
@@ -50,18 +56,18 @@ Commit and push when appropriate.
 - `src/popup/` — framework-less diagnostic UI (test pair, history scan, latency log).
 - `src/options/` — settings + onboarding page (`options_ui`, open-in-tab):
   category block toggles, threshold slider, master enable, whitelist textarea,
-  history-scan helper.
+  blocklist textarea, history-scan helper.
 - `src/content/extract-meta.ts` — self-contained injected function that scrapes
   channel/subreddit + description snippet from the page DOM; falls back to
   `og:site_name`/`og:description`/`description` meta on generic (non-YT/Reddit) sites.
-- `src/shared/` — `config.ts` (DEFAULTS: model id, labels, thresholds,
+- `src/shared/` — `config.ts` (DEFAULTS: model id, 13 `LABELS`, thresholds,
   `DEFAULT_WHITELIST`), `settings.ts` (user-overridable `Settings` in
-  storage.local incl. `whitelist` — the runtime source of truth),
-  `overrides.ts` (user-correction store), `build-input.ts`
+  storage.local incl. `whitelist` and `blocklist` — the runtime source of
+  truth), `overrides.ts` (user-correction store), `build-input.ts`
   (`buildClassifierText` + `inputCacheKey` from a `ClassifyInput`),
   `api.ts` (cross-browser shim + `IS_FIREFOX`), `messages.ts` (message contract),
   `titles.ts` (`isClassifiableUrl` http(s) gate + `isWhitelisted` domain/subdomain
-  match + `cleanTitle`).
+  match + `matchedBlocklistEntry` deterministic substring match + `cleanTitle`).
 - Build passes (one Vite config each, since `inlineDynamicImports` forbids
   multi-input): `vite.config.background.ts`, `vite.config.offscreen.ts`
   (chrome only), `vite.config.popup.ts`, `vite.config.options.ts`.
@@ -103,15 +109,22 @@ Commit and push when appropriate.
    in-process path (`classify-client.ts` `supportsOffscreen()` gate). CacheStorage
    is origin-scoped, so the SW and offscreen doc SHARE the `transformers-cache`.
 
-## Model facts (from scripts/smoke-test.mjs runs, 2026-06)
+## Model facts (from scripts/smoke-test.mjs runs, 2026-07)
 
 - Default: `Xenova/nli-deberta-v3-xsmall` q8 (~70MB download, cached via
-  Cache API): 9/10 on realistic titles, ~60-100ms/title in Node.
+  Cache API): 9/10 on realistic titles, ~60-100ms/title in Node at 8 labels.
+- **13 labels (2026-07):** added `online shopping`, `social media and
+  networking`, `gambling and betting`, `movies and tv shows`, `adult content`
+  to the original 8. Latency rose to ~120-140ms/title in Node (expected —
+  zero-shot is one forward pass per label); accuracy on the new categories was
+  12/15 on the expanded CASES — e.g. "Home / X" (a bare, low-signal title)
+  still mis-lands as `programming and software development`, the same
+  sparse-title ceiling documented below, not a regression.
 - Rejected: `Xenova/mobilebert-uncased-mnli` q8 (27MB): only 5/10 — called
   "React Router Tutorial" *gaming*.
 - Known ceiling: tiny NLI models don't know newer proper nouns —
   "Elden Ring Boss Fight" → sports. Kept in TEST_TITLES deliberately.
-- Zero-shot = one forward pass per label (8 labels = 8 inferences/title);
+- Zero-shot = one forward pass per label (13 labels = 13 inferences/title);
   trimming labels is a linear speedup.
 - **Richer-signal caveat (Phase 2 finding).** Feeding channel + description into
   the model is now plumbed end-to-end (`extractMeta` → `buildClassifierText`),

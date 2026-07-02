@@ -45,8 +45,8 @@ export const DEFAULT_WHITELIST: string[] = [
   '127.0.0.1',
 ];
 
-// Zero-shot NLI runs ONE forward pass PER label — 8 labels = 8 inferences per
-// title. Trimming to 5 labels is a free 38% speedup if latency disappoints.
+// Zero-shot NLI runs ONE forward pass PER label — 13 labels = 13 inferences
+// per title. Trimming labels is a free linear speedup if latency disappoints.
 // "video games" (not "gaming") separates games from sports much more
 // cleanly: "NBA Finals Game 7 highlights" -> sports 0.95 vs 0.78.
 export const LABELS = [
@@ -58,9 +58,24 @@ export const LABELS = [
   'science and education',
   'music',
   'sports',
+  'online shopping',
+  'social media and networking',
+  'gambling and betting',
+  'movies and tv shows',
+  'adult content',
 ];
 
-export const BLOCKED_LABELS = new Set(['video games', 'memes and entertainment']);
+// 'movies and tv shows' is deliberately NOT blocked by default (like 'music'/
+// 'sports') — it's the most debatable of the new categories; the rest are
+// unambiguous distraction categories in the Cold-Turkey-style premade sense.
+export const BLOCKED_LABELS = new Set([
+  'video games',
+  'memes and entertainment',
+  'online shopping',
+  'social media and networking',
+  'gambling and betting',
+  'adult content',
+]);
 export const BLOCK_THRESHOLD = 0.5;
 
 export const HISTORY_CAP = 200; // raiseable to 1000; ~1-4 min scan at 200

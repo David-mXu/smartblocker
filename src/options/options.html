@@ -131,8 +131,9 @@
         font-variant-numeric: tabular-nums;
         font-weight: 600;
       }
-      /* Whitelist */
-      #whitelist {
+      /* Whitelist / blocklist */
+      #whitelist,
+      #blocklist {
         width: 100%;
         min-height: 120px;
         resize: vertical;
@@ -243,6 +244,15 @@
       covers its subdomains (e.g. <code>google.com</code> covers <code>mail.google.com</code>).
     </p>
     <textarea id="whitelist" spellcheck="false" placeholder="github.com&#10;mail.google.com&#10;localhost"></textarea>
+
+    <h2>Blocklist (always blocked)</h2>
+    <p style="margin:0 0 8px;color:#555;font-size:13px;">
+      Optional, empty by default. One entry per line — matched as a substring against the
+      full URL (so it also catches domains, e.g. <code>amazon.com</code>) and the page
+      title (so it also catches searches, e.g. <code>black friday deals</code>). A match
+      blocks instantly with no AI classification involved.
+    </p>
+    <textarea id="blocklist" spellcheck="false" placeholder="amazon.com&#10;/cart&#10;black friday"></textarea>
 
     <h2>History scan</h2>
     <p style="margin:0 0 8px;color:#555;font-size:13px;">
