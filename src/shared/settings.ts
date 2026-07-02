@@ -28,6 +28,11 @@ export interface Settings {
    * Empty by default — opt-in, unlike the model-driven category blocking.
    */
   blocklist: string[];
+  /**
+   * Built-in labels the user has explicitly deleted. Tracked so that
+   * migrateLabels() doesn't silently re-add them on extension updates.
+   */
+  deletedBuiltinLabels: string[];
 }
 
 export const DEFAULTS: Settings = {
@@ -38,6 +43,7 @@ export const DEFAULTS: Settings = {
   onboarded: false,
   whitelist: [...DEFAULT_WHITELIST],
   blocklist: [],
+  deletedBuiltinLabels: [],
 };
 
 const STORAGE_KEY = 'settings';
@@ -63,7 +69,10 @@ function migrateLabels(stored: Partial<Settings> | undefined): Pick<Settings, 'l
     return { labels: [...DEFAULTS.labels], blockedLabels: [...DEFAULTS.blockedLabels] };
   }
   const known = new Set(stored.labels);
-  const newLabels = LABELS.filter((l) => !known.has(l));
+  const deleted = new Set(stored.deletedBuiltinLabels ?? []);
+  // Append canonical labels the user hasn't seen yet, but skip any they
+  // explicitly deleted — otherwise updates would silently re-add them.
+  const newLabels = LABELS.filter((l) => !known.has(l) && !deleted.has(l));
   if (newLabels.length === 0) {
     return { labels: stored.labels, blockedLabels: stored.blockedLabels ?? [...DEFAULTS.blockedLabels] };
   }

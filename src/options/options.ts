@@ -1,6 +1,10 @@
 import { api } from '../shared/api';
+import { LABELS } from '../shared/config';
 import type { HistoryScanState } from '../shared/messages';
 import { getSettings, setSettings } from '../shared/settings';
+
+/** The set of canonical built-in labels, used to tell built-in from custom. */
+const BUILTIN_LABELS = new Set(LABELS);
 
 // ---------------------------------------------------------------------------
 // Labels that are considered "productive" — not candidates for auto-blocking.
@@ -29,6 +33,8 @@ const scanOut = document.getElementById('scan-out') as HTMLPreElement;
 const saveBtn = document.getElementById('save-btn') as HTMLButtonElement;
 const saveMsg = document.getElementById('save-msg') as HTMLSpanElement;
 const modelProgress = document.getElementById('model-progress') as HTMLSpanElement;
+const customCategoryInput = document.getElementById('custom-category-input') as HTMLInputElement;
+const addCategoryBtn = document.getElementById('add-category-btn') as HTMLButtonElement;
 
 // ---------------------------------------------------------------------------
 // State
@@ -36,6 +42,8 @@ const modelProgress = document.getElementById('model-progress') as HTMLSpanEleme
 let currentLabels: string[] = [];
 /** Tracks which categories the user has checked in the UI (before saving). */
 const checkedBlocked = new Set<string>();
+/** Built-in labels the user has explicitly deleted (persisted to prevent re-add on update). */
+const deletedBuiltins = new Set<string>();
 let isOnboarded = false;
 /** Last scan result used by "Block my top distractions". */
 let lastScanCounts: Record<string, number> = {};
@@ -108,10 +116,47 @@ function buildLabelRows(): void {
       checkbox.dispatchEvent(new Event('change'));
     });
 
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'delete-label-btn';
+    deleteBtn.textContent = '×';
+    deleteBtn.title = 'Remove category';
+    deleteBtn.addEventListener('click', () => removeCategory(label));
+
     li.appendChild(checkbox);
     li.appendChild(span);
+    li.appendChild(deleteBtn);
     labelList.appendChild(li);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Add / remove categories
+// ---------------------------------------------------------------------------
+function addCategory(raw: string): void {
+  const label = raw.trim().toLowerCase();
+  if (!label) return;
+  if (currentLabels.includes(label)) {
+    customCategoryInput.value = '';
+    customCategoryInput.placeholder = 'Category already exists';
+    setTimeout(() => { customCategoryInput.placeholder = 'e.g. cooking and recipes'; }, 2000);
+    return;
+  }
+  currentLabels.push(label);
+  checkedBlocked.add(label); // auto-block: why add it if not to block it?
+  // If re-adding a previously deleted built-in, un-track the deletion.
+  deletedBuiltins.delete(label);
+  customCategoryInput.value = '';
+  buildLabelRows();
+}
+
+function removeCategory(label: string): void {
+  currentLabels = currentLabels.filter((l) => l !== label);
+  checkedBlocked.delete(label);
+  // Track deletion of built-in labels so migrateLabels() won't re-add them.
+  if (BUILTIN_LABELS.has(label)) {
+    deletedBuiltins.add(label);
+  }
+  buildLabelRows();
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +170,9 @@ async function loadSettings(): Promise<void> {
 
   checkedBlocked.clear();
   for (const l of s.blockedLabels) checkedBlocked.add(l);
+
+  deletedBuiltins.clear();
+  for (const l of s.deletedBuiltinLabels) deletedBuiltins.add(l);
 
   enabledToggle.checked = s.enabled;
 
@@ -144,6 +192,19 @@ async function loadSettings(): Promise<void> {
     saveBtn.textContent = 'Save';
   }
 }
+
+// ---------------------------------------------------------------------------
+// Custom category input
+// ---------------------------------------------------------------------------
+addCategoryBtn.addEventListener('click', () => {
+  addCategory(customCategoryInput.value);
+});
+customCategoryInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    addCategory(customCategoryInput.value);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Threshold slider live update
@@ -167,6 +228,7 @@ saveBtn.addEventListener('click', async () => {
     blockThreshold: parseFloat(thresholdInput.value),
     whitelist,
     blocklist,
+    deletedBuiltinLabels: [...deletedBuiltins],
   };
   if (!isOnboarded) {
     patch.onboarded = true;
