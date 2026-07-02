@@ -55,14 +55,18 @@ export function buildClassifierText(input: ClassifyInput): string {
  * capitalisation differences (e.g. auto-capitalised page titles) still hit the
  * same cache entry.
  *
- * Format: "title\x00channel\x00context" — the NUL delimiter is safe because
- * neither titles nor channels contain it, and it prevents "a\x00b" from
+ * Format: "modelKey\x00title\x00channel\x00context" — the NUL delimiter is
+ * safe because none of the fields contain it, and it prevents "a\x00b" from
  * colliding with "a" + "b" in any field position.
+ *
+ * `modelKey` spans everything that changes verdicts without changing the input
+ * (backend, model id, centroid version) so switching models — or learning from
+ * a user correction — never serves a stale cached verdict.
  */
-export function inputCacheKey(input: ClassifyInput): string {
+export function inputCacheKey(input: ClassifyInput, modelKey: string): string {
   const title = (input.title ?? '').trim().toLowerCase();
   const channel = (input.channel ?? '').trim().toLowerCase();
   // Only the first MAX_CONTEXT chars of context matter (same budget as above).
   const context = (input.context ?? '').trim().toLowerCase().slice(0, MAX_CONTEXT);
-  return `${title}\x00${channel}\x00${context}`;
+  return `${modelKey}\x00${title}\x00${channel}\x00${context}`;
 }

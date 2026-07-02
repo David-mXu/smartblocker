@@ -1,13 +1,25 @@
 // Default values. These are the DEFAULTS for src/shared/settings.ts, which is
 // the runtime source of truth (user-overridable from the options page).
 
-// Chosen by smoke test (scripts/smoke-test.mjs): DeBERTa scored 9/10 vs
-// MobileBERT's 5/10 at comparable speed (~60-100ms/title in Node).
-// Known ceiling: the model doesn't recognize newer proper nouns — e.g.
-// "Elden Ring Boss Fight" classifies as sports. Phase 2 plumbed richer page
-// signals (channel + description) through, but on this tiny model that does NOT
-// reliably fix it (and can backfire — see the CLAUDE.md richer-signal caveat);
-// a stronger model is the Phase 3 plan.
+// Two classifier backends exist (both fully local):
+//   'embed' — embedding-prototype classifier: ONE feature-extraction forward
+//             pass per title, classified by cosine similarity against
+//             per-category centroid embeddings (src/shared/prototypes.ts).
+//             Won the 2026-07 bake-off (scripts/benchmark.mjs): 87.8% top-1,
+//             1.8% productive-FP / 75.4% must-block recall @0.5, ~3ms/title —
+//             vs 65.2% / 7.1% / 31.9% @ ~111ms for the NLI baseline.
+//   'nli'   — legacy zero-shot NLI (one forward pass PER label). Kept as a
+//             fallback switch; not exposed in the UI.
+export const CLASSIFIER_BACKEND: 'embed' | 'nli' = 'embed';
+
+// Embedding backend model (~34MB q8, cached via Cache API).
+export const EMBED_MODEL_ID = 'Xenova/bge-small-en-v1.5';
+// Softmax temperature over centroid cosine similarities, calibrated on the
+// eval set so the natural operating point sits at the default 0.5 threshold.
+export const SOFTMAX_TEMPERATURE = 0.03;
+
+// Legacy NLI backend (bake-off baseline). Known ceiling: doesn't recognize
+// newer proper nouns — e.g. "Elden Ring Boss Fight" classifies as sports.
 export const MODEL_ID = 'Xenova/nli-deberta-v3-xsmall';
 
 export const HYPOTHESIS_TEMPLATE = 'This web page is about {}.';

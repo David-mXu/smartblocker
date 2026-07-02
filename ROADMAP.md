@@ -117,12 +117,44 @@ blocklist handles sites/searches the user wants blocked with zero ambiguity.
 
 ---
 
+## Phase 2.7 — Model bake-off: embedding-prototype classifier ✅ (2026-07-02)
+
+Resolved the open Phase 3 model-quality problem with data. Built a real eval
+(`scripts/eval-dataset.json`, 223 hand-checked cases incl. a 56-title
+productive-negative set + enriched-signal variants) and a benchmark harness
+(`scripts/benchmark.mjs`) reporting the metrics that matter for a blocker:
+productive false-positive rate, must-block recall, top-1, latency.
+
+Bake-off results (threshold 0.5, q8, Node):
+
+| candidate | top-1 | productive FP | must-block recall | p50 |
+|---|---|---|---|---|
+| nli-deberta-v3-xsmall (was shipping) | 65.2% | 7.1% | 31.9% | 111ms |
+| nli-deberta-v3-small | 61.6% | 3.6% | 33.3% | 107ms |
+| embed all-MiniLM-L6-v2 (temp .05) | 78.0% | 3.6% | 72.5% | 2ms |
+| **embed bge-small-en-v1.5 (temp .03)** | **87.8%** | **1.8%** | **75.4%** | **3ms** |
+
+**Shipped: `CLASSIFIER_BACKEND = 'embed'`** — `Xenova/bge-small-en-v1.5`
+(~34MB, half the NLI download) embeds the page text ONCE (label count is
+free), classified by cosine similarity against per-category centroid
+embeddings (seed texts in `src/shared/prototype-seeds.json`, math in
+`prototypes.ts`) plus neutral "productive" centroids that can never block.
+Softmax temp 0.03 calibrated so the natural operating point sits at the
+existing 0.5 threshold. It also fixes proper-noun blindness the honest way:
+"Elden Ring Boss Fight" → video games at 0.89. The NLI path remains as a
+config fallback (`'nli'`). Real-Chromium e2e: 9-15ms/title live (was ~150ms).
+
+Strategic unlock: centroids are updatable at runtime — user corrections fold
+into them (`feedback.ts getPrototypeExamples`), i.e. genuine on-device
+learning with no fine-tuning (Phase 2.8).
+
+---
+
 ## Phase 3 — Public beta
 
-- **Open problem carried from Phase 2: model quality.** The tiny NLI model
-  (`nli-deberta-v3-xsmall`) misses newer proper nouns and richer signals don't
-  fix it reliably. Evaluate a stronger local model (larger NLI, or a small
-  embed-and-classify approach) against the RAM/latency budget before launch.
+- ~~Open problem carried from Phase 2: model quality.~~ **Resolved in
+  Phase 2.7** by the embedding-prototype backend (see table above). Remaining
+  model work is dataset-driven: grow `eval-dataset.json` from real feedback.
 - Open-source GitHub release + Chrome Web Store beta listing.
 - Watch RAM/battery, false-positive rate, and model download UX in the wild.
 - Stay telemetry-free; all classification + history analysis remain local.

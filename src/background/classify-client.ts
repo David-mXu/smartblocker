@@ -8,7 +8,7 @@
 // remain SW-side so they are isolated from the offscreen document.
 
 import { api, IS_FIREFOX } from '../shared/api';
-import type { InferResult } from '../shared/messages';
+import type { EmbedResult, InferResult } from '../shared/messages';
 
 // The URL must match the path Vite emits into dist/<mode>/offscreen.html.
 const OFFSCREEN_URL = 'offscreen.html';
@@ -84,4 +84,21 @@ export async function classifyViaOffscreen(
   }
 
   return response as InferResult;
+}
+
+/**
+ * Ensure the offscreen document is alive, then send an EMBED message to it
+ * and return the raw EmbedResult (one normalized vector per input text).
+ * Centroid math and caching are the caller's (classifier.ts) concern.
+ */
+export async function embedViaOffscreen(texts: string[]): Promise<EmbedResult> {
+  await ensureOffscreenDocument();
+
+  const response = await api.runtime.sendMessage({ type: 'EMBED' as const, texts });
+
+  if (response && typeof response === 'object' && 'error' in response) {
+    throw new Error(`[FlowGuard/offscreen] ${(response as { error: string }).error}`);
+  }
+
+  return response as EmbedResult;
 }

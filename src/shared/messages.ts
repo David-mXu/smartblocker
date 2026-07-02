@@ -23,6 +23,7 @@ export type Request =
   // Offscreen-document RPC: pure inference primitives, so the offscreen worker
   // stays decoupled from settings + text assembly (those live SW-side).
   | { type: 'CLASSIFY'; text: string; labels: string[] }
+  | { type: 'EMBED'; texts: string[] }
   | { type: 'OVERRIDE'; title: string; url?: string }
   | { type: 'CLOSE_TAB' };
 
@@ -37,6 +38,15 @@ export interface InferResult {
   label: string;
   score: number;
   all: { labels: string[]; scores: number[] };
+  /** Pipeline (re)load time — 0 when the model was already warm. */
+  loadMs: number;
+  inferMs: number;
+}
+
+/** Raw embedding result from the feature-extraction model (embed backend). */
+export interface EmbedResult {
+  /** One normalized embedding vector per input text, in input order. */
+  vectors: number[][];
   /** Pipeline (re)load time — 0 when the model was already warm. */
   loadMs: number;
   inferMs: number;

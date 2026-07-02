@@ -1,10 +1,24 @@
 import { env, pipeline } from '@huggingface/transformers';
 import { api } from '../shared/api';
 import { buildClassifierText, inputCacheKey } from '../shared/build-input';
-import { HYPOTHESIS_TEMPLATE, MODEL_ID, TITLE_CACHE_MAX } from '../shared/config';
+import {
+  CLASSIFIER_BACKEND,
+  EMBED_MODEL_ID,
+  HYPOTHESIS_TEMPLATE,
+  MODEL_ID,
+  SOFTMAX_TEMPERATURE,
+  TITLE_CACHE_MAX,
+} from '../shared/config';
 import { getSettings } from '../shared/settings';
+import { getPrototypeExamples } from '../shared/feedback';
+import {
+  centroidSpecs,
+  classifyBySimilarity,
+  meanNormalize,
+  prototypesVersion,
+} from '../shared/prototypes';
 import type { ClassifyInput, ClassifyOutcome, InferResult } from '../shared/messages';
-import { classifyViaOffscreen, supportsOffscreen } from './classify-client';
+import { classifyViaOffscreen, embedViaOffscreen, supportsOffscreen } from './classify-client';
 
 // ---- MV3 environment config (load-bearing) ----
 // Model weights come from the HF Hub (data, not code — Web Store legal); the
@@ -19,6 +33,25 @@ const ortWasm = env.backends.onnx.wasm!;
 ortWasm.numThreads = 1; // workers can't spawn nested Workers
 ortWasm.proxy = false;
 
+// Firefox extension pages may lack the Cache API; probe before transformers
+// tries to use it (failure mode is a hard throw during model load).
+async function probeBrowserCache(): Promise<void> {
+  try {
+    await caches.open('flowguard-probe');
+    env.useBrowserCache = true;
+  } catch {
+    env.useBrowserCache = false;
+    console.warn('[FlowGuard] Cache API unavailable — model re-downloads each session');
+  }
+}
+
+const logProgress = (p: { status: string; file?: string; progress?: number }) => {
+  if (p.status === 'progress' && p.progress != null) {
+    console.log(`[FlowGuard] downloading ${p.file}: ${p.progress.toFixed(0)}%`);
+  }
+};
+
+// ---- In-process NLI pipeline (Firefox path of the legacy 'nli' backend) ----
 type ZeroShotPipeline = (
   text: string,
   labels: string[],
@@ -28,24 +61,11 @@ type ZeroShotPipeline = (
 let instance: Promise<ZeroShotPipeline> | null = null;
 
 async function createPipeline(): Promise<ZeroShotPipeline> {
-  // Firefox extension pages may lack the Cache API; probe before transformers
-  // tries to use it (failure mode is a hard throw during model load).
-  try {
-    await caches.open('flowguard-probe');
-    env.useBrowserCache = true;
-  } catch {
-    env.useBrowserCache = false;
-    console.warn('[FlowGuard] Cache API unavailable — model re-downloads each session');
-  }
-
+  await probeBrowserCache();
   const pipe = await pipeline('zero-shot-classification', MODEL_ID, {
     dtype: 'q8',
     device: 'wasm',
-    progress_callback: (p: { status: string; file?: string; progress?: number }) => {
-      if (p.status === 'progress' && p.progress != null) {
-        console.log(`[FlowGuard] downloading ${p.file}: ${p.progress.toFixed(0)}%`);
-      }
-    },
+    progress_callback: logProgress,
   });
   return pipe as unknown as ZeroShotPipeline;
 }
@@ -56,6 +76,98 @@ export function getClassifier(): Promise<ZeroShotPipeline> {
     throw e;
   });
   return instance;
+}
+
+// ---- In-process embedding pipeline (Firefox path of the 'embed' backend) ----
+type FeatureExtractionPipeline = (
+  texts: string[],
+  options: { pooling: 'mean'; normalize: boolean },
+) => Promise<{ data: Float32Array | number[]; dims: number[] }>;
+
+let embedInstance: Promise<FeatureExtractionPipeline> | null = null;
+
+async function createEmbedPipeline(): Promise<FeatureExtractionPipeline> {
+  await probeBrowserCache();
+  const pipe = await pipeline('feature-extraction', EMBED_MODEL_ID, {
+    dtype: 'q8',
+    device: 'wasm',
+    progress_callback: logProgress,
+  });
+  return pipe as unknown as FeatureExtractionPipeline;
+}
+
+function getEmbedder(): Promise<FeatureExtractionPipeline> {
+  embedInstance ??= createEmbedPipeline().catch((e) => {
+    embedInstance = null; // allow retry after a failed load
+    throw e;
+  });
+  return embedInstance;
+}
+
+/** Embed texts on whichever host runs inference (offscreen doc or in-process),
+ *  returning normalized vectors plus load/infer timings. */
+async function embedTexts(
+  texts: string[],
+): Promise<{ vectors: number[][]; loadMs: number; inferMs: number }> {
+  if (supportsOffscreen()) return embedViaOffscreen(texts);
+  const t0 = performance.now();
+  const embedder = await getEmbedder();
+  const tLoaded = performance.now();
+  const out = await embedder(texts, { pooling: 'mean', normalize: true });
+  const dim = out.dims[out.dims.length - 1];
+  const vectors: number[][] = [];
+  for (let i = 0; i < texts.length; i++) {
+    vectors.push(Array.from(out.data.slice(i * dim, (i + 1) * dim) as Float32Array));
+  }
+  return { vectors, loadMs: tLoaded - t0, inferMs: performance.now() - tLoaded };
+}
+
+// ---- Centroid store (embed backend) ----
+// Centroid vectors are derived data: rebuilt whenever their version (model id
+// + active labels + seed/user-correction texts) changes, cached in
+// storage.local so a fresh SW start skips the ~1s rebuild.
+type CentroidCache = { version: string; names: string[]; vectors: number[][] };
+
+let centroidsInFlight: Promise<CentroidCache> | null = null;
+
+async function getCentroids(labels: string[]): Promise<CentroidCache & { buildMs: number }> {
+  const specs = centroidSpecs(labels, await getPrototypeExamples());
+  const version = prototypesVersion(EMBED_MODEL_ID, specs);
+
+  const stored = await api.storage.local.get('centroidCache');
+  const cached = stored.centroidCache as CentroidCache | undefined;
+  if (cached && cached.version === version) return { ...cached, buildMs: 0 };
+
+  // Another call may already be rebuilding the same version — don't duplicate.
+  if (centroidsInFlight) {
+    const inFlight = await centroidsInFlight;
+    if (inFlight.version === version) return { ...inFlight, buildMs: 0 };
+  }
+
+  const t0 = performance.now();
+  centroidsInFlight = (async () => {
+    const names: string[] = [];
+    const vectors: number[][] = [];
+    // One embed batch per centroid (~8 texts) keeps peak memory low.
+    for (const spec of specs) {
+      const { vectors: vecs } = await embedTexts(spec.texts);
+      names.push(spec.name);
+      vectors.push(meanNormalize(vecs));
+    }
+    const built: CentroidCache = { version, names, vectors };
+    await api.storage.local.set({ centroidCache: built });
+    return built;
+  })();
+  try {
+    const built = await centroidsInFlight;
+    console.log(
+      `[FlowGuard] built ${built.names.length} centroids (${version}) in ` +
+        `${Math.round(performance.now() - t0)}ms`,
+    );
+    return { ...built, buildMs: performance.now() - t0 };
+  } finally {
+    centroidsInFlight = null;
+  }
 }
 
 // ---- Title result cache (repeat titles are ~0ms) ----
@@ -97,10 +209,34 @@ async function classifyInProcess(text: string, labels: string[]): Promise<InferR
   };
 }
 
+// Embed backend: one forward pass for the text, then cosine + softmax against
+// the centroid store. Centroid (re)build cost is reported as loadMs.
+async function classifyEmbed(text: string, labels: string[]): Promise<InferResult> {
+  const centroids = await getCentroids(labels);
+  const { vectors, loadMs, inferMs } = await embedTexts([text]);
+  const verdict = classifyBySimilarity(
+    vectors[0],
+    centroids.names.map((name, i) => ({ name, vec: centroids.vectors[i] })),
+    SOFTMAX_TEMPERATURE,
+  );
+  return { ...verdict, loadMs: loadMs + centroids.buildMs, inferMs };
+}
+
 export async function classify(input: ClassifyInput): Promise<ClassifyOutcome> {
-  // Cache key spans every signal (title/channel/context); the model sees the
-  // assembled text. Both come from build-input so they stay in lockstep.
-  const key = inputCacheKey(input);
+  const { labels } = await getSettings();
+
+  // The cache key spans every signal (title/channel/context) AND the model
+  // key (backend + model + centroid version), so model switches and user
+  // corrections never serve stale verdicts. Centroid-version lookup is only
+  // meaningful on the embed backend.
+  const modelKey =
+    CLASSIFIER_BACKEND === 'embed'
+      ? `embed:${EMBED_MODEL_ID}:${prototypesVersion(
+          EMBED_MODEL_ID,
+          centroidSpecs(labels, await getPrototypeExamples()),
+        )}`
+      : `nli:${MODEL_ID}`;
+  const key = inputCacheKey(input, modelKey);
   const text = buildClassifierText(input);
 
   const cache = await getTitleCache();
@@ -109,13 +245,17 @@ export async function classify(input: ClassifyInput): Promise<ClassifyOutcome> {
     return { text, ...hit, loadMs: 0, inferMs: 0, cached: true };
   }
 
-  // Labels are user-configurable (settings page); read them per classification
-  // so changes apply without a reload. Offscreen on Chrome/Edge keeps the model
-  // alive past SW idle; Firefox runs the pipeline in-process.
-  const { labels } = await getSettings();
-  const infer = supportsOffscreen()
-    ? await classifyViaOffscreen(text, labels)
-    : await classifyInProcess(text, labels);
+  // Offscreen on Chrome/Edge keeps the model alive past SW idle; Firefox runs
+  // the pipeline in-process. Labels are user-configurable (settings page) and
+  // read per classification so changes apply without a reload.
+  let infer: InferResult;
+  if (CLASSIFIER_BACKEND === 'embed') {
+    infer = await classifyEmbed(text, labels);
+  } else {
+    infer = supportsOffscreen()
+      ? await classifyViaOffscreen(text, labels)
+      : await classifyInProcess(text, labels);
+  }
 
   const entry: CacheEntry = { label: infer.label, score: infer.score, all: infer.all };
   cache.set(key, entry);
