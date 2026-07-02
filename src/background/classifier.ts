@@ -42,6 +42,12 @@ async function createPipeline(): Promise<ZeroShotPipeline> {
     dtype: 'q8',
     device: 'wasm',
     progress_callback: (p: { status: string; file?: string; progress?: number }) => {
+      // Broadcast to options page (and anywhere else listening)
+      try {
+        api.runtime.sendMessage({ type: 'MODEL_PROGRESS', ...p });
+      } catch (e) {
+        // ignore — no options page open
+      }
       if (p.status === 'progress' && p.progress != null) {
         console.log(`[FlowGuard] downloading ${p.file}: ${p.progress.toFixed(0)}%`);
       }

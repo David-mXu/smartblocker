@@ -28,6 +28,7 @@ const scanStatus = document.getElementById('scan-status') as HTMLDivElement;
 const scanOut = document.getElementById('scan-out') as HTMLPreElement;
 const saveBtn = document.getElementById('save-btn') as HTMLButtonElement;
 const saveMsg = document.getElementById('save-msg') as HTMLSpanElement;
+const modelProgress = document.getElementById('model-progress') as HTMLSpanElement;
 
 // ---------------------------------------------------------------------------
 // State
@@ -253,6 +254,25 @@ blockTopBtn.addEventListener('click', () => {
 
   // Refresh checkboxes to reflect the new state
   buildLabelRows();
+});
+
+// ---------------------------------------------------------------------------
+// Model Progress Listener
+// ---------------------------------------------------------------------------
+api.runtime.onMessage.addListener((message) => {
+  if (message.type === 'MODEL_PROGRESS') {
+    modelProgress.style.display = 'inline-block';
+    if (message.status === 'init' || message.status === 'ready') {
+      modelProgress.textContent = `Model ${message.status}...`;
+    } else if (message.status === 'progress' && message.progress != null) {
+      modelProgress.textContent = `Downloading AI model: ${message.progress.toFixed(0)}%`;
+    } else if (message.status === 'done') {
+      modelProgress.textContent = 'AI model ready';
+      setTimeout(() => {
+        modelProgress.style.display = 'none';
+      }, 5000);
+    }
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -26,6 +26,9 @@ export type Request =
   | { type: 'OVERRIDE'; title: string; url?: string }
   | { type: 'CLOSE_TAB' };
 
+export type EventMessage =
+  | { type: 'MODEL_PROGRESS'; file?: string; progress?: number; status: string };
+
 export interface SettingsResponse {
   ok: boolean;
   settings?: Settings;
