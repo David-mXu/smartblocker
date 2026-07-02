@@ -71,6 +71,11 @@ document.getElementById('scan-history')!.addEventListener('click', async () => {
   }, 1000);
 });
 
+// ---- Options ----
+document.getElementById('open-options')!.addEventListener('click', () => {
+  api.runtime.openOptionsPage();
+});
+
 // ---- Latency Log ----
 document.getElementById('latency-log')!.addEventListener('click', async () => {
   status.textContent = '';
