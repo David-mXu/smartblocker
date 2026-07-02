@@ -76,9 +76,9 @@ export function showBlockScreen(
   // PRIMARY: send override correction, then dismiss.
   const btnOverride = document.createElement('button');
   btnOverride.style.cssText =
-    'padding:13px 20px;border-radius:8px;border:none;cursor:pointer;' +
+    'box-sizing:border-box;margin:0;padding:13px 20px;border-radius:8px;border:none;cursor:pointer;' +
     'background:#16a34a;color:#fff;font-size:15px;font-weight:600;' +
-    'font-family:inherit;transition:opacity .15s;line-height:1.3';
+    'font-family:inherit;transition:opacity .15s;line-height:1.3;height:auto;min-height:min-content;';
   btnOverride.textContent = 'This is actually productive — let me through';
   btnOverride.addEventListener('mouseenter', () => {
     btnOverride.style.opacity = '0.85';
@@ -96,10 +96,10 @@ export function showBlockScreen(
   // SECONDARY: close the tab outright — the real "stay focused" action.
   const btnStay = document.createElement('button');
   btnStay.style.cssText =
-    'padding:11px 20px;border-radius:8px;cursor:pointer;' +
+    'box-sizing:border-box;margin:0;padding:11px 20px;border-radius:8px;cursor:pointer;' +
     'background:transparent;color:rgba(255,255,255,.6);' +
     'border:1px solid rgba(255,255,255,.2);font-size:14px;font-weight:500;' +
-    'font-family:inherit;transition:opacity .15s';
+    'font-family:inherit;transition:opacity .15s;line-height:1.3;height:auto;min-height:min-content;';
   btnStay.textContent = 'Stay focused (close tab)';
   btnStay.addEventListener('mouseenter', () => {
     btnStay.style.opacity = '0.7';
@@ -117,10 +117,10 @@ export function showBlockScreen(
   // "Stay focused" behavior, kept for a plain "let me see it just this once."
   const btnDismiss = document.createElement('button');
   btnDismiss.style.cssText =
-    'padding:9px 20px;border-radius:8px;cursor:pointer;' +
+    'box-sizing:border-box;margin:0;padding:9px 20px;border-radius:8px;cursor:pointer;' +
     'background:transparent;color:rgba(255,255,255,.35);' +
     'border:none;font-size:13px;font-weight:400;' +
-    'font-family:inherit;transition:opacity .15s';
+    'font-family:inherit;transition:opacity .15s;line-height:1.3;height:auto;min-height:min-content;';
   btnDismiss.textContent = 'Dismiss';
   btnDismiss.addEventListener('mouseenter', () => {
     btnDismiss.style.opacity = '0.7';
