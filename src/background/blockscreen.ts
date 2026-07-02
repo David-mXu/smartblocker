@@ -78,7 +78,8 @@ export function showBlockScreen(
   btnOverride.style.cssText =
     'box-sizing:border-box;margin:0;padding:13px 20px;border-radius:8px;border:none;cursor:pointer;' +
     'background:#16a34a;color:#fff;font-size:15px;font-weight:600;' +
-    'font-family:inherit;transition:opacity .15s;line-height:1.3;height:auto;min-height:min-content;';
+    'font-family:inherit;transition:opacity .15s;line-height:1.3;height:auto;min-height:min-content;' +
+    'width:100%;white-space:normal;word-break:break-word;text-transform:none;letter-spacing:normal;';
   btnOverride.textContent = 'This is actually productive — let me through';
   btnOverride.addEventListener('mouseenter', () => {
     btnOverride.style.opacity = '0.85';
@@ -99,7 +100,8 @@ export function showBlockScreen(
     'box-sizing:border-box;margin:0;padding:11px 20px;border-radius:8px;cursor:pointer;' +
     'background:transparent;color:rgba(255,255,255,.6);' +
     'border:1px solid rgba(255,255,255,.2);font-size:14px;font-weight:500;' +
-    'font-family:inherit;transition:opacity .15s;line-height:1.3;height:auto;min-height:min-content;';
+    'font-family:inherit;transition:opacity .15s;line-height:1.3;height:auto;min-height:min-content;' +
+    'width:100%;white-space:normal;word-break:break-word;text-transform:none;letter-spacing:normal;';
   btnStay.textContent = 'Stay focused (close tab)';
   btnStay.addEventListener('mouseenter', () => {
     btnStay.style.opacity = '0.7';
@@ -120,7 +122,8 @@ export function showBlockScreen(
     'box-sizing:border-box;margin:0;padding:9px 20px;border-radius:8px;cursor:pointer;' +
     'background:transparent;color:rgba(255,255,255,.35);' +
     'border:none;font-size:13px;font-weight:400;' +
-    'font-family:inherit;transition:opacity .15s;line-height:1.3;height:auto;min-height:min-content;';
+    'font-family:inherit;transition:opacity .15s;line-height:1.3;height:auto;min-height:min-content;' +
+    'width:100%;white-space:normal;word-break:break-word;text-transform:none;letter-spacing:normal;';
   btnDismiss.textContent = 'Dismiss';
   btnDismiss.addEventListener('mouseenter', () => {
     btnDismiss.style.opacity = '0.7';
