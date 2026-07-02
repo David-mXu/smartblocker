@@ -195,9 +195,18 @@ function renderScan(s: HistoryScanState | undefined): void {
     .map(([label, n]) => `  ${String(n).padStart(4)}  ${label}`)
     .join('\n');
 
+  const zeroHint =
+    s.status === 'done' && s.total === 0
+      ? s.historyCount === 0
+        ? '\n(No browsing history found.)'
+        : `\n(Found ${s.historyCount} history entries, but all were on your whitelist, ` +
+          `already-seen titles, or too generic to classify.)`
+      : '';
+
   scanOut.textContent =
     `Scan ${s.status}: ${s.done}/${s.total} titles in ${(s.elapsedMs / 1000).toFixed(1)}s\n` +
     (s.error ? `Error: ${s.error}\n` : '') +
+    zeroHint +
     `\nCategories:\n${counts || '  (none yet)'}`;
   scanOut.style.display = 'block';
 
