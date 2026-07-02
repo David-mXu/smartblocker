@@ -17,7 +17,7 @@ api.runtime.onInstalled.addListener(({ reason }) => {
 });
 
 api.runtime.onMessage.addListener(
-  (msg: Request, _sender, sendResponse: (r: TestPairResponse) => void) => {
+  (msg: Request, sender, sendResponse: (r: TestPairResponse) => void) => {
     if (msg?.type === 'TEST_PAIR') {
       (async () => {
         const results = [];
@@ -34,6 +34,11 @@ api.runtime.onMessage.addListener(
     if (msg?.type === 'OVERRIDE') {
       // Block screen's "this is actually productive" — record the correction.
       void addOverride(msg.title);
+    }
+    if (msg?.type === 'CLOSE_TAB') {
+      // Block screen's "Stay focused" — close the distracting tab outright.
+      const tabId = sender.tab?.id;
+      if (tabId !== undefined) void api.tabs.remove(tabId);
     }
     return false;
   },

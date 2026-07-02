@@ -49,7 +49,7 @@ Commit and push when appropriate.
     straight to the block screen with no inference. Otherwise gathers richer
     signals (`extractMeta`), classifies, checks settings + overrides, injects
     `blockscreen.ts`.
-  - `blockscreen.ts` — injected full block screen with the override button
+  - `blockscreen.ts` — injected full block screen with the override button/
     (replaced the old `overlay.ts`).
   - `history-ingester.ts` scans chrome.history; `index.ts` wires listeners,
     first-run onboarding (`openOptionsPage`), and the `OVERRIDE` handler.

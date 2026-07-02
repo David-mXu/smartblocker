@@ -75,6 +75,7 @@ const GENERIC_TITLES = new Set(['youtube', 'reddit', 'new tab']);
 export function cleanTitle(raw: string): string | null {
   let t = raw
     .replace(/^\(\d+\)\s*/, '') // "(3) " unread-count prefix
+    .replace(/\s*\(\d{1,2}:\d{2}(:\d{2})?\)$/, '') // "(2:26)" live playback timer (brain.fm etc.)
     .replace(/\s*[-|–]\s*YouTube$/i, '')
     .replace(/\s*[-|–:]\s*r\/\w+$/i, '')
     .trim();

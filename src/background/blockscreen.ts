@@ -93,14 +93,14 @@ export function showBlockScreen(
     overlay.remove();
   });
 
-  // SECONDARY: just dismiss, no correction recorded.
+  // SECONDARY: close the tab outright — the real "stay focused" action.
   const btnStay = document.createElement('button');
   btnStay.style.cssText =
     'padding:11px 20px;border-radius:8px;cursor:pointer;' +
     'background:transparent;color:rgba(255,255,255,.6);' +
     'border:1px solid rgba(255,255,255,.2);font-size:14px;font-weight:500;' +
     'font-family:inherit;transition:opacity .15s';
-  btnStay.textContent = 'Stay focused';
+  btnStay.textContent = 'Stay focused (close tab)';
   btnStay.addEventListener('mouseenter', () => {
     btnStay.style.opacity = '0.7';
   });
@@ -108,10 +108,31 @@ export function showBlockScreen(
     btnStay.style.opacity = '1';
   });
   btnStay.addEventListener('click', () => {
+    if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+      chrome.runtime.sendMessage({ type: 'CLOSE_TAB' });
+    }
+  });
+
+  // TERTIARY: dismiss only — no correction recorded, no tab action. The old
+  // "Stay focused" behavior, kept for a plain "let me see it just this once."
+  const btnDismiss = document.createElement('button');
+  btnDismiss.style.cssText =
+    'padding:9px 20px;border-radius:8px;cursor:pointer;' +
+    'background:transparent;color:rgba(255,255,255,.35);' +
+    'border:none;font-size:13px;font-weight:400;' +
+    'font-family:inherit;transition:opacity .15s';
+  btnDismiss.textContent = 'Dismiss';
+  btnDismiss.addEventListener('mouseenter', () => {
+    btnDismiss.style.opacity = '0.7';
+  });
+  btnDismiss.addEventListener('mouseleave', () => {
+    btnDismiss.style.opacity = '1';
+  });
+  btnDismiss.addEventListener('click', () => {
     overlay.remove();
   });
 
-  btnRow.append(btnOverride, btnStay);
+  btnRow.append(btnOverride, btnStay, btnDismiss);
   card.append(badge, headline, pill, pageTitle, meta, btnRow);
   overlay.appendChild(card);
   document.documentElement.appendChild(overlay);

@@ -23,7 +23,8 @@ export type Request =
   // Offscreen-document RPC: pure inference primitives, so the offscreen worker
   // stays decoupled from settings + text assembly (those live SW-side).
   | { type: 'CLASSIFY'; text: string; labels: string[] }
-  | { type: 'OVERRIDE'; title: string; url?: string };
+  | { type: 'OVERRIDE'; title: string; url?: string }
+  | { type: 'CLOSE_TAB' };
 
 export interface SettingsResponse {
   ok: boolean;

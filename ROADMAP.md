@@ -73,7 +73,7 @@ Done alongside: `version` → 0.2.0, `CLAUDE.md` + `README.md` updated.
 ---
 
 ## Phase 2.5 — All sites + whitelist ✅ (v0.3.0)
-
+/
 Flipped the watch model from YouTube/Reddit-only to **every `http(s)` site except a
 user whitelist** (Cold-Turkey-style "allow these, block the rest").
 
