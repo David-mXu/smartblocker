@@ -1,4 +1,5 @@
 import { api } from '../shared/api';
+import { clearFeedback, getFeedback } from '../shared/feedback';
 import type { HistoryScanState } from '../shared/messages';
 import { getSettings, setSettings } from '../shared/settings';
 
@@ -28,6 +29,10 @@ const scanStatus = document.getElementById('scan-status') as HTMLDivElement;
 const scanOut = document.getElementById('scan-out') as HTMLPreElement;
 const saveBtn = document.getElementById('save-btn') as HTMLButtonElement;
 const saveMsg = document.getElementById('save-msg') as HTMLSpanElement;
+const feedbackCount = document.getElementById('feedback-count') as HTMLSpanElement;
+const feedbackExportBtn = document.getElementById('feedback-export') as HTMLButtonElement;
+const feedbackClearBtn = document.getElementById('feedback-clear') as HTMLButtonElement;
+const shareToggle = document.getElementById('share-toggle') as HTMLInputElement;
 
 // ---------------------------------------------------------------------------
 // State
@@ -132,8 +137,10 @@ async function loadSettings(): Promise<void> {
 
   whitelistInput.value = s.whitelist.join('\n');
   blocklistInput.value = s.blocklist.join('\n');
+  shareToggle.checked = s.shareFeedback;
 
   buildLabelRows();
+  await refreshFeedbackCount();
 
   if (!isOnboarded) {
     banner.style.display = 'block';
@@ -166,6 +173,7 @@ saveBtn.addEventListener('click', async () => {
     blockThreshold: parseFloat(thresholdInput.value),
     whitelist,
     blocklist,
+    shareFeedback: shareToggle.checked,
   };
   if (!isOnboarded) {
     patch.onboarded = true;
@@ -244,6 +252,29 @@ blockTopBtn.addEventListener('click', () => {
 
   // Refresh checkboxes to reflect the new state
   buildLabelRows();
+});
+
+// ---------------------------------------------------------------------------
+// Feedback: local corrections — count, export as JSON, clear
+// ---------------------------------------------------------------------------
+async function refreshFeedbackCount(): Promise<void> {
+  feedbackCount.textContent = String((await getFeedback()).length);
+}
+
+feedbackExportBtn.addEventListener('click', async () => {
+  const records = await getFeedback();
+  const blob = new Blob([JSON.stringify(records, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `flowguard-feedback-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+feedbackClearBtn.addEventListener('click', async () => {
+  await clearFeedback();
+  await refreshFeedbackCount();
 });
 
 // ---------------------------------------------------------------------------

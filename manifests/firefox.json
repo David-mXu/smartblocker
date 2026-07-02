@@ -21,6 +21,7 @@
     "open_in_tab": true
   },
   "permissions": [
+    "alarms",
     "history",
     "scripting",
     "storage",

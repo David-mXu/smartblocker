@@ -3,11 +3,17 @@
 // Usage: node scripts/e2e-test.mjs
 // Profile (and the cached model) persists in .e2e-profile/ across runs.
 import { chromium } from 'playwright';
+import { rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const EXT_PATH = resolve('dist/chrome');
 const PROFILE = resolve('.e2e-profile');
-const MODEL_TIMEOUT_MS = 5 * 60_000; // first run downloads ~70MB
+const MODEL_TIMEOUT_MS = 5 * 60_000; // first run downloads the model (~35MB)
+
+// Chromium caches the MV3 service-worker SCRIPT in the profile and can keep
+// serving a stale background.js after a rebuild. Drop only ScriptCache —
+// CacheStorage (the downloaded model) must survive across runs.
+rmSync(resolve(PROFILE, 'Default/Service Worker/ScriptCache'), { recursive: true, force: true });
 
 const context = await chromium.launchPersistentContext(PROFILE, {
   channel: 'chromium',
@@ -28,6 +34,13 @@ try {
 
   // Surface background console output (download progress, classifications).
   sw.on('console', (msg) => console.log('  [sw]', msg.text()));
+
+  // Reset user-correction state that leaks across runs of the persistent
+  // profile (a prior run's override click would let this run's blocklist page
+  // through). The model + title caches deliberately stay warm.
+  await sw.evaluate(() =>
+    chrome.storage.local.remove(['overrides', 'feedback', 'latencySamples', 'historyScan']),
+  );
 
   // 2. Popup loads and Test Pair round-trips through the SW + model.
   const page = await context.newPage();
@@ -155,6 +168,18 @@ try {
     `${stillBlockedAfterOverride === 0 ? 'PASS' : 'FAIL'} override lets a blocklist-matched title through`,
   );
   if (stillBlockedAfterOverride > 0) process.exitCode = 1;
+
+  // 4c. The override click must also record a rich false-positive feedback
+  // record (title + domain + the verdict being corrected).
+  const { feedback = [] } = await sw.evaluate(() => chrome.storage.local.get('feedback'));
+  const fpRecord = feedback.find(
+    (r) => r.kind === 'false_positive' && r.title === blocklistTitle && r.domain,
+  );
+  console.log(
+    `${fpRecord ? 'PASS' : 'FAIL'} override recorded a false-positive feedback record` +
+      (fpRecord ? ` (domain ${fpRecord.domain}, was "${fpRecord.modelLabel}")` : ''),
+  );
+  if (!fpRecord) process.exitCode = 1;
 
   // 5. History scan: the fake-YouTube navigations above are real history
   // entries, so seed a few more and run the ingester end-to-end.

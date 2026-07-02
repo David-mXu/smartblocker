@@ -45,6 +45,12 @@
       <button id="scan-history">Scan History</button>
       <button id="latency-log">Latency Log</button>
     </div>
+    <div style="margin: 0 0 8px; padding: 6px 0; border-top: 1px solid #eee">
+      <select id="report-category" style="max-width: 170px"></select>
+      <button id="report-fn" title="Records a correction FlowGuard learns from">
+        Should've been blocked
+      </button>
+    </div>
     <div id="status"></div>
     <pre id="out">First "Test Pair" click downloads the model (~27MB) — watch the background console for progress.</pre>
     <script type="module" src="./popup.ts"></script>

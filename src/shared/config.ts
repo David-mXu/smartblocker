@@ -90,6 +90,11 @@ export const BLOCKED_LABELS = new Set([
 ]);
 export const BLOCK_THRESHOLD = 0.5;
 
+// Opt-in feedback sharing (settings.shareFeedback, default OFF). Empty string
+// disables uploads entirely; set to the deployed feedback-worker/ URL, e.g.
+// 'https://flowguard-feedback.<account>.workers.dev'. See PRIVACY.md.
+export const FEEDBACK_ENDPOINT: string = '';
+
 export const HISTORY_CAP = 200; // raiseable to 1000; ~1-4 min scan at 200
 export const TITLE_CACHE_MAX = 500;
 export const LATENCY_LOG_MAX = 50;

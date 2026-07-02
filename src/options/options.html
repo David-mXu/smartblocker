@@ -265,6 +265,31 @@
     <div id="scan-status"></div>
     <pre id="scan-out"></pre>
 
+    <h2>Feedback</h2>
+    <p style="margin:0 0 8px;color:#555;font-size:13px;">
+      When you correct FlowGuard (the block screen's "this is actually productive", or the
+      popup's "should've been blocked"), the correction is stored on this device and the
+      classifier learns from it. <span id="feedback-count">0</span> correction(s) recorded.
+    </p>
+    <div class="btn-row">
+      <button id="feedback-export">Export as JSON</button>
+      <button id="feedback-clear">Clear all</button>
+    </div>
+    <div class="row-toggle" style="margin-top:12px">
+      <label class="toggle">
+        <input type="checkbox" id="share-toggle" />
+        <span class="slider"></span>
+      </label>
+      <span class="toggle-label" style="font-weight:400">
+        Share my corrections to improve FlowGuard (off by default)
+      </span>
+    </div>
+    <p style="margin:0 0 8px;color:#555;font-size:13px;">
+      Sends only the corrections above — page title, site hostname, the model's verdict and
+      yours. Never full URLs, never your browsing history, nothing identifying. You can also
+      leave this off and attach an export to a GitHub issue instead. See PRIVACY.md.
+    </p>
+
     <div class="actions-row">
       <button id="save-btn">Save</button>
       <span id="save-msg">Saved!</span>

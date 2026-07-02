@@ -88,7 +88,9 @@ export function showBlockScreen(
   });
   btnOverride.addEventListener('click', () => {
     if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
-      chrome.runtime.sendMessage({ type: 'OVERRIDE', title });
+      // label/score ride along so the background can record a rich
+      // false-positive feedback record, not just the title-only override.
+      chrome.runtime.sendMessage({ type: 'OVERRIDE', title, label, score });
     }
     overlay.remove();
   });

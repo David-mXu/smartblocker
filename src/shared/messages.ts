@@ -24,7 +24,11 @@ export type Request =
   // stays decoupled from settings + text assembly (those live SW-side).
   | { type: 'CLASSIFY'; text: string; labels: string[] }
   | { type: 'EMBED'; texts: string[] }
-  | { type: 'OVERRIDE'; title: string; url?: string }
+  // label/score = the verdict being corrected, so the false-positive feedback
+  // record captures what the model actually said at decision time.
+  | { type: 'OVERRIDE'; title: string; url?: string; label?: string; score?: number }
+  // Popup "this page should have been blocked" report (false negative).
+  | { type: 'REPORT_FN'; title: string; url: string; correctedLabel: string }
   | { type: 'CLOSE_TAB' };
 
 export interface SettingsResponse {

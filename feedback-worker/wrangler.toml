@@ -1,0 +1,13 @@
+# FlowGuard feedback ingestion worker (opt-in; see ../PRIVACY.md).
+# Deploy:  npx wrangler d1 create flowguard-feedback   (paste ids below)
+#          npx wrangler d1 execute flowguard-feedback --file=./schema.sql
+#          npx wrangler deploy
+# Then set FEEDBACK_ENDPOINT in ../src/shared/config.ts to the workers.dev URL.
+name = "flowguard-feedback"
+main = "src/index.js"
+compatibility_date = "2026-06-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "flowguard-feedback"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"

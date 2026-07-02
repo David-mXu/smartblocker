@@ -1,4 +1,5 @@
 import { api } from '../shared/api';
+import { getSettings } from '../shared/settings';
 import type {
   HistoryScanState,
   LatencySample,
@@ -11,6 +12,38 @@ const status = document.getElementById('status') as HTMLDivElement;
 function pct(n: number) {
   return `${Math.round(n * 100)}%`;
 }
+
+// ---- "Should've been blocked" (false-negative feedback) ----
+// Reports the ACTIVE tab: records a correction the classifier learns from
+// (and that the user can export/share from the options page).
+const reportCategory = document.getElementById('report-category') as HTMLSelectElement;
+const reportBtn = document.getElementById('report-fn') as HTMLButtonElement;
+
+void getSettings().then(({ labels }) => {
+  for (const label of labels) {
+    const opt = document.createElement('option');
+    opt.value = label;
+    opt.textContent = label;
+    reportCategory.appendChild(opt);
+  }
+});
+
+reportBtn.addEventListener('click', async () => {
+  const [tab] = await api.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.title || !tab.url) {
+    status.textContent = 'No reportable page in the active tab.';
+    return;
+  }
+  const res = await api.runtime.sendMessage({
+    type: 'REPORT_FN' as const,
+    title: tab.title,
+    url: tab.url,
+    correctedLabel: reportCategory.value,
+  });
+  status.textContent = res?.ok
+    ? `Recorded: "${tab.title}" → ${reportCategory.value}`
+    : `Report failed: ${res?.error ?? 'no response'}`;
+});
 
 // ---- Test Pair ----
 document.getElementById('test-pair')!.addEventListener('click', async () => {

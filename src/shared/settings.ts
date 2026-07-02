@@ -28,6 +28,12 @@ export interface Settings {
    * Empty by default — opt-in, unlike the model-driven category blocking.
    */
   blocklist: string[];
+  /**
+   * Opt-in: share anonymized misclassification feedback (see PRIVACY.md) to
+   * improve the model. OFF by default — FlowGuard is telemetry-free unless
+   * the user explicitly enables this on the options page.
+   */
+  shareFeedback: boolean;
 }
 
 export const DEFAULTS: Settings = {
@@ -38,6 +44,7 @@ export const DEFAULTS: Settings = {
   onboarded: false,
   whitelist: [...DEFAULT_WHITELIST],
   blocklist: [],
+  shareFeedback: false,
 };
 
 const STORAGE_KEY = 'settings';
