@@ -2,7 +2,7 @@ import { api } from '../shared/api';
 import { HISTORY_CAP } from '../shared/config';
 import type { HistoryScanState } from '../shared/messages';
 import { getSettings } from '../shared/settings';
-import { cleanTitle, isClassifiableUrl, isWhitelisted } from '../shared/titles';
+import { cleanTitle, isClassifiableUrl, isWhitelisted, matchedBlocklistEntry } from '../shared/titles';
 import { classify } from './classifier';
 
 const CHUNK_SIZE = 10;
@@ -31,7 +31,7 @@ export async function scanHistory(): Promise<void> {
     // FlowGuard now watches all sites, so scan all history (empty query) and
     // filter to classifiable, non-whitelisted pages — same gates as the live
     // blocker. Most-recent first; capped at HISTORY_CAP.
-    const { whitelist } = await getSettings();
+    const { whitelist, blocklist } = await getSettings();
     const items = await api.history.search({ text: '', startTime: 0, maxResults: 1000 });
 
     const seen = new Set<string>();
@@ -52,7 +52,12 @@ export async function scanHistory(): Promise<void> {
     for (let i = 0; i < targets.length; i += CHUNK_SIZE) {
       const chunk = targets.slice(i, i + CHUNK_SIZE);
       for (const { title, url } of chunk) {
-        const r = await classify({ title });
+        // Same short-circuit as the live blocker: a blocklist match is counted
+        // without spending an inference on it.
+        const blocklistHit = matchedBlocklistEntry(url, title, blocklist);
+        const r = blocklistHit
+          ? { label: `blocked rule: "${blocklistHit}"`, score: 1 }
+          : await classify({ title });
         state.items.push({ title, url, label: r.label, score: r.score });
         state.categoryCounts[r.label] = (state.categoryCounts[r.label] ?? 0) + 1;
         state.done++;

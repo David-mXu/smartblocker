@@ -21,6 +21,7 @@ const labelList = document.getElementById('label-list') as HTMLUListElement;
 const thresholdInput = document.getElementById('threshold') as HTMLInputElement;
 const thresholdVal = document.getElementById('threshold-val') as HTMLSpanElement;
 const whitelistInput = document.getElementById('whitelist') as HTMLTextAreaElement;
+const blocklistInput = document.getElementById('blocklist') as HTMLTextAreaElement;
 const scanBtn = document.getElementById('scan-btn') as HTMLButtonElement;
 const blockTopBtn = document.getElementById('block-top-btn') as HTMLButtonElement;
 const scanStatus = document.getElementById('scan-status') as HTMLDivElement;
@@ -60,6 +61,22 @@ function parseWhitelist(raw: string): string[] {
     if (!host || seen.has(host)) continue;
     seen.add(host);
     out.push(host);
+  }
+  return out;
+}
+
+/** Parse the blocklist textarea into trimmed, deduped free-text entries.
+ *  Unlike parseWhitelist, entries are arbitrary substrings (not just
+ *  hostnames), so no scheme/path/www stripping — just trim + dedupe. */
+function parseBlocklist(raw: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const line of raw.split('\n')) {
+    const entry = line.trim();
+    const key = entry.toLowerCase();
+    if (!entry || seen.has(key)) continue;
+    seen.add(key);
+    out.push(entry);
   }
   return out;
 }
@@ -114,6 +131,7 @@ async function loadSettings(): Promise<void> {
   thresholdVal.textContent = pct(s.blockThreshold);
 
   whitelistInput.value = s.whitelist.join('\n');
+  blocklistInput.value = s.blocklist.join('\n');
 
   buildLabelRows();
 
@@ -139,12 +157,15 @@ thresholdInput.addEventListener('input', () => {
 saveBtn.addEventListener('click', async () => {
   const whitelist = parseWhitelist(whitelistInput.value);
   whitelistInput.value = whitelist.join('\n'); // reflect the normalized list back
+  const blocklist = parseBlocklist(blocklistInput.value);
+  blocklistInput.value = blocklist.join('\n'); // reflect the normalized list back
   const patch: Parameters<typeof setSettings>[0] = {
     enabled: enabledToggle.checked,
     labels: currentLabels,
     blockedLabels: [...checkedBlocked],
     blockThreshold: parseFloat(thresholdInput.value),
     whitelist,
+    blocklist,
   };
   if (!isOnboarded) {
     patch.onboarded = true;

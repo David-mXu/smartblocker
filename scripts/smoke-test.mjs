@@ -13,6 +13,11 @@ const LABELS = [
   'science and education',
   'music',
   'sports',
+  'online shopping',
+  'social media and networking',
+  'gambling and betting',
+  'movies and tv shows',
+  'adult content',
 ];
 const HYPOTHESIS_TEMPLATE = 'This video or post is about {}.';
 
@@ -31,6 +36,12 @@ const CASES = [
   ['Why TypeScript generics confuse everyone', ['programming and software development']],
   ['NBA Finals Game 7 highlights', ['sports']],
   ['Trump announces new tariff policy', ['news and politics']],
+  // New Phase 2.6 categories — spot-check they land sensibly.
+  ['Nike Air Max 90 - Buy Online', ['online shopping']],
+  ['Black Friday deals: up to 70% off electronics', ['online shopping']],
+  ['Home / X', ['social media and networking']],
+  ['Best online casino bonuses 2026', ['gambling and betting']],
+  ['Watch Dune: Part Two (2024) full movie', ['movies and tv shows']],
 ];
 
 // ─── Richer-signal regression cases (mirrors buildClassifierText output) ─────

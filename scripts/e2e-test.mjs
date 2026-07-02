@@ -112,6 +112,50 @@ try {
   console.log(`${freshBlocked ? 'PASS' : 'FAIL'} uncached gaming title gets block overlay`);
   if (!freshBlocked) process.exitCode = 1;
 
+  // 4b. Deterministic blocklist: a URL/keyword match should block instantly,
+  // skipping the ML classifier entirely (inferMs 0), and the override button
+  // must still work on a blocklist-triggered block (override always wins).
+  const BLOCKLIST_KW = 'flowguard-blocklist-test';
+  await sw.evaluate(async (kw) => {
+    const { settings = {} } = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({ settings: { ...settings, blocklist: [kw] } });
+  }, BLOCKLIST_KW);
+
+  const blocklistTitle = 'Blocklist Test Page';
+  const blocklistUrl =
+    'https://www.youtube.com/watch?v=bl&kw=' +
+    BLOCKLIST_KW +
+    '&t=' +
+    encodeURIComponent(blocklistTitle);
+  await tab.goto(blocklistUrl);
+  let blocklistBlocked = false;
+  try {
+    await tab.waitForSelector('#flowguard-overlay', { timeout: 5_000 }); // near-instant: no inference
+    blocklistBlocked = true;
+  } catch {}
+  console.log(`${blocklistBlocked ? 'PASS' : 'FAIL'} blocklist keyword match blocks instantly`);
+  if (!blocklistBlocked) process.exitCode = 1;
+
+  const { latencySamples: blocklistSamples = [] } = await sw.evaluate(() =>
+    chrome.storage.local.get('latencySamples'),
+  );
+  const blocklistSample = [...blocklistSamples].reverse().find((s) => s.title === blocklistTitle);
+  const skippedClassifier = blocklistSample?.inferMs === 0 && blocklistSample?.blocked === true;
+  console.log(
+    `${skippedClassifier ? 'PASS' : 'FAIL'} blocklist match skipped the ML classifier (inferMs 0)`,
+  );
+  if (!skippedClassifier) process.exitCode = 1;
+
+  await tab.locator('#flowguard-overlay button', { hasText: 'actually productive' }).click();
+  await tab.goto('about:blank');
+  await tab.goto(blocklistUrl);
+  await tab.waitForTimeout(3_000);
+  const stillBlockedAfterOverride = await tab.locator('#flowguard-overlay').count();
+  console.log(
+    `${stillBlockedAfterOverride === 0 ? 'PASS' : 'FAIL'} override lets a blocklist-matched title through`,
+  );
+  if (stillBlockedAfterOverride > 0) process.exitCode = 1;
+
   // 5. History scan: the fake-YouTube navigations above are real history
   // entries, so seed a few more and run the ingester end-to-end.
   for (const t of [

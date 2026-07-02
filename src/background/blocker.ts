@@ -2,11 +2,15 @@ import { api } from '../shared/api';
 import { LATENCY_LOG_MAX } from '../shared/config';
 import { getSettings } from '../shared/settings';
 import { isOverridden } from '../shared/overrides';
-import type { ClassifyInput, LatencySample } from '../shared/messages';
-import { cleanTitle, isClassifiableUrl, isWhitelisted } from '../shared/titles';
+import type { ClassifyOutcome, LatencySample } from '../shared/messages';
+import { cleanTitle, isClassifiableUrl, isWhitelisted, matchedBlocklistEntry } from '../shared/titles';
 import { extractMeta } from '../content/extract-meta';
 import { classify } from './classifier';
 import { showBlockScreen } from './blockscreen';
+
+/** The fields onTitle actually needs, shared by the ML path and the
+ *  deterministic blocklist short-circuit (which skips classify() entirely). */
+type BlockDecisionInput = Pick<ClassifyOutcome, 'label' | 'score' | 'cached' | 'loadMs' | 'inferMs'>;
 
 // FlowGuard watches EVERY http(s) site (whitelist exemption applied later, in
 // onTitle). Many sites are SPAs: most "navigations" never reload the page, and
@@ -70,13 +74,24 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
   const pageDelayMs = tTitle - (armedAt.get(tabId) ?? tTitle);
   armedAt.delete(tabId);
 
-  const { channel, context } = await gatherMeta(tabId);
-  const input: ClassifyInput = { title, channel, context };
-  const result = await classify(input);
+  // Deterministic blocklist short-circuit: skip the ML classifier entirely
+  // when the URL/title matches a user rule (mirrors the isWhitelisted gate
+  // above, just for the opposite outcome).
+  const blocklistHit = matchedBlocklistEntry(url, title, settings.blocklist);
 
-  let blocked =
-    settings.blockedLabels.includes(result.label) && result.score >= settings.blockThreshold;
-  // A prior "this is actually productive" correction wins over the model.
+  let result: BlockDecisionInput;
+  let blocked: boolean;
+  if (blocklistHit) {
+    result = { label: `blocked rule: "${blocklistHit}"`, score: 1, cached: false, loadMs: 0, inferMs: 0 };
+    blocked = true;
+  } else {
+    const { channel, context } = await gatherMeta(tabId);
+    result = await classify({ title, channel, context });
+    blocked =
+      settings.blockedLabels.includes(result.label) && result.score >= settings.blockThreshold;
+  }
+  // A prior "this is actually productive" correction wins over the model
+  // (and over a blocklist match, so overrides always have the final say).
   if (blocked && (await isOverridden(title))) blocked = false;
 
   let injectMs = 0;
