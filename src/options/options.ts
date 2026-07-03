@@ -1,7 +1,11 @@
 import { api } from '../shared/api';
 import { clearFeedback, getFeedback } from '../shared/feedback';
+import { LABELS } from '../shared/config';
 import type { HistoryScanState } from '../shared/messages';
 import { getSettings, setSettings } from '../shared/settings';
+
+/** The set of canonical built-in labels, used to tell built-in from custom. */
+const BUILTIN_LABELS = new Set(LABELS);
 
 // ---------------------------------------------------------------------------
 // Labels that are considered "productive" — not candidates for auto-blocking.
@@ -33,6 +37,9 @@ const feedbackCount = document.getElementById('feedback-count') as HTMLSpanEleme
 const feedbackExportBtn = document.getElementById('feedback-export') as HTMLButtonElement;
 const feedbackClearBtn = document.getElementById('feedback-clear') as HTMLButtonElement;
 const shareToggle = document.getElementById('share-toggle') as HTMLInputElement;
+const modelProgress = document.getElementById('model-progress') as HTMLSpanElement;
+const customCategoryInput = document.getElementById('custom-category-input') as HTMLInputElement;
+const addCategoryBtn = document.getElementById('add-category-btn') as HTMLButtonElement;
 
 // ---------------------------------------------------------------------------
 // State
@@ -40,6 +47,8 @@ const shareToggle = document.getElementById('share-toggle') as HTMLInputElement;
 let currentLabels: string[] = [];
 /** Tracks which categories the user has checked in the UI (before saving). */
 const checkedBlocked = new Set<string>();
+/** Built-in labels the user has explicitly deleted (persisted to prevent re-add on update). */
+const deletedBuiltins = new Set<string>();
 let isOnboarded = false;
 /** Last scan result used by "Block my top distractions". */
 let lastScanCounts: Record<string, number> = {};
@@ -112,10 +121,47 @@ function buildLabelRows(): void {
       checkbox.dispatchEvent(new Event('change'));
     });
 
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'delete-label-btn';
+    deleteBtn.textContent = '×';
+    deleteBtn.title = 'Remove category';
+    deleteBtn.addEventListener('click', () => removeCategory(label));
+
     li.appendChild(checkbox);
     li.appendChild(span);
+    li.appendChild(deleteBtn);
     labelList.appendChild(li);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Add / remove categories
+// ---------------------------------------------------------------------------
+function addCategory(raw: string): void {
+  const label = raw.trim().toLowerCase();
+  if (!label) return;
+  if (currentLabels.includes(label)) {
+    customCategoryInput.value = '';
+    customCategoryInput.placeholder = 'Category already exists';
+    setTimeout(() => { customCategoryInput.placeholder = 'e.g. cooking and recipes'; }, 2000);
+    return;
+  }
+  currentLabels.push(label);
+  checkedBlocked.add(label); // auto-block: why add it if not to block it?
+  // If re-adding a previously deleted built-in, un-track the deletion.
+  deletedBuiltins.delete(label);
+  customCategoryInput.value = '';
+  buildLabelRows();
+}
+
+function removeCategory(label: string): void {
+  currentLabels = currentLabels.filter((l) => l !== label);
+  checkedBlocked.delete(label);
+  // Track deletion of built-in labels so migrateLabels() won't re-add them.
+  if (BUILTIN_LABELS.has(label)) {
+    deletedBuiltins.add(label);
+  }
+  buildLabelRows();
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +175,9 @@ async function loadSettings(): Promise<void> {
 
   checkedBlocked.clear();
   for (const l of s.blockedLabels) checkedBlocked.add(l);
+
+  deletedBuiltins.clear();
+  for (const l of s.deletedBuiltinLabels) deletedBuiltins.add(l);
 
   enabledToggle.checked = s.enabled;
 
@@ -150,6 +199,19 @@ async function loadSettings(): Promise<void> {
     saveBtn.textContent = 'Save';
   }
 }
+
+// ---------------------------------------------------------------------------
+// Custom category input
+// ---------------------------------------------------------------------------
+addCategoryBtn.addEventListener('click', () => {
+  addCategory(customCategoryInput.value);
+});
+customCategoryInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    addCategory(customCategoryInput.value);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Threshold slider live update
@@ -174,6 +236,7 @@ saveBtn.addEventListener('click', async () => {
     whitelist,
     blocklist,
     shareFeedback: shareToggle.checked,
+    deletedBuiltinLabels: [...deletedBuiltins],
   };
   if (!isOnboarded) {
     patch.onboarded = true;
@@ -203,9 +266,18 @@ function renderScan(s: HistoryScanState | undefined): void {
     .map(([label, n]) => `  ${String(n).padStart(4)}  ${label}`)
     .join('\n');
 
+  const zeroHint =
+    s.status === 'done' && s.total === 0
+      ? s.historyCount === 0
+        ? '\n(No browsing history found.)'
+        : `\n(Found ${s.historyCount} history entries, but all were on your whitelist, ` +
+          `already-seen titles, or too generic to classify.)`
+      : '';
+
   scanOut.textContent =
     `Scan ${s.status}: ${s.done}/${s.total} titles in ${(s.elapsedMs / 1000).toFixed(1)}s\n` +
     (s.error ? `Error: ${s.error}\n` : '') +
+    zeroHint +
     `\nCategories:\n${counts || '  (none yet)'}`;
   scanOut.style.display = 'block';
 
@@ -275,6 +347,25 @@ feedbackExportBtn.addEventListener('click', async () => {
 feedbackClearBtn.addEventListener('click', async () => {
   await clearFeedback();
   await refreshFeedbackCount();
+});
+
+// ---------------------------------------------------------------------------
+// Model Progress Listener
+// ---------------------------------------------------------------------------
+api.runtime.onMessage.addListener((message) => {
+  if (message.type === 'MODEL_PROGRESS') {
+    modelProgress.style.display = 'inline-block';
+    if (message.status === 'init' || message.status === 'ready') {
+      modelProgress.textContent = `Model ${message.status}...`;
+    } else if (message.status === 'progress' && message.progress != null) {
+      modelProgress.textContent = `Downloading AI model: ${message.progress.toFixed(0)}%`;
+    } else if (message.status === 'done') {
+      modelProgress.textContent = 'AI model ready';
+      setTimeout(() => {
+        modelProgress.style.display = 'none';
+      }, 5000);
+    }
+  }
 });
 
 // ---------------------------------------------------------------------------

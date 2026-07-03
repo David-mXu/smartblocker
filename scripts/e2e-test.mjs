@@ -99,6 +99,11 @@ try {
   console.log(`${cached ? 'PASS' : 'FAIL'} model cache present:`, cacheNames);
   if (!cached) process.exitCode = 1;
 
+  // Clear overrides from previous runs so they don't break the blocklist test
+  await sw.evaluate(async () => {
+    await chrome.storage.local.remove('overrides');
+  });
+
   // 4. Live blocker: serve fake YouTube watch pages via network interception
   // so webNavigation + title events fire for a real youtube.com URL.
   const fakeWatch = (title) =>
@@ -154,6 +159,8 @@ try {
     const { settings = {} } = await chrome.storage.local.get('settings');
     await chrome.storage.local.set({ settings: { ...settings, blocklist: [kw] } });
   }, BLOCKLIST_KW);
+
+  await tab.waitForTimeout(500); // give onChanged time to fire
 
   const blocklistTitle = 'Blocklist Test Page';
   const blocklistUrl =

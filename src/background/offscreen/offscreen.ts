@@ -52,17 +52,25 @@ async function probeBrowserCache(): Promise<void> {
   }
 }
 
+const logProgress = (p: { status: string; file?: string; progress?: number }) => {
+  // Broadcast to the options page (and anywhere else listening).
+  try {
+    api.runtime.sendMessage({ type: 'MODEL_PROGRESS', ...p });
+  } catch {
+    // ignore — no options page open
+  }
+  if (p.status === 'progress' && p.progress != null) {
+    console.log(`[FlowGuard/offscreen] downloading ${p.file}: ${p.progress.toFixed(0)}%`);
+  }
+};
+
 async function createPipeline(): Promise<ZeroShotPipeline> {
   await probeBrowserCache();
 
   const pipe = await pipeline('zero-shot-classification', MODEL_ID, {
     dtype: 'q8',
     device: 'wasm',
-    progress_callback: (p: { status: string; file?: string; progress?: number }) => {
-      if (p.status === 'progress' && p.progress != null) {
-        console.log(`[FlowGuard/offscreen] downloading ${p.file}: ${p.progress.toFixed(0)}%`);
-      }
-    },
+    progress_callback: logProgress,
   });
   return pipe as unknown as ZeroShotPipeline;
 }
@@ -89,11 +97,7 @@ async function createEmbedPipeline(): Promise<FeatureExtractionPipeline> {
   const pipe = await pipeline('feature-extraction', EMBED_MODEL_ID, {
     dtype: 'q8',
     device: 'wasm',
-    progress_callback: (p: { status: string; file?: string; progress?: number }) => {
-      if (p.status === 'progress' && p.progress != null) {
-        console.log(`[FlowGuard/offscreen] downloading ${p.file}: ${p.progress.toFixed(0)}%`);
-      }
-    },
+    progress_callback: logProgress,
   });
   return pipe as unknown as FeatureExtractionPipeline;
 }

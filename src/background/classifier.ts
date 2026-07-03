@@ -46,6 +46,12 @@ async function probeBrowserCache(): Promise<void> {
 }
 
 const logProgress = (p: { status: string; file?: string; progress?: number }) => {
+  // Broadcast to the options page (and anywhere else listening).
+  try {
+    api.runtime.sendMessage({ type: 'MODEL_PROGRESS', ...p });
+  } catch {
+    // ignore — no options page open
+  }
   if (p.status === 'progress' && p.progress != null) {
     console.log(`[FlowGuard] downloading ${p.file}: ${p.progress.toFixed(0)}%`);
   }
