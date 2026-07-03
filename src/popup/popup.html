@@ -40,6 +40,26 @@
   </head>
   <body>
     <h1>FlowGuard POC</h1>
+    <div
+      id="lock-line"
+      style="
+        display: none;
+        padding: 6px 8px;
+        margin-bottom: 8px;
+        border-radius: 4px;
+        background: #fef2f2;
+        color: #991b1b;
+        font-weight: 600;
+      "
+    ></div>
+    <div style="margin: 0 0 8px">
+      <span style="font-weight: 600" title="Force blocking ON for a set time — uncancellable">
+        Frozen Turkey:
+      </span>
+      <button class="frozen-btn" data-mins="60">1h</button>
+      <button class="frozen-btn" data-mins="240">4h</button>
+      <button class="frozen-btn" data-mins="480">8h</button>
+    </div>
     <div>
       <button id="test-pair">Test Pair</button>
       <button id="scan-history">Scan History</button>

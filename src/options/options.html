@@ -245,6 +245,86 @@
         align-items: center;
         gap: 10px;
       }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      textarea:disabled,
+      input:disabled {
+        opacity: 0.6;
+      }
+      /* Lock section */
+      #lock-status {
+        display: none;
+        background: #fef2f2;
+        border: 1px solid #fecaca;
+        border-radius: 6px;
+        padding: 10px 14px;
+        margin-bottom: 10px;
+        color: #991b1b;
+        font-weight: 600;
+        font-size: 13px;
+      }
+      #lock-duration {
+        width: 70px;
+        padding: 6px 8px;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        font: 13px system-ui, sans-serif;
+      }
+      #lock-unit,
+      #lock-password {
+        padding: 6px 8px;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        font: 13px system-ui, sans-serif;
+      }
+      #lock-password-msg {
+        font-size: 13px;
+        color: #991b1b;
+        align-self: center;
+      }
+      .schedule-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        padding: 8px 10px;
+        border: 1px solid #e0e0e0;
+        border-radius: 6px;
+        margin-bottom: 8px;
+        font-size: 13px;
+      }
+      .schedule-row .day-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        cursor: pointer;
+      }
+      .schedule-row input[type='time'] {
+        padding: 3px 6px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font: 12px system-ui, sans-serif;
+      }
+      .schedule-remove {
+        margin-left: auto;
+        background: none;
+        border: none;
+        color: #999;
+        font-size: 16px;
+        padding: 0 4px;
+        line-height: 1;
+      }
+      .schedule-remove:hover {
+        color: #e53e3e;
+        background: none;
+      }
+      #schedule-msg {
+        font-size: 13px;
+        color: #991b1b;
+        align-self: center;
+      }
     </style>
   </head>
   <body>
@@ -297,6 +377,37 @@
       blocks instantly with no AI classification involved.
     </p>
     <textarea id="blocklist" spellcheck="false" placeholder="amazon.com&#10;/cart&#10;black friday"></textarea>
+
+    <h2>Lock</h2>
+    <p style="margin:0 0 8px;color:#555;font-size:13px;">
+      Cold-Turkey-style commitment: while locked, no setting can be changed and the block
+      screen's bypass buttons disappear. Locks can be extended but never shortened.
+    </p>
+    <div id="lock-status"></div>
+    <div class="btn-row">
+      <input type="number" id="lock-duration" min="1" value="1" />
+      <select id="lock-unit">
+        <option value="h">hours</option>
+        <option value="d">days</option>
+      </select>
+      <button id="lock-timer-btn">Lock settings</button>
+    </div>
+    <div class="btn-row" style="margin-top:10px">
+      <input type="password" id="lock-password" placeholder="Password (min 4 chars)" />
+      <button id="lock-password-btn">Arm password lock</button>
+      <span id="lock-password-msg"></span>
+    </div>
+    <h2 style="font-size:14px;border-bottom:none;margin-bottom:4px">Scheduled blocks</h2>
+    <p style="margin:0 0 8px;color:#555;font-size:13px;">
+      Recurring locked windows — during them blocking is forced on (even if FlowGuard is
+      toggled off) and settings are frozen. End time earlier than start = overnight window.
+    </p>
+    <div id="schedule-list"></div>
+    <div class="btn-row">
+      <button id="schedule-add">Add schedule</button>
+      <button id="schedule-save">Save schedules</button>
+      <span id="schedule-msg"></span>
+    </div>
 
     <h2>History scan</h2>
     <p style="margin:0 0 8px;color:#555;font-size:13px;">

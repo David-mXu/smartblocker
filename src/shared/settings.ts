@@ -8,6 +8,7 @@ import {
   DEFAULT_WHITELIST,
   LABELS,
 } from './config';
+import { getLockStatus } from './lock';
 
 export interface Settings {
   /** Candidate categories the zero-shot model scores against. */
@@ -101,8 +102,20 @@ export async function getSettings(): Promise<Settings> {
   return cache;
 }
 
-/** Merge a partial update into the stored settings and return the result. */
+/** Merge a partial update into the stored settings and return the result.
+ *  THROWS while a lock is active (see lock.ts) — the single choke point every
+ *  settings writer goes through, in whichever context it runs. (A raw
+ *  storage.local.set from devtools bypasses it: accepted soft-lock.) */
 export async function setSettings(patch: Partial<Settings>): Promise<Settings> {
+  const lock = await getLockStatus();
+  if (lock.settingsLocked) {
+    throw new Error(
+      'FlowGuard settings are locked' +
+        (lock.until
+          ? ` until ${new Date(lock.until).toLocaleString()}`
+          : ' (password required)'),
+    );
+  }
   const next = { ...(await getSettings()), ...patch };
   cache = next;
   await api.storage.local.set({ [STORAGE_KEY]: next });

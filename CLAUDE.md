@@ -8,12 +8,15 @@ subdomain match, seeded with a safe default list in `config.ts`
 **opt-in deterministic blocklist** (`config.ts`/`settings.ts` `blocklist`,
 empty by default): substring matches against the URL + title skip the ML
 classifier entirely and block instantly. **The full multi-phase roadmap lives
-in `ROADMAP.md`.** Implemented through Phase 2.8: user-configurable categories
+in `ROADMAP.md`.** Implemented through Phase 2.9: user-configurable categories
 + onboarding, richer page signals, the **embedding-prototype classifier**
 (2026-07 bake-off winner — see Model facts), a block screen with a "this is
-actually productive" override, and a **feedback loop** (corrections are stored
+actually productive" override, a **feedback loop** (corrections are stored
 locally, teach the classifier via centroid updates, and can be exported or —
-opt-in, off by default — shared to a Cloudflare Worker; see `PRIVACY.md`).
+opt-in, off by default — shared to a Cloudflare Worker; see `PRIVACY.md`),
+and the **Cold-Turkey-style lock system** (timer/password locks, scheduled
+blocks, popup "Frozen Turkey" sessions — soft locks; see `lock.ts` and
+ROADMAP Phase 2.9).
 
 Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
 `gh` CLI is not installed).
@@ -31,6 +34,9 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   temperature), `--verbose`.
 - `node scripts/smoke-test.mjs [modelId]` — quick NLI-only sanity check
   (defaults to the legacy NLI model; the shipped backend is `embed`).
+- `node scripts/lock-math-test.mjs` — pure-math unit tests for the lock
+  system's schedule/expiry derivations (`src/shared/lock-math.ts`, imported
+  directly via Node type stripping — keep that file erasable-syntax-only).
 - `node scripts/e2e-test.mjs` — full e2e in a real Chromium (Playwright):
   boots the SW, runs Test Pair, fakes YouTube pages via network interception
   to verify block/allow + latency + feedback capture, seeds and runs the
@@ -69,7 +75,12 @@ Commit and push when appropriate.
     `blockscreen.ts`.
   - `blockscreen.ts` — injected full block screen; the override button sends
     `OVERRIDE` with title + label + score (→ override store + a rich
-    false-positive feedback record).
+    false-positive feedback record). Takes a `locked` flag: when a lock is
+    active the override/dismiss buttons are not rendered (only "close tab").
+  - `lock-enforcer.ts` — lock-system wiring: one-shot `lock-boundary` alarm at
+    the next lock start/end (promptness-only — correctness always re-derives
+    from timestamps) + a `lockState` storage.onChanged listener that wakes the
+    SW and `sweepOpenTabs()` when forced blocking starts mid-session.
   - `feedback-uploader.ts` — daily `alarms`-driven opt-in uploader: only when
     `settings.shareFeedback` (default OFF) AND `config.ts FEEDBACK_ENDPOINT`
     (empty = disabled) are set; batches unsent records + random resettable
@@ -104,7 +115,10 @@ Commit and push when appropriate.
   centroids = on-device learning), `overrides.ts` (title-only allow store),
   `build-input.ts` (`buildClassifierText` + `inputCacheKey(input, modelKey)`),
   `api.ts` (cross-browser shim + `IS_FIREFOX`), `messages.ts` (message
-  contract), `titles.ts` (URL gates + `cleanTitle`).
+  contract), `titles.ts` (URL gates + `cleanTitle`), `lock-math.ts` (pure
+  lock/schedule time math — no browser APIs, Node-testable), `lock.ts` (the
+  `lockState` store + the ONLY legal lock transitions: timer/frozen extend-only,
+  password arm/unlock, schedule editing refused while locked).
 - `feedback-worker/` — Cloudflare Worker (wrangler + D1) receiving opt-in
   feedback batches. NOT part of the extension build; deploy is manual (see
   wrangler.toml header; set `FEEDBACK_ENDPOINT` after deploying).
@@ -217,3 +231,9 @@ Commit and push when appropriate.
   just never taken there) — a known size trade-off, not a bug.
 - SW idle cold-start on Firefox remains (no offscreen API) — keepalive there
   is future work.
+- **`setSettings` THROWS while a lock is active** (`lock.ts` `settingsLocked`)
+  — any new settings-writing UI must try/catch it. Lock transitions go through
+  `lock.ts` ONLY (its own `lockState` storage key, monotonic: extend always,
+  shorten never). Import direction is `settings.ts` → `lock.ts`, never the
+  reverse (cycle). The lock is SOFT by design: devtools/uninstall/clock
+  changes bypass it; the Phase 4 desktop companion is the hard enforcer.

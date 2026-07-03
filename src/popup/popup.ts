@@ -1,5 +1,6 @@
 import { api } from '../shared/api';
 import { getSettings } from '../shared/settings';
+import { getLockStatus, startFrozenTurkey } from '../shared/lock';
 import type {
   HistoryScanState,
   LatencySample,
@@ -11,6 +12,64 @@ const status = document.getElementById('status') as HTMLDivElement;
 
 function pct(n: number) {
   return `${Math.round(n * 100)}%`;
+}
+
+// ---- Lock status + Frozen Turkey quick-start ----
+// No message to the background needed: startFrozenTurkey writes lockState,
+// and the lock enforcer's storage.onChanged listener wakes the SW to sweep
+// already-open tabs.
+const lockLine = document.getElementById('lock-line') as HTMLDivElement;
+
+const LOCK_REASON_NAMES: Record<string, string> = {
+  timer: 'timer lock',
+  password: 'password lock',
+  frozen: 'Frozen Turkey',
+  schedule: 'scheduled block',
+};
+
+function formatRemaining(ms: number): string {
+  const mins = Math.max(1, Math.round(ms / 60_000));
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return h > 0 ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`;
+}
+
+async function refreshLockLine(): Promise<void> {
+  const s = await getLockStatus();
+  if (!s.settingsLocked) {
+    lockLine.style.display = 'none';
+    return;
+  }
+  const reasons = s.reasons.map((r) => LOCK_REASON_NAMES[r]).join(', ');
+  lockLine.textContent =
+    `\u{1F512} Locked: ${reasons}` +
+    (s.until ? ` — ${formatRemaining(s.until - Date.now())} left` : ' (password)');
+  lockLine.style.display = 'block';
+}
+
+void refreshLockLine();
+setInterval(() => void refreshLockLine(), 1000);
+
+for (const btn of document.querySelectorAll<HTMLButtonElement>('.frozen-btn')) {
+  const mins = Number(btn.dataset['mins']);
+  const label = btn.textContent;
+  let confirming = false;
+  btn.addEventListener('click', async () => {
+    if (!confirming) {
+      confirming = true;
+      btn.textContent = 'Sure? Uncancellable';
+      setTimeout(() => {
+        confirming = false;
+        btn.textContent = label;
+      }, 3000);
+      return;
+    }
+    confirming = false;
+    btn.textContent = label;
+    await startFrozenTurkey(mins * 60_000);
+    await refreshLockLine();
+    status.textContent = `Frozen Turkey on — distractions blocked for ${label}.`;
+  });
 }
 
 // ---- "Should've been blocked" (false-negative feedback) ----

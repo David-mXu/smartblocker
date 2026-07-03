@@ -7,6 +7,7 @@ export function showBlockScreen(
   score: number,
   title: string,
   ms: number,
+  locked: boolean,
 ): void {
   // Idempotent: remove any prior overlay first.
   document.getElementById('flowguard-overlay')?.remove();
@@ -73,6 +74,13 @@ export function showBlockScreen(
     'display:flex;flex-direction:column;gap:10px;width:100%;max-width:360px;' +
     'margin-top:8px';
 
+  // Locked mode (timer/password/frozen/schedule lock active): no bypass —
+  // the override and dismiss buttons are never attached, only "close tab".
+  const lockNote = document.createElement('div');
+  lockNote.style.cssText =
+    'font-size:13px;color:rgba(255,255,255,.45);letter-spacing:.02em';
+  lockNote.textContent = '\u{1F512} FlowGuard is locked — bypass is disabled';
+
   // PRIMARY: send override correction, then dismiss.
   const btnOverride = document.createElement('button');
   btnOverride.style.cssText =
@@ -137,7 +145,11 @@ export function showBlockScreen(
     overlay.remove();
   });
 
-  btnRow.append(btnOverride, btnStay, btnDismiss);
+  if (locked) {
+    btnRow.append(lockNote, btnStay);
+  } else {
+    btnRow.append(btnOverride, btnStay, btnDismiss);
+  }
   card.append(badge, headline, pill, pageTitle, meta, btnRow);
   overlay.appendChild(card);
   document.documentElement.appendChild(overlay);

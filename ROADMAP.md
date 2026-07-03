@@ -184,6 +184,59 @@ isolation (Chrome exempts extensions) if threading is ever revisited.
 
 ---
 
+## Phase 2.9 — Lock system (Cold-Turkey-style commitment) ✅ (2026-07-03, v0.5.0)
+
+The first half of the Phase 4 vision, extension-side: once you lock FlowGuard,
+willpower failures can't unlock it. Four mechanisms, all composable
+(`src/shared/lock-math.ts` for the pure time math, `src/shared/lock.ts` for
+storage + the only legal transitions, `src/background/lock-enforcer.ts` for
+alarm/sweep wiring):
+
+- **Timer lock** — "lock settings for N hours/days" from the options page.
+- **Password lock** — indefinite until the password is re-entered (salted
+  SHA-256 via `crypto.subtle`). Cold Turkey's "type this random string"
+  friction gate was considered and deferred: paste can't be reliably blocked
+  in a page we own, so it adds UI without adding friction.
+- **Scheduled blocks** — recurring windows (day-of-week + start/end, overnight
+  supported) during which blocking is forced on and settings are frozen.
+- **Frozen Turkey** — one-click "block for the next 1/4/8 hours" in the popup,
+  uncancellable once started (no code path shortens it).
+
+Two-tier enforcement model:
+
+- `settingsLocked` (ANY source active): `setSettings` THROWS (single choke
+  point — options controls are also disabled with a countdown banner), the
+  block screen loses its override/dismiss buttons, and `OVERRIDE` messages are
+  dropped in the background (a locked block screen has no override button, so
+  any arriving is stale/forged — the false-positive feedback record is dropped
+  too, since it would loosen the classifier via the neutral centroid).
+- `forceBlocking` (Frozen Turkey or in-window schedule): blocking runs even if
+  the master toggle is off, and stored overrides are ignored. A plain
+  timer/password lock keeps honoring stored overrides (they're accuracy
+  corrections, not bypasses). The whitelist always applies — work sites stay
+  usable. When forced blocking starts mid-session, the enforcer sweeps
+  already-open tabs (`sweepOpenTabs`).
+
+Design facts that matter later:
+
+- Lock state lives in its OWN storage key (`lockState`), never inside
+  `Settings` — the settings guard can't be patched away through the door it
+  guards. Transitions are monotonic: extend always, shorten never (password
+  unlock clears only the password source; a running Frozen Turkey survives it).
+- Correctness never depends on alarms: every check re-derives activeness from
+  `Date.now()` vs stored timestamps (MV3 SWs sleep). The one-shot
+  `lock-boundary` alarm is promptness-only (tab sweep at window start).
+- **This is a soft lock**: devtools raw-storage writes, uninstalling the
+  extension, and OS clock changes bypass it. Accepted and documented — the
+  Phase 4 desktop companion reads/enforces this same `lockState` key over
+  Native Messaging and becomes the hard enforcer (policy force-install so the
+  extension can't be removed while locked).
+- Tests: `scripts/lock-math-test.mjs` (28 pure-math cases incl. overnight +
+  week-wraparound) + e2e section 6 (frozen turkey vs master-off, bypass
+  buttons gone, override ignored, options frozen).
+
+---
+
 ## Phase 3 — Public beta
 
 - ~~Open problem carried from Phase 2: model quality.~~ **Resolved in
@@ -203,10 +256,13 @@ isolation (Chrome exempts extensions) if threading is ever revisited.
 
 ## Phase 4 — Paid Pro (tamper-proof companion)
 
-- Free extension + paid "Pro" hardcore mode.
-- Tauri/Rust desktop companion with a Native Messaging bridge to the extension.
-- Managed-policy tamper-proofing (can't just disable the extension when willpower
-  fails).
+- Free extension + paid "Pro" hardcore mode. The lock UX already exists
+  (Phase 2.9); this phase makes it tamper-proof.
+- Tauri/Rust desktop companion (Windows first) with a Native Messaging bridge:
+  reads the extension's `lockState` key, holds a mirror of it outside the
+  browser, heartbeats the extension and reacts if it goes silent.
+- Managed-policy tamper-proofing (`ExtensionInstallForcelist` — the extension
+  can't be disabled/removed while locked), hosts-file/proxy fallback blocking.
 - $39 lifetime license (Stripe / Lemon Squeezy).
 
 ---

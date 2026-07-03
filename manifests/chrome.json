@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FlowGuard",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Local-AI distraction blocker — classifies what you watch, blocks only your bad habits",
   "minimum_chrome_version": "116",
   "background": {

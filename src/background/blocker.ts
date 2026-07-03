@@ -1,6 +1,7 @@
 import { api } from '../shared/api';
 import { LATENCY_LOG_MAX } from '../shared/config';
 import { getSettings } from '../shared/settings';
+import { getLockStatus } from '../shared/lock';
 import { isOverridden } from '../shared/overrides';
 import type { ClassifyOutcome, LatencySample } from '../shared/messages';
 import { cleanTitle, isClassifiableUrl, isWhitelisted, matchedBlocklistEntry } from '../shared/titles';
@@ -61,9 +62,11 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
   lastClassified.set(tabId, title);
 
   const settings = await getSettings();
-  if (!settings.enabled) {
+  const lock = await getLockStatus();
+  if (!settings.enabled && !lock.forceBlocking) {
     armedAt.delete(tabId);
-    return; // master switch off — never classify or block
+    return; // master switch off — never classify or block (unless a Frozen
+    //         Turkey session or schedule window forces blocking on)
   }
   if (isWhitelisted(url, settings.whitelist)) {
     armedAt.delete(tabId);
@@ -91,8 +94,10 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
       settings.blockedLabels.includes(result.label) && result.score >= settings.blockThreshold;
   }
   // A prior "this is actually productive" correction wins over the model
-  // (and over a blocklist match, so overrides always have the final say).
-  if (blocked && (await isOverridden(title))) blocked = false;
+  // (and over a blocklist match, so overrides always have the final say) —
+  // EXCEPT during a forced-blocking lock, whose whole point is that past
+  // exceptions stop applying.
+  if (blocked && !lock.forceBlocking && (await isOverridden(title))) blocked = false;
 
   let injectMs = 0;
   if (blocked) {
@@ -101,7 +106,7 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
       await api.scripting.executeScript({
         target: { tabId },
         func: showBlockScreen,
-        args: [result.label, result.score, title, Date.now() - tTitle],
+        args: [result.label, result.score, title, Date.now() - tTitle, lock.settingsLocked],
       });
     } catch (e) {
       console.warn('[FlowGuard] block screen injection failed:', e);
@@ -123,6 +128,18 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
     totalMs: Date.now() - tTitle,
     ts: tTitle,
   });
+}
+
+/** Re-evaluate every open tab — used by the lock enforcer when a blocking
+ *  lock starts mid-session, so already-open distracting tabs get the block
+ *  screen without waiting for a navigation. Mostly title-cache hits: cheap. */
+export async function sweepOpenTabs(): Promise<void> {
+  const tabs = await api.tabs.query({});
+  for (const t of tabs) {
+    if (t.id === undefined || !t.url || !t.title || !isClassifiableUrl(t.url)) continue;
+    lastClassified.delete(t.id); // bypass the title-flicker guard
+    await onTitle(t.id, t.title, t.url).catch(() => {});
+  }
 }
 
 export function initBlocker() {

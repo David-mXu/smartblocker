@@ -3,6 +3,15 @@ import { clearFeedback, getFeedback } from '../shared/feedback';
 import { LABELS } from '../shared/config';
 import type { HistoryScanState } from '../shared/messages';
 import { getSettings, setSettings } from '../shared/settings';
+import {
+  armPasswordLock,
+  attemptPasswordUnlock,
+  getLockState,
+  getLockStatus,
+  setSchedules,
+  startTimerLock,
+} from '../shared/lock';
+import type { LockStatus, ScheduleRule } from '../shared/lock-math';
 
 /** The set of canonical built-in labels, used to tell built-in from custom. */
 const BUILTIN_LABELS = new Set(LABELS);
@@ -40,6 +49,17 @@ const shareToggle = document.getElementById('share-toggle') as HTMLInputElement;
 const modelProgress = document.getElementById('model-progress') as HTMLSpanElement;
 const customCategoryInput = document.getElementById('custom-category-input') as HTMLInputElement;
 const addCategoryBtn = document.getElementById('add-category-btn') as HTMLButtonElement;
+const lockStatusEl = document.getElementById('lock-status') as HTMLDivElement;
+const lockDurationInput = document.getElementById('lock-duration') as HTMLInputElement;
+const lockUnitSelect = document.getElementById('lock-unit') as HTMLSelectElement;
+const lockTimerBtn = document.getElementById('lock-timer-btn') as HTMLButtonElement;
+const lockPasswordInput = document.getElementById('lock-password') as HTMLInputElement;
+const lockPasswordBtn = document.getElementById('lock-password-btn') as HTMLButtonElement;
+const lockPasswordMsg = document.getElementById('lock-password-msg') as HTMLSpanElement;
+const scheduleList = document.getElementById('schedule-list') as HTMLDivElement;
+const scheduleAddBtn = document.getElementById('schedule-add') as HTMLButtonElement;
+const scheduleSaveBtn = document.getElementById('schedule-save') as HTMLButtonElement;
+const scheduleMsg = document.getElementById('schedule-msg') as HTMLSpanElement;
 
 // ---------------------------------------------------------------------------
 // State
@@ -53,6 +73,12 @@ let isOnboarded = false;
 /** Last scan result used by "Block my top distractions". */
 let lastScanCounts: Record<string, number> = {};
 let pollTimer: ReturnType<typeof setInterval> | undefined;
+/** True while any lock source is active — set by applyLockUI(). */
+let locked = false;
+/** Only rebuild control rows when lockedness flips, not every countdown tick. */
+let lastRenderedLocked: boolean | null = null;
+let passwordArmed = false;
+let scheduleRules: ScheduleRule[] = [];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -104,6 +130,7 @@ function buildLabelRows(): void {
     checkbox.type = 'checkbox';
     checkbox.id = `lbl-${label}`;
     checkbox.checked = checkedBlocked.has(label);
+    checkbox.disabled = locked;
     checkbox.addEventListener('change', () => {
       if (checkbox.checked) {
         checkedBlocked.add(label);
@@ -115,8 +142,9 @@ function buildLabelRows(): void {
     const span = document.createElement('span');
     span.className = 'label-name';
     span.textContent = label;
-    span.style.cursor = 'pointer';
+    span.style.cursor = locked ? 'default' : 'pointer';
     span.addEventListener('click', () => {
+      if (locked) return;
       checkbox.checked = !checkbox.checked;
       checkbox.dispatchEvent(new Event('change'));
     });
@@ -125,6 +153,7 @@ function buildLabelRows(): void {
     deleteBtn.className = 'delete-label-btn';
     deleteBtn.textContent = '×';
     deleteBtn.title = 'Remove category';
+    deleteBtn.disabled = locked;
     deleteBtn.addEventListener('click', () => removeCategory(label));
 
     li.appendChild(checkbox);
@@ -188,7 +217,8 @@ async function loadSettings(): Promise<void> {
   blocklistInput.value = s.blocklist.join('\n');
   shareToggle.checked = s.shareFeedback;
 
-  buildLabelRows();
+  scheduleRules = (await getLockState()).schedules.map((r) => ({ ...r, days: [...r.days] }));
+  await applyLockUI();
   await refreshFeedbackCount();
 
   if (!isOnboarded) {
@@ -199,6 +229,210 @@ async function loadSettings(): Promise<void> {
     saveBtn.textContent = 'Save';
   }
 }
+
+// ---------------------------------------------------------------------------
+// Lock section: status banner, disable-while-locked, timer/password locks,
+// and the scheduled-blocks editor. Lock transitions act IMMEDIATELY through
+// lock.ts (not via the Save button — setSettings would reject while locked,
+// and locks live in their own storage key anyway).
+// ---------------------------------------------------------------------------
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const REASON_NAMES: Record<LockStatus['reasons'][number], string> = {
+  timer: 'timer lock',
+  password: 'password lock',
+  frozen: 'Frozen Turkey',
+  schedule: 'scheduled block',
+};
+
+function formatRemaining(ms: number): string {
+  const mins = Math.max(1, Math.round(ms / 60_000));
+  const d = Math.floor(mins / 1440);
+  const h = Math.floor((mins % 1440) / 60);
+  const m = mins % 60;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function minutesToHHMM(mins: number): string {
+  return `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
+}
+
+function hhmmToMinutes(v: string): number {
+  const [h = 0, m = 0] = v.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function buildScheduleRows(): void {
+  scheduleList.innerHTML = '';
+  for (const rule of scheduleRules) {
+    const row = document.createElement('div');
+    row.className = 'schedule-row';
+
+    for (let d = 0; d < 7; d++) {
+      const dayLabel = document.createElement('label');
+      dayLabel.className = 'day-label';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = rule.days.includes(d);
+      cb.disabled = locked;
+      cb.addEventListener('change', () => {
+        rule.days = cb.checked
+          ? [...rule.days, d].sort((a, b) => a - b)
+          : rule.days.filter((x) => x !== d);
+      });
+      dayLabel.append(cb, document.createTextNode(DAY_NAMES[d]));
+      row.appendChild(dayLabel);
+    }
+
+    const start = document.createElement('input');
+    start.type = 'time';
+    start.value = minutesToHHMM(rule.startMinutes);
+    start.disabled = locked;
+    start.addEventListener('change', () => {
+      rule.startMinutes = hhmmToMinutes(start.value);
+    });
+    const sep = document.createElement('span');
+    sep.textContent = '–';
+    const end = document.createElement('input');
+    end.type = 'time';
+    end.value = minutesToHHMM(rule.endMinutes);
+    end.disabled = locked;
+    end.addEventListener('change', () => {
+      rule.endMinutes = hhmmToMinutes(end.value);
+    });
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'schedule-remove';
+    removeBtn.textContent = '×';
+    removeBtn.title = 'Remove schedule';
+    removeBtn.disabled = locked;
+    removeBtn.addEventListener('click', () => {
+      scheduleRules = scheduleRules.filter((r) => r !== rule);
+      buildScheduleRows();
+    });
+
+    row.append(start, sep, end, removeBtn);
+    scheduleList.appendChild(row);
+  }
+}
+
+function lockBannerText(status: LockStatus): string {
+  const reasons = status.reasons.map((r) => REASON_NAMES[r]).join(', ');
+  const tail = status.until
+    ? ` — unlocks in ${formatRemaining(status.until - Date.now())} (${new Date(status.until).toLocaleString()})`
+    : ' — unlock with your password';
+  return `\u{1F512} Locked: ${reasons}${tail}`;
+}
+
+/** Controls that only ever LOOSEN settings — frozen while any lock is active.
+ *  The lock/timer/password controls themselves stay enabled: extending or
+ *  arming is tightening, and unlock goes through the password check. */
+function lockableControls(): { disabled: boolean }[] {
+  return [
+    enabledToggle,
+    thresholdInput,
+    whitelistInput,
+    blocklistInput,
+    saveBtn,
+    feedbackClearBtn,
+    shareToggle,
+    blockTopBtn,
+    customCategoryInput,
+    addCategoryBtn,
+    scheduleAddBtn,
+    scheduleSaveBtn,
+  ];
+}
+
+async function applyLockUI(): Promise<void> {
+  const status = await getLockStatus();
+  locked = status.settingsLocked;
+  passwordArmed = !!(await getLockState()).passwordHash;
+
+  lockStatusEl.style.display = locked ? 'block' : 'none';
+  if (locked) lockStatusEl.textContent = lockBannerText(status);
+  lockPasswordBtn.textContent = passwordArmed ? 'Unlock' : 'Arm password lock';
+
+  if (lastRenderedLocked !== locked) {
+    lastRenderedLocked = locked;
+    for (const el of lockableControls()) el.disabled = locked;
+    buildLabelRows();
+    buildScheduleRows();
+  }
+}
+
+// Countdown + cross-context refresh: cheap (state is cached; derivation is
+// pure math), so a steady 1s tick keeps the banner honest even when another
+// page (popup Frozen Turkey) or the boundary alarm changes the lock.
+setInterval(() => void applyLockUI(), 1000);
+api.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes['lockState']) void applyLockUI();
+});
+
+let timerConfirmPending = false;
+lockTimerBtn.addEventListener('click', async () => {
+  const n = parseInt(lockDurationInput.value, 10);
+  if (!Number.isFinite(n) || n < 1) return;
+  const unit = lockUnitSelect.value === 'd' ? 'day' : 'hour';
+  if (!timerConfirmPending) {
+    timerConfirmPending = true;
+    lockTimerBtn.textContent = `Lock for ${n} ${unit}${n === 1 ? '' : 's'} — click to confirm`;
+    setTimeout(() => {
+      timerConfirmPending = false;
+      lockTimerBtn.textContent = 'Lock settings';
+    }, 5000);
+    return;
+  }
+  timerConfirmPending = false;
+  lockTimerBtn.textContent = 'Lock settings';
+  await startTimerLock(n * (lockUnitSelect.value === 'd' ? 86_400_000 : 3_600_000));
+  await applyLockUI();
+});
+
+lockPasswordBtn.addEventListener('click', async () => {
+  lockPasswordMsg.textContent = '';
+  try {
+    if (passwordArmed) {
+      if (!(await attemptPasswordUnlock(lockPasswordInput.value))) {
+        lockPasswordMsg.textContent = 'Wrong password.';
+        return;
+      }
+    } else {
+      await armPasswordLock(lockPasswordInput.value);
+    }
+    lockPasswordInput.value = '';
+  } catch (e) {
+    lockPasswordMsg.textContent = e instanceof Error ? e.message : String(e);
+  }
+  await applyLockUI();
+});
+
+scheduleAddBtn.addEventListener('click', () => {
+  scheduleRules.push({
+    id: crypto.randomUUID(),
+    days: [1, 2, 3, 4, 5],
+    startMinutes: 9 * 60,
+    endMinutes: 17 * 60,
+  });
+  buildScheduleRows();
+});
+
+scheduleSaveBtn.addEventListener('click', async () => {
+  scheduleMsg.textContent = '';
+  try {
+    await setSchedules(scheduleRules);
+    scheduleMsg.style.color = '#16a34a';
+    scheduleMsg.textContent = 'Schedules saved.';
+  } catch (e) {
+    scheduleMsg.style.color = '#991b1b';
+    scheduleMsg.textContent = e instanceof Error ? e.message : String(e);
+  }
+  setTimeout(() => {
+    scheduleMsg.textContent = '';
+  }, 4000);
+  await applyLockUI();
+});
 
 // ---------------------------------------------------------------------------
 // Custom category input
@@ -238,15 +472,28 @@ saveBtn.addEventListener('click', async () => {
     shareFeedback: shareToggle.checked,
     deletedBuiltinLabels: [...deletedBuiltins],
   };
+  if (!isOnboarded) patch.onboarded = true;
+
+  // setSettings THROWS while a lock is active. The button is disabled then
+  // anyway (applyLockUI), but surface the reason if a lock lands mid-edit.
+  try {
+    await setSettings(patch);
+  } catch (e) {
+    saveMsg.textContent = e instanceof Error ? e.message : String(e);
+    saveMsg.style.color = '#991b1b';
+    saveMsg.classList.add('visible');
+    setTimeout(() => saveMsg.classList.remove('visible'), 4000);
+    return;
+  }
   if (!isOnboarded) {
-    patch.onboarded = true;
     isOnboarded = true;
     banner.style.display = 'none';
     saveBtn.textContent = 'Save';
   }
-  await setSettings(patch);
 
   // Flash the "Saved!" message
+  saveMsg.textContent = 'Saved!';
+  saveMsg.style.color = '';
   saveMsg.classList.add('visible');
   setTimeout(() => saveMsg.classList.remove('visible'), 2000);
 });

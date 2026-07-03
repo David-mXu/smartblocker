@@ -7,7 +7,7 @@ passes, "I spent 100 days in Hardcore Minecraft" gets a block screen. It watches
 **every site except a whitelist you control** (Cold-Turkey-style "allow these,
 block the rest"; seeded with safe defaults like search, mail, docs, and dev tools).
 
-Implemented through Phase 2.8; the full plan is in
+Implemented through Phase 2.9; the full plan is in
 [`ROADMAP.md`](ROADMAP.md). What works today:
 
 1. Transformers.js runs inside a Manifest V3 background (service worker on
@@ -25,6 +25,12 @@ Implemented through Phase 2.8; the full plan is in
    into the classifier's category prototypes. The options page can export
    them as JSON — and an **opt-in, off-by-default** toggle can share them to
    improve the model for everyone ([`PRIVACY.md`](PRIVACY.md)).
+5. **Locks, Cold-Turkey-style.** Lock your settings for a set time or behind a
+   password, schedule recurring locked blocks (e.g. weekdays 9–5), or hit
+   **Frozen Turkey** in the popup to force blocking on for the next 1/4/8
+   hours — uncancellable, and the block screen's bypass buttons disappear.
+   (A soft lock for now: uninstalling still escapes it. The planned desktop
+   companion makes it tamper-proof — see ROADMAP Phase 4.)
 
 Nothing ever leaves your machine (the model, ~35MB one-time, is downloaded
 from the Hugging Face Hub and cached; all inference and history analysis are

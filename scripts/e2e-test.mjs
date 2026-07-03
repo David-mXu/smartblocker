@@ -60,7 +60,7 @@ try {
   // profile (a prior run's override click would let this run's blocklist page
   // through). The model + title caches deliberately stay warm.
   await sw.evaluate(() =>
-    chrome.storage.local.remove(['overrides', 'feedback', 'latencySamples', 'historyScan']),
+    chrome.storage.local.remove(['overrides', 'feedback', 'latencySamples', 'historyScan', 'lockState']),
   );
 
   // 2. Popup loads and Test Pair round-trips through the SW + model.
@@ -229,6 +229,83 @@ try {
   const scanOk = scanOut.includes('Scan done') && /video games/.test(scanOut);
   console.log(`${scanOk ? 'PASS' : 'FAIL'} history scan completed with categories`);
   if (!scanOk) process.exitCode = 1;
+
+  // 6. Lock system: a Frozen Turkey session must force blocking even with the
+  // master toggle off, strip the block screen's bypass buttons, ignore stored
+  // overrides, and freeze the options page. Raw storage writes on purpose:
+  // we're seeding state, deliberately going around the setSettings guard.
+  await sw.evaluate(async () => {
+    const { settings = {} } = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({
+      settings: { ...settings, enabled: false },
+      lockState: {
+        timerUntil: null,
+        passwordHash: null,
+        frozenUntil: Date.now() + 120_000,
+        schedules: [],
+      },
+    });
+  });
+  await tab.waitForTimeout(500); // let onChanged listeners fire
+
+  const frozenTitle = 'Elden Ring boss guide walkthrough';
+  await tab.goto('https://www.youtube.com/watch?v=fz&t=' + encodeURIComponent(frozenTitle));
+  let frozenBlocked = false;
+  try {
+    await tab.waitForSelector('#flowguard-overlay', { timeout: 30_000 });
+    frozenBlocked = true;
+  } catch {}
+  console.log(
+    `${frozenBlocked ? 'PASS' : 'FAIL'} frozen turkey blocks even with master toggle off`,
+  );
+  if (!frozenBlocked) process.exitCode = 1;
+
+  if (frozenBlocked) {
+    const overlayBtns = tab.locator('#flowguard-overlay button');
+    const overrideCount = await overlayBtns.filter({ hasText: 'actually productive' }).count();
+    const dismissCount = await overlayBtns.filter({ hasText: 'Dismiss' }).count();
+    const stayCount = await overlayBtns.filter({ hasText: 'Stay focused' }).count();
+    const lockedUi = overrideCount === 0 && dismissCount === 0 && stayCount === 1;
+    console.log(
+      `${lockedUi ? 'PASS' : 'FAIL'} locked block screen hides bypass buttons ` +
+        `(override ${overrideCount}, dismiss ${dismissCount}, stay ${stayCount})`,
+    );
+    if (!lockedUi) process.exitCode = 1;
+  }
+
+  // The blocklist URL was overridden in 4b — forced blocking ignores overrides.
+  await tab.goto('about:blank');
+  await tab.goto(blocklistUrl);
+  let overriddenReblocked = false;
+  try {
+    await tab.waitForSelector('#flowguard-overlay', { timeout: 10_000 });
+    overriddenReblocked = true;
+  } catch {}
+  console.log(
+    `${overriddenReblocked ? 'PASS' : 'FAIL'} forced blocking ignores stored overrides`,
+  );
+  if (!overriddenReblocked) process.exitCode = 1;
+
+  // Options page freezes while locked.
+  const opts = await context.newPage();
+  await opts.goto(`chrome-extension://${extensionId}/options.html`);
+  await opts.waitForTimeout(1_500); // applyLockUI runs at load + 1s tick
+  const saveDisabled = await opts.locator('#save-btn').isDisabled();
+  const bannerText = (await opts.locator('#lock-status').textContent()) ?? '';
+  const optionsLocked = saveDisabled && /locked/i.test(bannerText);
+  console.log(
+    `${optionsLocked ? 'PASS' : 'FAIL'} options page frozen while locked ` +
+      `("${bannerText.trim()}")`,
+  );
+  if (!optionsLocked) process.exitCode = 1;
+  await opts.close();
+
+  // Restore state so the next run of the persistent profile starts clean.
+  await sw.evaluate(async () => {
+    const { settings = {} } = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({ settings: { ...settings, enabled: true } });
+    await chrome.storage.local.remove('lockState');
+  });
 
   const { latencySamples = [] } = await sw.evaluate(() =>
     chrome.storage.local.get('latencySamples'),
