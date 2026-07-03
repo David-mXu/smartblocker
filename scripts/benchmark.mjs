@@ -91,7 +91,7 @@ const VERBOSE = args.includes('--verbose');
 const [kind, ...idParts] = candidate.split(':');
 const modelId = idParts.join(':');
 const templateIdx = Number(flag('template', '0'));
-const temperature = Number(flag('temp', '0.05'));
+const temperature = Number(flag('temp', '0.03')); // default = config.ts SOFTMAX_TEMPERATURE
 
 const dataset = JSON.parse(
   readFileSync(new URL('./eval-dataset.json', import.meta.url), 'utf8'),

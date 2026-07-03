@@ -72,7 +72,7 @@ npm run build        # -> dist/chrome (also Edge) and dist/firefox
 ## Automated checks
 
 ```sh
-node scripts/benchmark.mjs embed:Xenova/bge-small-en-v1.5   # model eval (223 labeled cases)
+node scripts/benchmark.mjs embed:Xenova/bge-small-en-v1.5   # model eval (232 labeled cases)
 node scripts/e2e-test.mjs                                   # full extension e2e in a real Chromium
 node feedback-worker/test/local-test.mjs                    # feedback worker (stubbed D1)
 ```
@@ -80,11 +80,12 @@ node feedback-worker/test/local-test.mjs                    # feedback worker (s
 The shipped classifier is an **embedding-prototype** model
 (`Xenova/bge-small-en-v1.5`, ~34MB): the page text is embedded once and
 matched against per-category prototype embeddings, so adding categories is
-free and inference is ~3ms in Node / ~10ms live. On the 223-case eval it
-scores 87.8% top-1 with a 1.8% false-positive rate on productive pages —
-versus 65.2% / 7.1% at ~111ms for the zero-shot NLI model it replaced (which
-remains available as a config fallback). It also knows its proper nouns:
-"Elden Ring Boss Fight" → video games at 0.89.
+free and inference is ~3ms in Node / ~10ms live. On the 232-case eval it
+scores 89.1% top-1 with a 3.5% false-positive rate on productive pages (both
+remaining FPs are on default-whitelisted domains) — versus 65.2% / 7.1% at
+~111ms for the zero-shot NLI model it replaced (which remains available as a
+config fallback). It also knows its proper nouns: "Elden Ring Boss Fight" →
+video games at 0.89.
 
 All tuning knobs (backend, model ids, category labels, blocked categories,
 thresholds) live in `src/shared/config.ts`; prototype seed texts live in

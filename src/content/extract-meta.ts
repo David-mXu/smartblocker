@@ -163,11 +163,58 @@ export function extractMeta(): { channel?: string; context?: string } {
     // ── Generic page (any other site) ────────────────────────────────────────
     // FlowGuard now classifies all sites; give the model whatever signal the
     // page exposes via standard metadata. All fields stay optional.
+
+    // Page-kind hint from og:type + JSON-LD @type. Pages self-declare what
+    // they are ("product", "Movie", "NewsArticle"); mapping the unambiguous
+    // kinds to a short sentence PREPENDED to the context anchors the
+    // classifier far better than marketing copy alone (apple.com's spec-heavy
+    // og:description reads like a tech article; "Online store product page."
+    // does not). Only high-precision kinds are mapped — generic ones
+    // (website, article, VideoObject) say nothing about the category.
+    function pageKindHint(): string {
+      const types = new Set<string>();
+      const og = metaContent('og:type').toLowerCase();
+      if (og) types.add(og);
+      const scripts = document.querySelectorAll('script[type="application/ld+json"]');
+      for (let i = 0; i < scripts.length && i < 8; i++) {
+        const raw = scripts[i].textContent ?? '';
+        if (!raw || raw.length > 200000) continue;
+        // Regex scan instead of JSON.parse: cheap, and robust to the malformed
+        // JSON-LD found in the wild. Handles "@type": "X" and "@type": ["X",…].
+        const matches = raw.match(/"@type"\s*:\s*(\[[^\]]*\]|"[^"]*")/g) ?? [];
+        for (const m of matches) {
+          for (const t of m.match(/"([\w.]+)"/g) ?? []) {
+            const name = t.slice(1, -1).toLowerCase();
+            if (name !== '@type') types.add(name);
+          }
+        }
+      }
+      const has = (...names: string[]) => names.some((n) => types.has(n));
+      if (has('product', 'productgroup', 'offer', 'aggregateoffer', 'product.group')) {
+        return 'Online store product page.';
+      }
+      if (has('video.movie', 'video.episode', 'video.tv_show', 'movie', 'tvseries', 'tvepisode')) {
+        return 'Movie or TV show page.';
+      }
+      if (has('music.song', 'music.album', 'music.playlist', 'musicrecording', 'musicalbum')) {
+        return 'Music page.';
+      }
+      if (has('videogame', 'game')) return 'Video game page.';
+      if (has('newsarticle', 'reportagenewsarticle', 'liveblogposting')) return 'News article.';
+      if (has('recipe')) return 'Recipe page.';
+      return '';
+    }
+
     const channel = metaContent('og:site_name') || metaContent('author');
-    const context = trimTo(
-      metaContent('description') || metaContent('og:description'),
-      SNIPPET_LEN,
-    );
+    let body = metaContent('description') || metaContent('og:description');
+    if (!body) {
+      // No description meta: the top heading is the next-best summary (helps
+      // SPAs whose <title> is sparse, e.g. "Home" or a bare brand name).
+      const h1 = trimTo(textOf(document.querySelector('h1')), 80);
+      if (h1 && !document.title.toLowerCase().includes(h1.toLowerCase())) body = h1;
+    }
+    const hint = pageKindHint();
+    const context = trimTo([hint, body].filter(Boolean).join(' '), SNIPPET_LEN);
     const result: { channel?: string; context?: string } = {};
     if (channel) result.channel = channel;
     if (context) result.context = context;

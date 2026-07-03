@@ -25,7 +25,7 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
 - `npm run typecheck` — `tsc --noEmit`
 - `node scripts/benchmark.mjs <nli:modelId | embed:modelId>` — THE model
   decision gate: runs a candidate against `scripts/eval-dataset.json`
-  (229 hand-checked cases incl. 56 productive negatives) and reports top-1,
+  (232 hand-checked cases incl. 57 productive negatives) and reports top-1,
   productive-FP rate, must-block recall, latency, and a threshold sweep.
   Flags: `--template=N` (NLI hypothesis variants), `--temp=T` (embed softmax
   temperature), `--verbose`.
@@ -86,13 +86,18 @@ Commit and push when appropriate.
   opt-in share toggle).
 - `src/content/extract-meta.ts` — self-contained injected function that scrapes
   channel/subreddit + description snippet from the page DOM; falls back to
-  `og:site_name`/`og:description`/`description` meta on generic sites.
+  `og:site_name`/`og:description`/`description` meta on generic sites. On
+  generic sites it also derives a **page-kind hint** from `og:type` + JSON-LD
+  `@type` ("Online store product page.", "Movie or TV show page.", …)
+  prepended to the context (so it survives the 200-char trim), and uses the
+  `<h1>` as context when the page has no description meta.
 - `src/shared/` — `config.ts` (DEFAULTS: backend, model ids, softmax
   temperature, 13 `LABELS`, thresholds, `DEFAULT_WHITELIST`,
   `FEEDBACK_ENDPOINT`), `settings.ts` (user-overridable `Settings` incl.
   `whitelist`, `blocklist`, `shareFeedback` — the runtime source of truth),
   `prototypes.ts` (centroid specs from `prototype-seeds.json` + similarity
-  math; neutral centroids get a `neutral: ` label prefix and can never block),
+  math; neutral centroids get a `neutral: ` label prefix and can never block;
+  user-added custom categories get a label-text fallback centroid),
   `prototype-seeds.json` (per-category seed texts — keep DISJOINT from
   `eval-dataset.json`, that's the train/test split), `feedback.ts`
   (FP/FN correction store; `getPrototypeExamples()` folds corrections into
@@ -165,10 +170,18 @@ Commit and push when appropriate.
   "Elden Ring Boss Fight" → video games 0.89 (was: sports).
 - 2026-07-02 seed tune (found via real usage: apple.com pages misread once
   og-description marketing copy was fed as context): brand-storefront +
-  whiteboard/kanban seeds added; 229-case eval now 88.8% top-1, 3.6%
-  productive FP, 78.7% recall. Both remaining FPs ("Pull requests ·
-  facebook/react" → social, "Sprint retro board | Miro" → shopping) are
-  covered by DEFAULT_WHITELIST (github.com, miro.com) in practice.
+  whiteboard/kanban seeds added. Both remaining productive FPs ("Pull
+  requests · facebook/react" → social, "Sprint retro board | Miro" →
+  shopping) are covered by DEFAULT_WHITELIST (github.com, miro.com) in
+  practice.
+- 2026-07-03 page-kind hint (`extract-meta.ts`): og:type + JSON-LD `@type`
+  map to a short sentence ("Online store product page.") PREPENDED to the
+  context on generic sites, plus an `<h1>` fallback when there's no
+  description meta. Grounds spec-heavy marketing copy; 232-case eval:
+  **89.1% top-1, 3.5% productive FP, 79.5% must-block recall @0.5**,
+  shopping 22/22. `benchmark.mjs --temp` now defaults to config's
+  SOFTMAX_TEMPERATURE (0.03) — running it at any other temp silently
+  deflates/inflates every threshold metric.
 - Remaining weak spots: sparse titles ("Home / X" → neutral), enriched
   marketing copy pulling toward spec-y categories (mitigated, watch it), and
   programming/science titles sometimes landing in neutral documentation/work

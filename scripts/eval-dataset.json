@@ -240,6 +240,12 @@
     { "input": { "title": "Full album out now", "channel": "Arctic Monkeys", "context": "Official audio stream of the new studio album" }, "expected": ["music"] },
     { "input": { "title": "Season finale tonight", "channel": "Netflix", "context": "The final episode of the crime drama series premieres tonight" }, "expected": ["movies and tv shows"] },
     { "input": { "title": "Big win compilation", "channel": "SlotKing", "context": "Online casino slot machine biggest wins and bonus rounds this week" }, "expected": ["gambling and betting"] },
-    { "input": { "title": "Getting started with pgvector", "channel": "Supabase", "context": "Tutorial on vector similarity search in Postgres for AI applications" }, "expected": "productive" }
+    { "input": { "title": "Getting started with pgvector", "channel": "Supabase", "context": "Tutorial on vector similarity search in Postgres for AI applications" }, "expected": "productive" },
+    { "input": { "title": "Buy MacBook Air - Apple", "channel": "Apple", "context": "Online store product page. Get a new MacBook Air laptop with the M5 chip from only $108.25 per month. Built for AI. Lightweight, with all-day battery life." }, "expected": ["online shopping"] },
+    { "input": { "title": "Buy MacBook Air, 15-inch, M5 Chip, 10-core CPU, 10-core GPU, Midnight, 16GB memory, 512GB storage - Apple", "channel": "Apple", "context": "Online store product page. Get a new MacBook Air laptop with the M5 chip from only $108.25 per month." }, "expected": ["online shopping"] },
+    { "input": { "title": "Store", "context": "Online store product page." }, "expected": ["online shopping"] },
+    { "input": { "title": "Dune: Part Three (2026)", "context": "Movie or TV show page. Paul Atreides unites with the Fremen once more." }, "expected": ["movies and tv shows"] },
+    { "input": { "title": "Central bank holds rates steady", "context": "News article. The decision surprised markets expecting a cut." }, "expected": ["finance and investing", "news and politics"] },
+    { "input": { "title": "One-pot pasta", "context": "Recipe page. Ready in 20 minutes with pantry staples." }, "expected": "productive" }
   ]
 }
