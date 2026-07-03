@@ -8,12 +8,16 @@ subdomain match, seeded with a safe default list in `config.ts`
 **opt-in deterministic blocklist** (`config.ts`/`settings.ts` `blocklist`,
 empty by default): substring matches against the URL + title skip the ML
 classifier entirely and block instantly. **The full multi-phase roadmap lives
-in `ROADMAP.md`.** Implemented through Phase 2.8: user-configurable categories
+in `ROADMAP.md`.** Implemented through Phase 2.9: user-configurable categories
 + onboarding, richer page signals, the **embedding-prototype classifier**
 (2026-07 bake-off winner — see Model facts), a block screen with a "this is
-actually productive" override, and a **feedback loop** (corrections are stored
+actually productive" override, a **feedback loop** (corrections are stored
 locally, teach the classifier via centroid updates, and can be exported or —
-opt-in, off by default — shared to a Cloudflare Worker; see `PRIVACY.md`).
+opt-in, off by default — shared to a Cloudflare Worker; see `PRIVACY.md`), and
+**opt-in continuous usage tracking** (`trackUsage`, default OFF): per-day
+hostname-level visits + focused time powering the options page's Habits
+dashboard and whitelist/blocklist suggestions. Usage data is local-only and
+NEVER auto-feeds the centroids — suggestions act only via explicit user Apply.
 
 Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
 `gh` CLI is not installed).
@@ -74,6 +78,17 @@ Commit and push when appropriate.
     `settings.shareFeedback` (default OFF) AND `config.ts FEEDBACK_ENDPOINT`
     (empty = disabled) are set; batches unsent records + random resettable
     `installId` to the worker, marks them uploaded.
+  - `usage-tracker.ts` — opt-in focus-time tracker (`initUsageTracker()`):
+    tabs/windows focus + `chrome.idle` events (both manifests have the
+    `"idle"` permission) maintain ONE open span `{domain,label,start}`
+    persisted in storage.local (`usageOpenSpan`) so it survives MV3 SW
+    restarts; only `runtime.onStartup` clamps a stale span (to the 60s idle
+    threshold) because SW restart ≠ browser restart. Labels come from the
+    blocker's `noteVerdict()` per-tab map, falling back to `classify({title})`
+    (usually a titleCache hit). Every path first closes any leftover span even
+    when `trackUsage` is off (else it lingers forever), and only opens a new
+    one when tracking is on. Known limit: input-based idle detection
+    undercounts passive video watching.
   - `history-ingester.ts` scans chrome.history; `index.ts` wires listeners,
     first-run onboarding, and the `OVERRIDE` / `REPORT_FN` / `CLOSE_TAB`
     handlers.
@@ -82,8 +97,11 @@ Commit and push when appropriate.
   picker; sends `REPORT_FN` for the active tab).
 - `src/options/` — settings + onboarding page: category block toggles,
   threshold slider, master enable, whitelist/blocklist textareas, history-scan
-  helper, and the **Feedback section** (record count, Export JSON, Clear,
-  opt-in share toggle).
+  helper, the **Habits section** (opt-in `trackUsage` toggle — applies
+  immediately, NOT via the Save button — 7-day dashboard: stat tiles,
+  category bars, daily trend, top-sites table, Clear; plus suggestion cards
+  with Apply/Dismiss), and the **Feedback section** (record count, Export
+  JSON, Clear, opt-in share toggle).
 - `src/content/extract-meta.ts` — self-contained injected function that scrapes
   channel/subreddit + description snippet from the page DOM; falls back to
   `og:site_name`/`og:description`/`description` meta on generic sites. On
@@ -104,7 +122,13 @@ Commit and push when appropriate.
   centroids = on-device learning), `overrides.ts` (title-only allow store),
   `build-input.ts` (`buildClassifierText` + `inputCacheKey(input, modelKey)`),
   `api.ts` (cross-browser shim + `IS_FIREFOX`), `messages.ts` (message
-  contract), `titles.ts` (URL gates + `cleanTitle`).
+  contract), `titles.ts` (URL gates + `cleanTitle` + `hostnameOf`),
+  `usage-stats.ts` (per-day per-hostname visits + focusMs store, 90-day
+  retention, serialized write chain; pseudo-labels `whitelisted` /
+  `blocklisted` for pages the ML classifier never sees), `suggestions.ts`
+  (pure engine over usage + feedback → whitelist/blocklist proposals;
+  dismissals persisted; Apply flows ONLY through existing settings plumbing —
+  implicit usage signals must never auto-feed centroids, by design).
 - `feedback-worker/` — Cloudflare Worker (wrangler + D1) receiving opt-in
   feedback batches. NOT part of the extension build; deploy is manual (see
   wrangler.toml header; set `FEEDBACK_ENDPOINT` after deploying).

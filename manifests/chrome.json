@@ -19,6 +19,7 @@
   "permissions": [
     "alarms",
     "history",
+    "idle",
     "offscreen",
     "scripting",
     "storage",

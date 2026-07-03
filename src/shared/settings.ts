@@ -39,6 +39,12 @@ export interface Settings {
    * migrateLabels() doesn't silently re-add them on extension updates.
    */
   deletedBuiltinLabels: string[];
+  /**
+   * Opt-in: continuously track visits + focused time per site (local-only,
+   * hostname-level — see PRIVACY.md) to power the options page's Habits
+   * dashboard and suggestions. OFF by default; never uploaded anywhere.
+   */
+  trackUsage: boolean;
 }
 
 export const DEFAULTS: Settings = {
@@ -51,6 +57,7 @@ export const DEFAULTS: Settings = {
   blocklist: [],
   shareFeedback: false,
   deletedBuiltinLabels: [],
+  trackUsage: false,
 };
 
 const STORAGE_KEY = 'settings';

@@ -3,9 +3,11 @@ import { LATENCY_LOG_MAX } from '../shared/config';
 import { getSettings } from '../shared/settings';
 import { isOverridden } from '../shared/overrides';
 import type { ClassifyOutcome, LatencySample } from '../shared/messages';
-import { cleanTitle, isClassifiableUrl, isWhitelisted, matchedBlocklistEntry } from '../shared/titles';
+import { cleanTitle, hostnameOf, isClassifiableUrl, isWhitelisted, matchedBlocklistEntry } from '../shared/titles';
+import { BLOCKLISTED_LABEL, WHITELISTED_LABEL, recordVisit } from '../shared/usage-stats';
 import { extractMeta } from '../content/extract-meta';
 import { classify } from './classifier';
+import { noteVerdict } from './usage-tracker';
 import { showBlockScreen } from './blockscreen';
 
 /** The fields onTitle actually needs, shared by the ML path and the
@@ -67,6 +69,12 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
   }
   if (isWhitelisted(url, settings.whitelist)) {
     armedAt.delete(tabId);
+    // Whitelisted pages are never classified, but the habit stats still want
+    // them (they're the user's productive browsing).
+    if (settings.trackUsage) {
+      noteVerdict(tabId, url, WHITELISTED_LABEL);
+      void recordVisit(hostnameOf(url), WHITELISTED_LABEL);
+    }
     return; // user-exempted site — never classify or block
   }
 
@@ -93,6 +101,12 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
   // A prior "this is actually productive" correction wins over the model
   // (and over a blocklist match, so overrides always have the final say).
   if (blocked && (await isOverridden(title))) blocked = false;
+
+  if (settings.trackUsage) {
+    const statsLabel = blocklistHit ? BLOCKLISTED_LABEL : result.label;
+    noteVerdict(tabId, url, statsLabel);
+    void recordVisit(hostnameOf(url), statsLabel);
+  }
 
   let injectMs = 0;
   if (blocked) {

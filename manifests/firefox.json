@@ -23,6 +23,7 @@
   "permissions": [
     "alarms",
     "history",
+    "idle",
     "scripting",
     "storage",
     "unlimitedStorage",

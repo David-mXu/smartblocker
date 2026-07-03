@@ -184,6 +184,34 @@ isolation (Chrome exempts extensions) if threading is ever revisited.
 
 ---
 
+## Phase 2.9 — Continuous usage tracking, habit dashboard & suggestions ✅ (2026-07-03)
+
+Opt-in (`trackUsage`, default OFF), 100% local habit understanding:
+
+- **Usage store** (`src/shared/usage-stats.ts`): per-day, per-hostname visit
+  counts + real focused time. Hostname only — never titles or URLs — pruned to
+  90 days, never uploaded (see `PRIVACY.md`).
+- **Focus tracker** (`src/background/usage-tracker.ts`): tab/window focus +
+  `chrome.idle` events maintain one open focus span, persisted in
+  storage.local so MV3 SW restarts don't lose or double-count time; a stale
+  span after a browser kill is clamped to the idle threshold. Known v1 limit:
+  input-based idle detection undercounts passive video watching.
+- **Blocker feeds labels**: every classified navigation records a visit;
+  whitelisted / blocklisted pages get pseudo-labels (`whitelisted` /
+  `blocklisted`) since they never reach the ML classifier.
+- **Habits dashboard** (options page): 7-day stat tiles, focused-time-by-
+  category bars, daily trend, top-sites table, Clear button.
+- **Suggestions engine** (`src/shared/suggestions.ts`): distraction magnets →
+  blocklist proposals; repeated overrides or heavy neutral focus → whitelist
+  proposals. Dismissals persist. **Design rule: implicit usage signals never
+  auto-feed the centroids** (frequency ≠ productivity — the opposite, for our
+  user); a suggestion only acts when the user clicks Apply, and then only
+  through the existing whitelist/blocklist settings plumbing.
+- Deferred: session-trajectory signal (recent browsing context nudging
+  borderline verdicts).
+
+---
+
 ## Phase 3 — Public beta
 
 - ~~Open problem carried from Phase 2: model quality.~~ **Resolved in

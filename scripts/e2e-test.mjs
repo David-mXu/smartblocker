@@ -230,6 +230,55 @@ try {
   console.log(`${scanOk ? 'PASS' : 'FAIL'} history scan completed with categories`);
   if (!scanOk) process.exitCode = 1;
 
+  // 6. Usage tracking (Phase 2.9): opt in via trackUsage, dwell on a
+  // distraction page then a whitelisted page, and check visits + focused time
+  // land in usageStats (whitelisted domain under the 'whitelisted' pseudo-label).
+  await context.route('**://github.com/**', (route) =>
+    route.fulfill({
+      contentType: 'text/html',
+      body:
+        '<!doctype html><html><head><title>my-repo: productive work</title></head>' +
+        '<body><h1>repo</h1></body></html>',
+    }),
+  );
+  await sw.evaluate(async () => {
+    await chrome.storage.local.remove(['usageStats', 'usageOpenSpan']);
+    const { settings = {} } = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({ settings: { ...settings, trackUsage: true } });
+  });
+  await tab.waitForTimeout(500); // let storage.onChanged invalidate caches
+
+  await tab.bringToFront();
+  await tab.goto(
+    'https://www.youtube.com/watch?v=u1&t=' + encodeURIComponent('Top 10 boss fights ranked'),
+  );
+  await tab.waitForTimeout(1_500); // dwell: focused time on youtube.com
+  await tab.goto('https://github.com/example/my-repo'); // closes the youtube span
+  await tab.waitForTimeout(1_500); // dwell: focused time on github.com (whitelisted)
+  await page.bringToFront(); // extension page focus closes the github span
+  await page.waitForTimeout(1_000); // let the serialized usage writes flush
+
+  const { usageStats = {} } = await sw.evaluate(() => chrome.storage.local.get('usageStats'));
+  // Merge days in case the run straddles midnight.
+  const byDomain = {};
+  for (const day of Object.values(usageStats)) {
+    for (const [domain, s] of Object.entries(day)) {
+      const m = (byDomain[domain] ??= { visits: 0, focusMs: 0, label: s.label });
+      m.visits += s.visits;
+      m.focusMs += s.focusMs;
+      m.label = s.label;
+    }
+  }
+  console.log('--- usageStats ---\n' + JSON.stringify(byDomain, null, 2) + '\n------------------');
+  const yt = byDomain['youtube.com'];
+  const ytOk = !!yt && yt.visits >= 1 && yt.focusMs > 0;
+  console.log(`${ytOk ? 'PASS' : 'FAIL'} usage tracked youtube.com (visits >= 1, focusMs > 0)`);
+  if (!ytOk) process.exitCode = 1;
+  const gh = byDomain['github.com'];
+  const ghOk = !!gh && gh.visits >= 1 && gh.focusMs > 0 && gh.label === 'whitelisted';
+  console.log(`${ghOk ? 'PASS' : 'FAIL'} whitelisted github.com tracked under 'whitelisted'`);
+  if (!ghOk) process.exitCode = 1;
+
   const { latencySamples = [] } = await sw.evaluate(() =>
     chrome.storage.local.get('latencySamples'),
   );

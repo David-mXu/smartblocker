@@ -69,6 +69,19 @@ export function matchedBlocklistEntry(
   return null;
 }
 
+/**
+ * Hostname for grouping/storage (usage stats, feedback): lowercased, leading
+ * "www." stripped so www and bare domains aggregate together. '' if unparseable.
+ */
+export function hostnameOf(url: string | undefined): string {
+  if (!url) return '';
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
 const GENERIC_TITLES = new Set(['youtube', 'reddit', 'new tab']);
 
 /** Strip site suffixes; return null for titles too generic to classify. */

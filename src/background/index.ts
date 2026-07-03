@@ -7,6 +7,7 @@ import type { Request, TestPairResponse } from '../shared/messages';
 import { classify } from './classifier';
 import { initBlocker } from './blocker';
 import { initFeedbackUploader } from './feedback-uploader';
+import { initUsageTracker } from './usage-tracker';
 import { scanHistory } from './history-ingester';
 
 console.log('[FlowGuard] background started');
@@ -25,6 +26,7 @@ function domainOf(url: string | undefined): string {
 // MV3: all listeners must be registered synchronously at startup.
 initBlocker();
 initFeedbackUploader();
+initUsageTracker();
 
 // First-run onboarding: open the settings page so the user picks what to block.
 api.runtime.onInstalled.addListener(({ reason }) => {

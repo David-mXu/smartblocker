@@ -245,6 +245,159 @@
         align-items: center;
         gap: 10px;
       }
+      /* Habits dashboard */
+      .hint {
+        margin: 0 0 8px;
+        color: #555;
+        font-size: 13px;
+      }
+      h3 {
+        font-size: 13px;
+        margin: 16px 0 6px;
+        color: #333;
+      }
+      .stat-row {
+        display: flex;
+        gap: 10px;
+        margin-top: 10px;
+      }
+      .stat-tile {
+        flex: 1;
+        border: 1px solid #e5e5e5;
+        border-radius: 6px;
+        padding: 8px 12px;
+        min-width: 0;
+      }
+      .stat-tile .stat-label {
+        font-size: 11px;
+        color: #777;
+      }
+      .stat-tile .stat-value {
+        font-size: 18px;
+        font-weight: 600;
+        margin-top: 2px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .hbar-row {
+        display: grid;
+        grid-template-columns: 170px 1fr 52px;
+        align-items: center;
+        gap: 8px;
+        padding: 3px 0;
+        font-size: 12px;
+      }
+      .hbar-name {
+        color: #333;
+        text-transform: capitalize;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .hbar-track {
+        height: 12px;
+      }
+      .hbar-fill {
+        height: 100%;
+        background: #2563eb;
+        border-radius: 0 4px 4px 0; /* rounded data-end, square baseline */
+        min-width: 2px;
+      }
+      .hbar-val {
+        color: #555;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      #habits-trend {
+        display: flex;
+        align-items: flex-end;
+        gap: 10px;
+        height: 96px;
+        padding-top: 16px;
+        border-bottom: 1px solid #e5e5e5;
+      }
+      .trend-col {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-end;
+        height: 100%;
+        position: relative;
+      }
+      .trend-fill {
+        width: 18px;
+        background: #2563eb;
+        border-radius: 4px 4px 0 0;
+      }
+      .trend-cap {
+        font-size: 10px;
+        color: #555;
+        margin-bottom: 2px;
+        font-variant-numeric: tabular-nums;
+      }
+      .trend-day {
+        position: absolute;
+        top: 100%;
+        font-size: 10px;
+        color: #777;
+        margin-top: 3px;
+      }
+      #habits-domains {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        margin-bottom: 14px;
+      }
+      #habits-domains td,
+      #habits-domains th {
+        padding: 4px 6px;
+        border-bottom: 1px solid #f0f0f0;
+        text-align: left;
+      }
+      #habits-domains th {
+        color: #777;
+        font-weight: 500;
+        font-size: 11px;
+      }
+      #habits-domains td.num,
+      #habits-domains th.num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      #habits-domains .domain-label {
+        color: #777;
+      }
+      .suggestion {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        border: 1px solid #e0e9fb;
+        background: #f5f9ff;
+        border-radius: 6px;
+        padding: 8px 12px;
+        margin: 6px 0;
+        font-size: 13px;
+      }
+      .suggestion .sg-text {
+        flex: 1;
+        min-width: 0;
+      }
+      .suggestion .sg-reason {
+        color: #555;
+        font-size: 12px;
+      }
+      .suggestion button {
+        padding: 4px 10px;
+        font-size: 12px;
+        flex-shrink: 0;
+      }
+      .suggestion .sg-apply {
+        background: #2563eb;
+        color: #fff;
+        border-color: #1d4ed8;
+      }
     </style>
   </head>
   <body>
@@ -308,6 +461,36 @@
     </div>
     <div id="scan-status"></div>
     <pre id="scan-out"></pre>
+
+    <h2>Habits</h2>
+    <div class="row-toggle" style="margin-top:8px">
+      <label class="toggle">
+        <input type="checkbox" id="track-toggle" />
+        <span class="slider"></span>
+      </label>
+      <span class="toggle-label" style="font-weight:400">
+        Track my browsing habits on this device (off by default)
+      </span>
+    </div>
+    <p class="hint">
+      Counts visits and focused time per site to power the dashboard and suggestions
+      below. Hostnames only — never page titles or full URLs — and it all stays on
+      this device; habit data is never uploaded. See PRIVACY.md.
+    </p>
+    <div id="habits-suggestions"></div>
+    <div id="habits-empty" class="hint" style="font-style:italic"></div>
+    <div id="habits-dash" style="display:none">
+      <div id="habits-summary" class="stat-row"></div>
+      <h3>Focused time by category — last 7 days</h3>
+      <div id="habits-cats"></div>
+      <h3>Daily focused time</h3>
+      <div id="habits-trend"></div>
+      <h3 style="margin-top:26px">Top sites</h3>
+      <table id="habits-domains"></table>
+      <div class="btn-row">
+        <button id="usage-clear">Clear usage data</button>
+      </div>
+    </div>
 
     <h2>Feedback</h2>
     <p style="margin:0 0 8px;color:#555;font-size:13px;">

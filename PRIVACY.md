@@ -23,6 +23,23 @@ The classifier learns from these records locally (they refine its category
 prototypes). You can view the count, **export them as JSON**, or **clear them**
 at any time from the options page.
 
+## Habits / usage tracking (default: OFF)
+
+The options page has a *"Track my browsing habits on this device"* toggle.
+It is **off by default** and nothing is recorded while it is off.
+
+If you turn it on, FlowGuard keeps a local tally per site per day — the site
+**hostname only** (e.g. `youtube.com`), a visit count, focused time (how long
+the tab was active and you weren't idle), and the category the classifier
+assigned. It never stores page titles or full URLs, and it prunes anything
+older than 90 days. This powers the options page's Habits dashboard and its
+whitelist/blocklist suggestions — which only take effect if you click Apply.
+
+**This data never leaves your device.** It is not part of the opt-in
+corrections upload below, or of anything else. You can wipe it any time with
+the *"Clear usage data"* button, and turning the toggle off stops all
+recording immediately.
+
 ## Opt-in sharing (default: OFF)
 
 The options page has a *"Share my corrections to improve FlowGuard"* toggle.

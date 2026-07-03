@@ -3,6 +3,8 @@ import { clearFeedback, getFeedback } from '../shared/feedback';
 import { LABELS } from '../shared/config';
 import type { HistoryScanState } from '../shared/messages';
 import { getSettings, setSettings } from '../shared/settings';
+import { dismissSuggestion, getSuggestions, type Suggestion } from '../shared/suggestions';
+import { clearUsage, dayKey, getUsage } from '../shared/usage-stats';
 
 /** The set of canonical built-in labels, used to tell built-in from custom. */
 const BUILTIN_LABELS = new Set(LABELS);
@@ -40,6 +42,15 @@ const shareToggle = document.getElementById('share-toggle') as HTMLInputElement;
 const modelProgress = document.getElementById('model-progress') as HTMLSpanElement;
 const customCategoryInput = document.getElementById('custom-category-input') as HTMLInputElement;
 const addCategoryBtn = document.getElementById('add-category-btn') as HTMLButtonElement;
+const trackToggle = document.getElementById('track-toggle') as HTMLInputElement;
+const habitsSuggestions = document.getElementById('habits-suggestions') as HTMLDivElement;
+const habitsEmpty = document.getElementById('habits-empty') as HTMLDivElement;
+const habitsDash = document.getElementById('habits-dash') as HTMLDivElement;
+const habitsSummary = document.getElementById('habits-summary') as HTMLDivElement;
+const habitsCats = document.getElementById('habits-cats') as HTMLDivElement;
+const habitsTrend = document.getElementById('habits-trend') as HTMLDivElement;
+const habitsDomains = document.getElementById('habits-domains') as HTMLTableElement;
+const usageClearBtn = document.getElementById('usage-clear') as HTMLButtonElement;
 
 // ---------------------------------------------------------------------------
 // State
@@ -187,9 +198,11 @@ async function loadSettings(): Promise<void> {
   whitelistInput.value = s.whitelist.join('\n');
   blocklistInput.value = s.blocklist.join('\n');
   shareToggle.checked = s.shareFeedback;
+  trackToggle.checked = s.trackUsage;
 
   buildLabelRows();
   await refreshFeedbackCount();
+  void renderHabits();
 
   if (!isOnboarded) {
     banner.style.display = 'block';
@@ -347,6 +360,227 @@ feedbackExportBtn.addEventListener('click', async () => {
 feedbackClearBtn.addEventListener('click', async () => {
   await clearFeedback();
   await refreshFeedbackCount();
+});
+
+// ---------------------------------------------------------------------------
+// Habits: usage dashboard + suggestions (see shared/usage-stats.ts,
+// shared/suggestions.ts). Everything here is local-only, hostname-level data.
+// ---------------------------------------------------------------------------
+function fmtMs(ms: number): string {
+  const mins = Math.round(ms / 60000);
+  if (mins < 1) return ms > 0 ? '<1m' : '0m';
+  if (mins < 60) return `${mins}m`;
+  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+}
+
+function renderSuggestions(list: Suggestion[]): void {
+  habitsSuggestions.innerHTML = '';
+  for (const sg of list) {
+    const card = document.createElement('div');
+    card.className = 'suggestion';
+
+    const text = document.createElement('div');
+    text.className = 'sg-text';
+    const head = document.createElement('div');
+    head.textContent =
+      sg.kind === 'blocklist'
+        ? `Add ${sg.domain} to your blocklist?`
+        : `Whitelist ${sg.domain}?`;
+    const reason = document.createElement('div');
+    reason.className = 'sg-reason';
+    reason.textContent = sg.reason;
+    text.appendChild(head);
+    text.appendChild(reason);
+
+    const apply = document.createElement('button');
+    apply.className = 'sg-apply';
+    apply.textContent = 'Apply';
+    apply.addEventListener('click', async () => {
+      // Suggestions only ever act through the existing whitelist/blocklist
+      // settings — never directly into the classifier.
+      if (sg.kind === 'blocklist') {
+        const blocklist = parseBlocklist(`${blocklistInput.value}\n${sg.domain}`);
+        blocklistInput.value = blocklist.join('\n');
+        await setSettings({ blocklist });
+      } else {
+        const whitelist = parseWhitelist(`${whitelistInput.value}\n${sg.domain}`);
+        whitelistInput.value = whitelist.join('\n');
+        await setSettings({ whitelist });
+      }
+      void renderHabits();
+    });
+
+    const dismiss = document.createElement('button');
+    dismiss.textContent = 'Dismiss';
+    dismiss.addEventListener('click', async () => {
+      await dismissSuggestion(sg.kind, sg.domain);
+      void renderHabits();
+    });
+
+    card.appendChild(text);
+    card.appendChild(apply);
+    card.appendChild(dismiss);
+    habitsSuggestions.appendChild(card);
+  }
+}
+
+async function renderHabits(): Promise<void> {
+  const s = await getSettings();
+  const usage = await getUsage(7);
+
+  renderSuggestions(await getSuggestions(s));
+
+  let totalMs = 0;
+  let totalVisits = 0;
+  const byLabel = new Map<string, number>();
+  const byDomain = new Map<string, { visits: number; focusMs: number; label: string }>();
+  const byDay = new Map<string, number>();
+  for (const [day, entry] of Object.entries(usage)) {
+    for (const [domain, st] of Object.entries(entry)) {
+      totalMs += st.focusMs;
+      totalVisits += st.visits;
+      byLabel.set(st.label, (byLabel.get(st.label) ?? 0) + st.focusMs);
+      const d = byDomain.get(domain) ?? { visits: 0, focusMs: 0, label: st.label };
+      d.visits += st.visits;
+      d.focusMs += st.focusMs;
+      d.label = st.label;
+      byDomain.set(domain, d);
+      byDay.set(day, (byDay.get(day) ?? 0) + st.focusMs);
+    }
+  }
+
+  const hasData = totalVisits > 0 || totalMs > 0;
+  habitsDash.style.display = hasData ? 'block' : 'none';
+  habitsEmpty.textContent = hasData
+    ? ''
+    : s.trackUsage
+      ? 'No usage data yet — browse for a while and come back.'
+      : 'Turn on tracking to build your habits dashboard.';
+  if (!hasData) return;
+
+  // Summary stat tiles.
+  habitsSummary.innerHTML = '';
+  const topCat = [...byLabel.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '—';
+  const tiles: Array<[string, string]> = [
+    ['Focused time', fmtMs(totalMs)],
+    ['Visits', String(totalVisits)],
+    ['Top category', topCat],
+  ];
+  for (const [label, value] of tiles) {
+    const tile = document.createElement('div');
+    tile.className = 'stat-tile';
+    const l = document.createElement('div');
+    l.className = 'stat-label';
+    l.textContent = label;
+    const v = document.createElement('div');
+    v.className = 'stat-value';
+    v.textContent = value;
+    v.title = value;
+    tile.appendChild(l);
+    tile.appendChild(v);
+    habitsSummary.appendChild(tile);
+  }
+
+  // Focused time by category — horizontal bars, top 10.
+  habitsCats.innerHTML = '';
+  const cats = [...byLabel.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const maxCat = Math.max(cats[0]?.[1] ?? 0, 1);
+  for (const [label, ms] of cats) {
+    const row = document.createElement('div');
+    row.className = 'hbar-row';
+    const name = document.createElement('div');
+    name.className = 'hbar-name';
+    name.textContent = label;
+    name.title = label;
+    const track = document.createElement('div');
+    track.className = 'hbar-track';
+    const fill = document.createElement('div');
+    fill.className = 'hbar-fill';
+    fill.style.width = `${(ms / maxCat) * 100}%`;
+    track.appendChild(fill);
+    const val = document.createElement('div');
+    val.className = 'hbar-val';
+    val.textContent = fmtMs(ms);
+    row.appendChild(name);
+    row.appendChild(track);
+    row.appendChild(val);
+    habitsCats.appendChild(row);
+  }
+
+  // Daily focused time — 7 columns, value labeled only on the peak day.
+  habitsTrend.innerHTML = '';
+  const dayNames = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+  const days: string[] = [];
+  for (let i = 6; i >= 0; i--) days.push(dayKey(Date.now() - i * 24 * 60 * 60 * 1000));
+  const maxDay = Math.max(...days.map((d) => byDay.get(d) ?? 0), 1);
+  for (const day of days) {
+    const ms = byDay.get(day) ?? 0;
+    const col = document.createElement('div');
+    col.className = 'trend-col';
+    if (ms === maxDay) {
+      const cap = document.createElement('div');
+      cap.className = 'trend-cap';
+      cap.textContent = fmtMs(ms);
+      col.appendChild(cap);
+    }
+    const fill = document.createElement('div');
+    fill.className = 'trend-fill';
+    // 96px container minus 16px label headroom; keep a sliver for non-zero days.
+    fill.style.height = `${ms > 0 ? Math.max(2, Math.round((ms / maxDay) * 72)) : 0}px`;
+    col.appendChild(fill);
+    const wd = document.createElement('div');
+    wd.className = 'trend-day';
+    wd.textContent = dayNames[new Date(`${day}T12:00:00`).getDay()];
+    col.appendChild(wd);
+    habitsTrend.appendChild(col);
+  }
+
+  // Top sites table.
+  habitsDomains.innerHTML = '';
+  const header = document.createElement('tr');
+  for (const [text, cls] of [
+    ['Site', ''],
+    ['Category', ''],
+    ['Visits', 'num'],
+    ['Time', 'num'],
+  ] as const) {
+    const th = document.createElement('th');
+    th.textContent = text;
+    if (cls) th.className = cls;
+    header.appendChild(th);
+  }
+  habitsDomains.appendChild(header);
+  const topDomains = [...byDomain.entries()]
+    .sort((a, b) => b[1].focusMs - a[1].focusMs)
+    .slice(0, 10);
+  for (const [domain, d] of topDomains) {
+    const tr = document.createElement('tr');
+    const tdDomain = document.createElement('td');
+    tdDomain.textContent = domain;
+    const tdLabel = document.createElement('td');
+    tdLabel.className = 'domain-label';
+    tdLabel.textContent = d.label;
+    const tdVisits = document.createElement('td');
+    tdVisits.className = 'num';
+    tdVisits.textContent = String(d.visits);
+    const tdTime = document.createElement('td');
+    tdTime.className = 'num';
+    tdTime.textContent = fmtMs(d.focusMs);
+    tr.append(tdDomain, tdLabel, tdVisits, tdTime);
+    habitsDomains.appendChild(tr);
+  }
+}
+
+// The Habits section is self-contained: the toggle applies immediately rather
+// than waiting for the Save button (and Save never touches trackUsage).
+trackToggle.addEventListener('change', async () => {
+  await setSettings({ trackUsage: trackToggle.checked });
+  void renderHabits();
+});
+
+usageClearBtn.addEventListener('click', async () => {
+  await clearUsage();
+  void renderHabits();
 });
 
 // ---------------------------------------------------------------------------
