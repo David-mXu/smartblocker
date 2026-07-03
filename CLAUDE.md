@@ -25,7 +25,7 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
 - `npm run typecheck` — `tsc --noEmit`
 - `node scripts/benchmark.mjs <nli:modelId | embed:modelId>` — THE model
   decision gate: runs a candidate against `scripts/eval-dataset.json`
-  (223 hand-checked cases incl. 56 productive negatives) and reports top-1,
+  (229 hand-checked cases incl. 56 productive negatives) and reports top-1,
   productive-FP rate, must-block recall, latency, and a threshold sweep.
   Flags: `--template=N` (NLI hypothesis variants), `--temp=T` (embed softmax
   temperature), `--verbose`.
@@ -163,8 +163,15 @@ Commit and push when appropriate.
   Live in Chromium: ~9-15ms/title.
 - The embedding backend fixes the old proper-noun ceiling honestly:
   "Elden Ring Boss Fight" → video games 0.89 (was: sports).
-- Remaining weak spots: sparse titles ("Home / X" → neutral), and
-  programming/science titles sometimes land in neutral documentation/work
+- 2026-07-02 seed tune (found via real usage: apple.com pages misread once
+  og-description marketing copy was fed as context): brand-storefront +
+  whiteboard/kanban seeds added; 229-case eval now 88.8% top-1, 3.6%
+  productive FP, 78.7% recall. Both remaining FPs ("Pull requests ·
+  facebook/react" → social, "Sprint retro board | Miro" → shopping) are
+  covered by DEFAULT_WHITELIST (github.com, miro.com) in practice.
+- Remaining weak spots: sparse titles ("Home / X" → neutral), enriched
+  marketing copy pulling toward spec-y categories (mitigated, watch it), and
+  programming/science titles sometimes landing in neutral documentation/work
   centroids — harmless for blocking (neutral never blocks), visible in top-1.
 - Improving the model is now dataset work: grow `eval-dataset.json` (and
   seeds — but keep them disjoint) from real feedback records.

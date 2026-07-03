@@ -47,6 +47,7 @@ export const DEFAULT_WHITELIST: string[] = [
   'slack.com',
   'atlassian.net',
   'figma.com',
+  'miro.com',
   'zoom.us',
   'teams.microsoft.com',
   // AI assistants

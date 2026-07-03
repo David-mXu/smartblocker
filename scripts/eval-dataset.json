@@ -41,6 +41,12 @@
     { "input": "Unboxing my entire $2,000 tech haul", "expected": ["online shopping", "memes and entertainment"] },
     { "input": "Flash sale: last chance for 40% off sitewide", "expected": ["online shopping"] },
     { "input": "eBay: iphone 15 pro max 256gb unlocked", "expected": ["online shopping"] },
+    { "input": "iPhone 16 Pro and iPhone 16 Pro Max - Apple", "expected": ["online shopping"] },
+    { "input": "Apple Store Online - Apple", "expected": ["online shopping"] },
+    { "input": "Apple Watch Series 10 - Apple", "expected": ["online shopping"] },
+    { "input": "Samsung Galaxy S25 Ultra | Samsung US", "expected": ["online shopping"] },
+    { "input": { "title": "iPhone 16 Pro and iPhone 16 Pro Max - Apple", "channel": "Apple", "context": "Built for Apple Intelligence, with a stunning titanium design and the fastest chip ever in an iPhone." }, "expected": ["online shopping"] },
+    { "input": { "title": "MacBook Air 13-inch and 15-inch - Apple", "channel": "Apple", "context": "Supercharged by the M4 chip, MacBook Air is up to 23x faster than Intel-based models." }, "expected": ["online shopping"] },
 
     { "input": "Home / X", "expected": ["social media and networking"] },
     { "input": "Instagram", "expected": ["social media and networking"] },

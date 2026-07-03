@@ -98,7 +98,7 @@
       ]
     },
     "online shopping": {
-      "description": "E-commerce product pages, deals, discounts, hauls, carts, checkouts and buying guides.",
+      "description": "E-commerce product pages, brand storefronts, deals, discounts, hauls, carts, checkouts and buying guides.",
       "examples": [
         "Limited time offer: 50% off everything in the sale section",
         "Product page: wireless earbuds with noise cancelling",
@@ -106,7 +106,11 @@
         "Deal alert: robot vacuum at its lowest price ever",
         "Add to cart: the kitchen gadgets I use daily",
         "Comparing the best budget standing desks to buy",
-        "Free shipping on orders over $35"
+        "Free shipping on orders over $35",
+        "Official brand store: shop the latest phones, laptops, and accessories",
+        "The all-new flagship smartphone. Pro camera. All-day battery. Buy now with trade-in.",
+        "Introducing the next-generation smartwatch, available in two sizes and new finishes",
+        "Our thinnest, lightest laptop ever, supercharged by the new chip. Order today, free delivery."
       ]
     },
     "social media and networking": {
@@ -160,7 +164,7 @@
   },
   "neutral": {
     "work and productivity": {
-      "description": "Work tools, project management, meetings, documents, email, dashboards and professional tasks.",
+      "description": "Work tools, project management, meetings, documents, email, dashboards, whiteboards and professional tasks.",
       "examples": [
         "Standup notes - action items for the week",
         "Shared spreadsheet: budget tracking Q2",
@@ -168,7 +172,10 @@
         "Design review meeting agenda",
         "Draft: quarterly report for leadership",
         "Deployment dashboard: all services green",
-        "Team calendar and time-off planner"
+        "Team calendar and time-off planner",
+        "Online whiteboard for team brainstorming and planning",
+        "Kanban board with this sprint's tickets",
+        "Retrospective board: what went well, what to improve"
       ]
     },
     "documentation and reference": {
