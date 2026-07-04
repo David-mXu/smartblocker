@@ -4,12 +4,15 @@
 //
 //   node scripts/lock-math-test.mjs
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   EMPTY_LOCK_STATE,
   currentWindowEnd,
   deriveLockStatus,
   isInScheduleWindow,
+  mergeLockStates,
   nextBoundary,
+  sanitizeLockState,
   validateScheduleRule,
 } from '../src/shared/lock-math.ts';
 
@@ -172,6 +175,41 @@ test('start == end (empty window) is rejected', () => {
 test('out-of-range minutes are rejected', () => {
   assert.notEqual(validateScheduleRule({ ...workdays, endMinutes: 1440 }), null);
 });
+
+// --- cross-language golden fixtures (shared with the Rust companion) ---
+// The same file drives flowguard-core's cargo tests; a case failing here or
+// there means the TS and Rust lock implementations have drifted apart.
+const fixtures = JSON.parse(
+  readFileSync(
+    new URL('../companion/crates/flowguard-core/tests/fixtures/lock-cases.json', import.meta.url),
+    'utf8',
+  ),
+);
+
+for (const c of fixtures.mergeLockStates) {
+  test(`fixture merge: ${c.name}`, () => {
+    assert.deepEqual(mergeLockStates(c.a, c.b), c.expect);
+    // The merge is a convergence step between two independent stores — it
+    // must be commutative and idempotent or the sides never settle.
+    assert.deepEqual(mergeLockStates(c.b, c.a), c.expect);
+    assert.deepEqual(mergeLockStates(c.expect, c.expect), c.expect);
+  });
+}
+for (const c of fixtures.deriveLockStatus) {
+  test(`fixture status: ${c.name}`, () => {
+    assert.deepEqual(deriveLockStatus(c.state, c.now), c.expect);
+  });
+}
+for (const c of fixtures.nextBoundary) {
+  test(`fixture boundary: ${c.name}`, () => {
+    assert.equal(nextBoundary(c.state, c.now), c.expect);
+  });
+}
+for (const c of fixtures.sanitizeLockState) {
+  test(`fixture sanitize: ${c.name}`, () => {
+    assert.deepEqual(sanitizeLockState(c.raw, c.now, c.maxLockMs), c.expect);
+  });
+}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exitCode = 1;

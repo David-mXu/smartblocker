@@ -26,6 +26,10 @@ export interface LockState {
   frozenUntil: number | null;
   /** Recurring locked windows — active windows also force blocking on. */
   schedules: ScheduleRule[];
+  /** When `schedules` was last replaced (epoch ms; absent = 0). Only used by
+   *  mergeLockStates: schedule edits happen exclusively while unlocked, so
+   *  last-writer-wins is safe — a plain union would resurrect deleted rules. */
+  schedulesUpdatedAt?: number;
 }
 
 export interface LockStatus {
@@ -132,6 +136,85 @@ export function deriveLockStatus(state: LockState, now: number): LockStatus {
     forceBlocking: windowEnd !== null || reasons.includes('frozen'),
     reasons,
     until: state.passwordHash ? null : ends.length ? Math.max(...ends) : null,
+  };
+}
+
+/** Merge two lock states monotonically (commutative, idempotent — the
+ *  desktop companion and the extension each keep a copy and converge by
+ *  merging, so neither side can shorten a lock by syncing). Mirrored by
+ *  `merge.rs` in the companion; change both together, covered by the shared
+ *  fixtures in companion/crates/flowguard-core/tests/fixtures/lock-cases.json. */
+export function mergeLockStates(a: LockState, b: LockState): LockState {
+  const maxNullable = (x: number | null, y: number | null): number | null =>
+    x === null ? y : y === null ? x : Math.max(x, y);
+  // Armed if either armed; on conflicting hashes pick the lexicographically
+  // smaller so the merge stays commutative (either password then unlocks).
+  const passwordHash =
+    a.passwordHash === null
+      ? b.passwordHash
+      : b.passwordHash === null
+        ? a.passwordHash
+        : a.passwordHash < b.passwordHash
+          ? a.passwordHash
+          : b.passwordHash;
+  const aTs = a.schedulesUpdatedAt ?? 0;
+  const bTs = b.schedulesUpdatedAt ?? 0;
+  let schedules: ScheduleRule[];
+  if (aTs > bTs) schedules = a.schedules;
+  else if (bTs > aTs) schedules = b.schedules;
+  else {
+    // Equal timestamps (typically both legacy 0): deterministic union by id.
+    // A same-id content conflict picks the canonically smaller rule so the
+    // union stays commutative regardless of argument order.
+    const canon = (r: ScheduleRule) =>
+      `${r.startMinutes}|${r.endMinutes}|${[...r.days].sort((x, y) => x - y).join(',')}`;
+    const byId = new Map<string, ScheduleRule>();
+    for (const r of [...a.schedules, ...b.schedules]) {
+      const prev = byId.get(r.id);
+      if (!prev || canon(r) < canon(prev)) byId.set(r.id, r);
+    }
+    schedules = [...byId.values()].sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+  }
+  return {
+    timerUntil: maxNullable(a.timerUntil, b.timerUntil),
+    passwordHash,
+    frozenUntil: maxNullable(a.frozenUntil, b.frozenUntil),
+    schedules,
+    schedulesUpdatedAt: Math.max(aTs, bTs),
+  };
+}
+
+/** Coerce untrusted input (the companion talks over Native Messaging) into a
+ *  well-formed LockState: wrong types dropped, invalid rules dropped, end
+ *  timestamps clamped to `now` + maxLockMs so a bad peer cannot lock forever. */
+export function sanitizeLockState(raw: unknown, now: number, maxLockMs: number): LockState {
+  const o = (raw ?? {}) as Record<string, unknown>;
+  const cap = now + maxLockMs;
+  const until = (v: unknown): number | null =>
+    typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.min(v, cap) : null;
+  const schedules = Array.isArray(o.schedules)
+    ? (o.schedules as ScheduleRule[]).filter(
+        (r) =>
+          r !== null &&
+          typeof r === 'object' &&
+          typeof r.id === 'string' &&
+          validateScheduleRule(r) === null,
+      )
+    : [];
+  return {
+    timerUntil: until(o.timerUntil),
+    passwordHash:
+      typeof o.passwordHash === 'string' && /^[0-9a-f]{64}$/.test(o.passwordHash)
+        ? o.passwordHash
+        : null,
+    frozenUntil: until(o.frozenUntil),
+    schedules,
+    schedulesUpdatedAt:
+      typeof o.schedulesUpdatedAt === 'number' &&
+      Number.isFinite(o.schedulesUpdatedAt) &&
+      o.schedulesUpdatedAt > 0
+        ? Math.min(o.schedulesUpdatedAt, cap)
+        : 0,
   };
 }
 

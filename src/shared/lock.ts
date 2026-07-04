@@ -14,6 +14,8 @@ import { api } from './api';
 import {
   EMPTY_LOCK_STATE,
   deriveLockStatus,
+  mergeLockStates,
+  sanitizeLockState,
   validateScheduleRule,
 } from './lock-math';
 import type { LockState, LockStatus, ScheduleRule } from './lock-math';
@@ -107,5 +109,25 @@ export async function setSchedules(rules: ScheduleRule[]): Promise<void> {
     const problem = validateScheduleRule(r);
     if (problem) throw new Error(`Invalid schedule: ${problem}`);
   }
-  await writeLockState({ ...(await getLockState()), schedules: rules });
+  await writeLockState({
+    ...(await getLockState()),
+    schedules: rules,
+    schedulesUpdatedAt: Date.now(),
+  });
+}
+
+/** Fold the desktop companion's copy of the lock state into ours. Merge-only
+ *  (monotonic — this can extend locks, never shorten them), with the remote
+ *  input sanitized: it arrives over Native Messaging from another process.
+ *  Returns whether our stored state changed; callers only re-broadcast on
+ *  true, which is what keeps the extension↔companion sync from looping. */
+export async function mergeRemoteLockState(remote: unknown): Promise<boolean> {
+  const now = Date.now();
+  const current = { ...EMPTY_LOCK_STATE, ...(await getLockState()) };
+  const merged = mergeLockStates(current, sanitizeLockState(remote, now, MAX_LOCK_MS));
+  const changed =
+    JSON.stringify(merged) !==
+    JSON.stringify({ ...current, schedulesUpdatedAt: current.schedulesUpdatedAt ?? 0 });
+  if (changed) await writeLockState(merged);
+  return changed;
 }

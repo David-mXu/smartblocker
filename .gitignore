@@ -3,3 +3,7 @@ dist/
 .e2e-profile/
 *.local
 .DS_Store
+# Private key that fixes the Chrome extension ID (manifest "key" is derived
+# from it). Never commit; back it up — losing it changes the dev install ID.
+flowguard-dev-key.pem
+companion/target/

@@ -1,4 +1,5 @@
 // popup/options/offscreen <-> background message contract.
+import type { CompanionSnapshot } from './companion-protocol';
 import type { Settings } from './settings';
 
 /** Classifier input. Phase 2 widens it from a bare title to richer page
@@ -29,7 +30,10 @@ export type Request =
   | { type: 'OVERRIDE'; title: string; url?: string; label?: string; score?: number }
   // Popup "this page should have been blocked" report (false negative).
   | { type: 'REPORT_FN'; title: string; url: string; correctedLabel: string }
-  | { type: 'CLOSE_TAB' };
+  | { type: 'CLOSE_TAB' }
+  // Options page: state of the Native Messaging bridge to the desktop
+  // companion (silently 'not-installed' for free-tier users without it).
+  | { type: 'GET_COMPANION_STATUS' };
 
 export type EventMessage =
   | { type: 'MODEL_PROGRESS'; file?: string; progress?: number; status: string };
@@ -37,6 +41,12 @@ export type EventMessage =
 export interface SettingsResponse {
   ok: boolean;
   settings?: Settings;
+  error?: string;
+}
+
+export interface CompanionStatusResponse {
+  ok: boolean;
+  snapshot?: CompanionSnapshot;
   error?: string;
 }
 
