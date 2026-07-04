@@ -15,6 +15,10 @@ use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Fat-finger cap on timer/frozen durations — mirrors `MAX_LOCK_MS` in
+/// `src/shared/lock.ts`; both sides clamp remote input with it.
+pub const MAX_LOCK_MS: i64 = 30 * 24 * 3_600_000;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScheduleRule {

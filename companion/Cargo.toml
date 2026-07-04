@@ -1,5 +1,17 @@
-# Desktop-companion workspace. Only the data/enforcement core for now:
-# the daemon + nm-host bins land in M5, the Tauri tray app in M7.
+# Desktop-companion workspace. The Tauri tray app (M7) joins `members` but
+# NOT `default-members`: its build script needs webkit2gtk/libsoup pkg-config
+# deps that the Linux dev/e2e environment doesn't have, so plain `cargo
+# build`/`cargo test` must never touch it (and don't use `--workspace` in
+# headless runs — it overrides default-members).
 [workspace]
 resolver = "2"
-members = ["crates/flowguard-core"]
+members = [
+    "crates/flowguard-core",
+    "crates/flowguard-nm-host",
+    "crates/flowguard-daemon",
+]
+default-members = [
+    "crates/flowguard-core",
+    "crates/flowguard-nm-host",
+    "crates/flowguard-daemon",
+]

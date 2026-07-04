@@ -8,10 +8,13 @@
 //! (`scripts/lock-math-test.mjs`) consumes too.
 
 pub mod browsers;
+pub mod daemon;
 pub mod enforcer;
 pub mod framing;
+pub mod ipc;
 pub mod lock_math;
 pub mod merge;
 pub mod procwatch;
 pub mod protocol;
+pub mod registration;
 pub mod store;
