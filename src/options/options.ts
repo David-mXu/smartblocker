@@ -1,7 +1,8 @@
 import { api } from '../shared/api';
 import { clearFeedback, getFeedback } from '../shared/feedback';
 import { LABELS } from '../shared/config';
-import type { HistoryScanState } from '../shared/messages';
+import type { CompanionStatusResponse, HistoryScanState } from '../shared/messages';
+import type { CompanionSnapshot } from '../shared/companion-protocol';
 import { getSettings, setSettings } from '../shared/settings';
 import {
   armPasswordLock,
@@ -56,6 +57,8 @@ const lockTimerBtn = document.getElementById('lock-timer-btn') as HTMLButtonElem
 const lockPasswordInput = document.getElementById('lock-password') as HTMLInputElement;
 const lockPasswordBtn = document.getElementById('lock-password-btn') as HTMLButtonElement;
 const lockPasswordMsg = document.getElementById('lock-password-msg') as HTMLSpanElement;
+const companionStatusEl = document.getElementById('companion-status') as HTMLDivElement;
+const companionEnforcementEl = document.getElementById('companion-enforcement') as HTMLUListElement;
 const scheduleList = document.getElementById('schedule-list') as HTMLDivElement;
 const scheduleAddBtn = document.getElementById('schedule-add') as HTMLButtonElement;
 const scheduleSaveBtn = document.getElementById('schedule-save') as HTMLButtonElement;
@@ -433,6 +436,71 @@ scheduleSaveBtn.addEventListener('click', async () => {
   }, 4000);
   await applyLockUI();
 });
+
+// ---------------------------------------------------------------------------
+// Desktop companion: last-known bridge state, fetched from the background
+// (which owns the Native Messaging port). Load-time fetch + a 5s refresh —
+// connection state changes rarely, no need to ride the 1s lock tick.
+// ---------------------------------------------------------------------------
+function renderCompanion(snapshot: CompanionSnapshot): void {
+  const { state, status } = snapshot;
+  companionStatusEl.className = '';
+  companionEnforcementEl.style.display = 'none';
+  companionEnforcementEl.innerHTML = '';
+
+  if (state === 'not-installed') {
+    companionStatusEl.className = 'companion-muted';
+    companionStatusEl.textContent = 'Get FlowGuard Companion — coming with the Pro release';
+    return;
+  }
+  if (state === 'connecting') {
+    companionStatusEl.className = 'companion-muted';
+    companionStatusEl.textContent = 'Connecting…';
+    return;
+  }
+  if (state === 'disconnected') {
+    // A cached status means we have talked to the NM host before — the
+    // companion is installed, its daemon just isn't reachable right now.
+    companionStatusEl.textContent = status
+      ? `Installed but not running (companion v${status.companionVersion})`
+      : 'Disconnected — reconnecting…';
+    return;
+  }
+  companionStatusEl.className = 'companion-connected';
+  companionStatusEl.textContent =
+    'Connected — hardcore mode active' + (status ? ` (companion v${status.companionVersion})` : '');
+  if (status) {
+    const flags: [string, boolean][] = [
+      ['App blocking', status.enforcement.appBlocking],
+      ['Browser watchdog', status.enforcement.watchdog],
+    ];
+    for (const [name, on] of flags) {
+      const li = document.createElement('li');
+      li.textContent = `${on ? '✓' : '✗'} ${name}`;
+      companionEnforcementEl.appendChild(li);
+    }
+    const policy = document.createElement('li');
+    policy.textContent = status.enforcement.policyProtected
+      ? '✓ Policy protection'
+      : '✗ Policy protection (unavailable until store release)';
+    companionEnforcementEl.appendChild(policy);
+    companionEnforcementEl.style.display = 'block';
+  }
+}
+
+async function refreshCompanion(): Promise<void> {
+  try {
+    const resp = (await api.runtime.sendMessage({
+      type: 'GET_COMPANION_STATUS',
+    })) as CompanionStatusResponse;
+    if (resp?.ok && resp.snapshot) renderCompanion(resp.snapshot);
+  } catch {
+    // Background unreachable (SW mid-restart) — keep the last rendered state.
+  }
+}
+
+void refreshCompanion();
+setInterval(() => void refreshCompanion(), 5000);
 
 // ---------------------------------------------------------------------------
 // Custom category input

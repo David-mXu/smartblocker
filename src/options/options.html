@@ -325,6 +325,29 @@
         color: #991b1b;
         align-self: center;
       }
+      /* Desktop companion section */
+      #companion-status {
+        font-size: 13px;
+        font-weight: 600;
+      }
+      #companion-status.companion-muted {
+        color: #888;
+        font-weight: 400;
+        font-style: italic;
+      }
+      #companion-status.companion-connected {
+        color: #16a34a;
+      }
+      #companion-enforcement {
+        list-style: none;
+        margin: 6px 0 0;
+        padding: 0;
+        font-size: 13px;
+        color: #555;
+      }
+      #companion-enforcement li {
+        padding: 2px 0;
+      }
     </style>
   </head>
   <body>
@@ -408,6 +431,14 @@
       <button id="schedule-save">Save schedules</button>
       <span id="schedule-msg"></span>
     </div>
+
+    <h2>Desktop companion</h2>
+    <p style="margin:0 0 8px;color:#555;font-size:13px;">
+      The desktop companion turns locks into hard enforcement: it closes blocklisted apps
+      and restarts the browser if FlowGuard is disabled during a locked session.
+    </p>
+    <div id="companion-status" class="companion-muted">Checking…</div>
+    <ul id="companion-enforcement" style="display:none"></ul>
 
     <h2>History scan</h2>
     <p style="margin:0 0 8px;color:#555;font-size:13px;">

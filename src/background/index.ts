@@ -4,9 +4,10 @@ import { addOverride } from '../shared/overrides';
 import { addFeedback } from '../shared/feedback';
 import { getLockStatus } from '../shared/lock';
 import { cleanTitle } from '../shared/titles';
-import type { Request, TestPairResponse } from '../shared/messages';
+import type { CompanionStatusResponse, Request, TestPairResponse } from '../shared/messages';
 import { classify } from './classifier';
 import { initBlocker } from './blocker';
+import { getCompanionSnapshot, initCompanionBridge } from './companion';
 import { initFeedbackUploader } from './feedback-uploader';
 import { initLockEnforcer } from './lock-enforcer';
 import { scanHistory } from './history-ingester';
@@ -28,6 +29,7 @@ function domainOf(url: string | undefined): string {
 initBlocker();
 initFeedbackUploader();
 initLockEnforcer();
+initCompanionBridge();
 
 // First-run onboarding: open the settings page so the user picks what to block.
 api.runtime.onInstalled.addListener(({ reason }) => {
@@ -35,7 +37,7 @@ api.runtime.onInstalled.addListener(({ reason }) => {
 });
 
 api.runtime.onMessage.addListener(
-  (msg: Request, sender, sendResponse: (r: TestPairResponse) => void) => {
+  (msg: Request, sender, sendResponse: (r: TestPairResponse | CompanionStatusResponse) => void) => {
     if (msg?.type === 'TEST_PAIR') {
       (async () => {
         const results = [];
@@ -90,6 +92,12 @@ api.runtime.onMessage.addListener(
         });
         sendResponse({ ok: true });
       })().catch((e) => sendResponse({ ok: false, error: String(e) }));
+      return true;
+    }
+    if (msg?.type === 'GET_COMPANION_STATUS') {
+      getCompanionSnapshot()
+        .then((snapshot) => sendResponse({ ok: true, snapshot }))
+        .catch((e) => sendResponse({ ok: false, error: String(e) }));
       return true;
     }
     if (msg?.type === 'CLOSE_TAB') {

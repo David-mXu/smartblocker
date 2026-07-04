@@ -298,6 +298,16 @@ try {
       `("${bannerText.trim()}")`,
   );
   if (!optionsLocked) process.exitCode = 1;
+
+  // 7. Companion bridge: this profile has no Native Messaging host, so the
+  // snapshot must settle on 'not-installed' and the section must say so.
+  const companionText = (await opts.locator('#companion-status').textContent()) ?? '';
+  const companionOk = /coming with the pro release/i.test(companionText);
+  console.log(
+    `${companionOk ? 'PASS' : 'FAIL'} companion section shows not-installed state ` +
+      `("${companionText.trim()}")`,
+  );
+  if (!companionOk) process.exitCode = 1;
   await opts.close();
 
   // Restore state so the next run of the persistent profile starts clean.
