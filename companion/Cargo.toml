@@ -1,0 +1,5 @@
+# Desktop-companion workspace. Only the data/enforcement core for now:
+# the daemon + nm-host bins land in M5, the Tauri tray app in M7.
+[workspace]
+resolver = "2"
+members = ["crates/flowguard-core"]
