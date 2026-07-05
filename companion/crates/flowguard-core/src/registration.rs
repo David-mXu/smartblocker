@@ -113,6 +113,70 @@ pub fn uninstall_autostart_linux(home: &Path) -> bool {
     fs::remove_file(home.join(".config/autostart/flowguard-companion.desktop")).is_ok()
 }
 
+#[cfg(windows)]
+pub mod windows {
+    //! Windows registration: HKCU NativeMessagingHosts keys (per-user, no
+    //! elevation) whose default value is the absolute path to a manifest
+    //! JSON on disk, plus the HKCU Run key for autostart.
+    use super::*;
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    const NM_KEYS: &[&str] = &[
+        r"Software\Google\Chrome\NativeMessagingHosts",
+        r"Software\Microsoft\Edge\NativeMessagingHosts",
+        r"Software\Mozilla\NativeMessagingHosts",
+    ];
+    const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+
+    /// Writes the two manifest JSONs next to the binaries (`manifest_dir`)
+    /// and points all three browsers' HKCU keys at them.
+    pub fn install(manifest_dir: &Path, nm_host_path: &Path) -> io::Result<()> {
+        fs::create_dir_all(manifest_dir)?;
+        let chromium_path = manifest_dir.join("dev.davidxu.flowguard.json");
+        let firefox_path = manifest_dir.join("dev.davidxu.flowguard.firefox.json");
+        fs::write(
+            &chromium_path,
+            format!("{:#}\n", chromium_manifest(nm_host_path)),
+        )?;
+        fs::write(
+            &firefox_path,
+            format!("{:#}\n", firefox_manifest(nm_host_path)),
+        )?;
+
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        for key_path in NM_KEYS {
+            let manifest = if key_path.contains("Mozilla") {
+                &firefox_path
+            } else {
+                &chromium_path
+            };
+            let (key, _) = hkcu.create_subkey(format!(r"{key_path}\{NM_HOST_NAME}"))?;
+            key.set_value("", &manifest.to_string_lossy().to_string())?;
+        }
+        Ok(())
+    }
+
+    pub fn uninstall() -> io::Result<()> {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        for key_path in NM_KEYS {
+            let _ = hkcu.delete_subkey_all(format!(r"{key_path}\{NM_HOST_NAME}"));
+        }
+        let _ = hkcu
+            .open_subkey_with_flags(RUN_KEY, winreg::enums::KEY_SET_VALUE)
+            .and_then(|k| k.delete_value("FlowGuardCompanion"));
+        Ok(())
+    }
+
+    pub fn install_autostart(companion_exe: &Path) -> io::Result<()> {
+        let (key, _) = RegKey::predef(HKEY_CURRENT_USER).create_subkey(RUN_KEY)?;
+        key.set_value(
+            "FlowGuardCompanion",
+            &format!("\"{}\"", companion_exe.display()),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

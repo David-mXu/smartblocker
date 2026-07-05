@@ -9,6 +9,7 @@ members = [
     "crates/flowguard-core",
     "crates/flowguard-nm-host",
     "crates/flowguard-daemon",
+    "crates/flowguard-companion",
 ]
 default-members = [
     "crates/flowguard-core",

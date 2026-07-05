@@ -25,6 +25,8 @@ pub struct CompanionConfig {
     /// Extra exe stems treated as incompatible browsers — the e2e uses this
     /// to nominate a fake browser binary.
     pub extra_incompatible_browsers: Vec<String>,
+    /// Pro license key. Unvalidated for now — see `license::is_pro`.
+    pub license_key: Option<String>,
 }
 
 const LOCK_STATE_FILE: &str = "lock-state.json";
@@ -133,9 +135,8 @@ mod tests {
         let (dir, store) = temp_store();
         let config = CompanionConfig {
             app_blocklist: vec!["steam".into()],
-            policy_enforce: false,
-            extension_update_url: None,
             extra_incompatible_browsers: vec!["fakebrowser".into()],
+            ..CompanionConfig::default()
         };
         store.save_config(&config).unwrap();
         assert_eq!(store.load_config(), config);

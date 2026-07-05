@@ -90,7 +90,7 @@ impl Shared {
         let config = self.store.load_config();
         CompanionStatus {
             companion_version: self.version.to_string(),
-            pro: true, // license stub — real licensing is a later milestone
+            pro: crate::license::is_pro(&config),
             enforcement: CompanionEnforcement {
                 app_blocking: true,
                 watchdog: true,
