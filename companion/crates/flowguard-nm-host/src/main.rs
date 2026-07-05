@@ -64,11 +64,16 @@ fn main() {
     });
 
     let mut announced_down = false;
+    // The browser sends hello exactly once per port, but the daemon may
+    // restart mid-port; replaying the cached hello on every (re)connect is
+    // what restores the daemon's browser registry (otherwise the watchdog
+    // sees an anonymous connection and suspects the browser).
+    let mut hello: Option<serde_json::Value> = None;
     loop {
         match ipc::connect(&socket) {
             Ok(stream) => {
                 announced_down = false;
-                relay(stream, &rx, &stdout);
+                relay(stream, &rx, &stdout, &mut hello);
                 // IPC dropped (daemon restart) — fall through to reconnect.
             }
             Err(_) => {
@@ -92,9 +97,16 @@ fn relay(
     stream: ipc::Stream,
     rx: &mpsc::Receiver<serde_json::Value>,
     stdout: &Arc<Mutex<Box<dyn Write + Send>>>,
+    hello: &mut Option<serde_json::Value>,
 ) {
     let (recv, mut send) = stream.split();
     let alive = Arc::new(AtomicBool::new(true));
+
+    if let Some(cached) = hello.as_ref() {
+        if write_frame(&mut send, cached).is_err() {
+            return;
+        }
+    }
 
     // daemon -> browser
     let pump = {
@@ -116,6 +128,9 @@ fn relay(
     while alive.load(Ordering::SeqCst) {
         match rx.recv_timeout(Duration::from_millis(500)) {
             Ok(frame) => {
+                if frame.get("type").and_then(|t| t.as_str()) == Some("hello") {
+                    *hello = Some(frame.clone());
+                }
                 if write_frame(&mut send, &frame).is_err() {
                     break;
                 }

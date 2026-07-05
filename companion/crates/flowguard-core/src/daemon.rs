@@ -271,6 +271,23 @@ fn serve_connection(id: u64, stream: ipc::Stream, shared: Arc<Shared>) {
     });
     shared.conns.lock().unwrap().insert(id, Arc::clone(&entry));
 
+    // Push status (which embeds our lock state) to every fresh connection.
+    // Hello also gets a reply, but a relay RECONNECTING after a daemon
+    // restart never re-hellos — without this push, state seeded while the
+    // extension was attached would sit unsynced until the next local change.
+    {
+        let push = CompanionMessage::CompanionStatus {
+            v: PROTOCOL_VERSION,
+            running: Some(true),
+            status: shared.status(),
+        };
+        let mut sender = entry.sender.lock().unwrap();
+        let _ = write_frame(
+            &mut *sender,
+            &serde_json::to_value(&push).expect("protocol types serialize"),
+        );
+    }
+
     // Loop ends on clean EOF or a bad frame — relay gone (browser closed).
     while let Ok(Some(frame)) = read_frame(&mut recv) {
         // Any well-formed frame counts as liveness for the watchdog.
