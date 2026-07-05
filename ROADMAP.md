@@ -254,16 +254,57 @@ Design facts that matter later:
 
 ---
 
-## Phase 4 — Paid Pro (tamper-proof companion)
+## Phase 4 — Paid Pro (tamper-proof companion) — core ✅ (2026-07-04)
 
-- Free extension + paid "Pro" hardcore mode. The lock UX already exists
-  (Phase 2.9); this phase makes it tamper-proof.
-- Tauri/Rust desktop companion (Windows first) with a Native Messaging bridge:
-  reads the extension's `lockState` key, holds a mirror of it outside the
-  browser, heartbeats the extension and reacts if it goes silent.
-- Managed-policy tamper-proofing (`ExtensionInstallForcelist` — the extension
-  can't be disabled/removed while locked), hosts-file/proxy fallback blocking.
-- $39 lifetime license (Stripe / Lemon Squeezy).
+The desktop companion is built and e2e-verified on Linux; Windows is a
+manual-verification pass away (checklist in `companion/README.md`). Free
+extension = the Phase 2.9 soft lock; the companion is the paid hard enforcer.
+
+**Shipped** (`companion/` cargo workspace + extension bridge):
+
+- **Native Messaging bridge**: `src/background/companion.ts` ⇄
+  `flowguard-nm-host` (stdio relay, one per browser port) ⇄ local IPC ⇄ the
+  companion daemon (`flowguard_core::daemon` — headless `flowguard-daemon`
+  bin on Linux/e2e, embedded in the Tauri app on Windows). Protocol v1
+  (`companion-protocol.ts` ↔ `protocol.rs`): hello / lockStateSync /
+  heartbeat(20s) / companionStatus.
+- **Lock-state convergence**: both sides persist a copy and MERGE
+  (commutative/idempotent/monotonic — `mergeLockStates`, schedules LWW via
+  `schedulesUpdatedAt`, remote input sanitized + clamped). Locks extend,
+  never shorten; wiping the extension doesn't clear a lock; re-broadcast
+  only on change (no sync loops). TS/Rust parity enforced by shared golden
+  fixtures (`companion/.../tests/fixtures/lock-cases.json`).
+- **Hard enforcement while forceBlocking** (pure `enforcer::tick`, monotonic
+  clock, kills only from PERSISTED state): watchdog (supported browser w/o a
+  responsive extension → notify → 60s grace → browser closed), incompatible
+  browsers (Brave/Opera/Vivaldi/…) closed after 10s notice, app blocklist
+  closed instantly. FlowGuard's own processes unkillable; healthy browsers
+  never touched (30s extension keepalive alarm + 60s grace absorb MV3 SW
+  reaping).
+- **Tauri 2 tray app** (`crates/flowguard-companion`): status, start locks
+  (via IPC as a hello-less client so the UI can't mask a dead extension),
+  add-only-while-locked app blocklist, Install/Repair (HKCU registry keys on
+  Windows, manifest files on Linux), autostart, quit refused while locked.
+  Not in cargo default-members — the WSL gate never compiles it.
+- **Stable extension ID** `dhbhbhhcjkfdkfbloeaeedndfjfadajh` via the committed
+  chrome-manifest `"key"` (private key gitignored at the repo root — back it
+  up).
+- **Full-loop Linux e2e** (`scripts/e2e-companion-test.mjs`): real Chromium +
+  NM manifest + real relay/daemon — connected status, bidirectional lock sync
+  incl. daemon-restart seeding, fake blocked app + fake incompatible browser
+  killed, page blocked under a companion-held lock.
+
+**Remaining for the paid release:**
+
+- Manual Windows verification (checklist in `companion/README.md`), real
+  icons (`cargo tauri icon`), signed installer.
+- Managed-policy tamper-proofing ships **implemented but OFF** (`policy.rs`):
+  Chrome/Edge silently ignore non-store force-install on unmanaged consumer
+  machines, and it needs the Phase 3 store `update_url` anyway — the
+  watchdog is the enforcement that works everywhere. Hosts-file/proxy
+  fallback: dropped from scope (2026-07-03 decision).
+- $39 lifetime license (Stripe / Lemon Squeezy) — `license.rs` is a stub
+  (everyone is Pro); `config.json licenseKey` reserved.
 
 ---
 

@@ -16,7 +16,11 @@ locally, teach the classifier via centroid updates, and can be exported or —
 opt-in, off by default — shared to a Cloudflare Worker; see `PRIVACY.md`),
 and the **Cold-Turkey-style lock system** (timer/password locks, scheduled
 blocks, popup "Frozen Turkey" sessions — soft locks; see `lock.ts` and
-ROADMAP Phase 2.9).
+ROADMAP Phase 2.9). Phase 4's **desktop companion** (`companion/`, Rust) is
+the paid HARD enforcer of the same lock state over Native Messaging: watchdog
+closes browsers running without a responsive extension during a lock, closes
+incompatible browsers and blocklisted apps, and survives extension wipes
+(states merge monotonically — see companion/README.md).
 
 Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
 `gh` CLI is not installed).
@@ -45,8 +49,18 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   the script relaunches automatically (up to 3×).
 - `node feedback-worker/test/local-test.mjs` — feedback ingestion worker
   tests against a stubbed D1 (no Cloudflare account needed).
+- `cd companion && cargo test && cargo clippy --all-targets -- -D warnings &&
+  cargo fmt --check` — the companion gate (Rust; needs `. ~/.cargo/env`).
+  NEVER `--workspace` here: it would drag in the Tauri crate, which cannot
+  even compile without webkit2gtk (Windows-only build, see companion/README).
+- `node scripts/e2e-companion-test.mjs` — full companion loop in a real
+  Chromium: builds the bins, registers a real NM manifest in `.e2e-profile/
+  NativeMessagingHosts/`, runs a scratch daemon (`FLOWGUARD_SOCKET` env picks
+  the socket; inherited by the browser-spawned relay), asserts lock sync both
+  directions + fake app/browser kills. Run the plain e2e first (warm model).
 
-Run typecheck + build + e2e before considering any background change done.
+Run typecheck + build + e2e before considering any background change done
+(+ the cargo gate and companion e2e when `companion/` or the bridge changed).
 Commit and push when appropriate.
 
 ## Architecture
@@ -85,6 +99,15 @@ Commit and push when appropriate.
     `settings.shareFeedback` (default OFF) AND `config.ts FEEDBACK_ENDPOINT`
     (empty = disabled) are set; batches unsent records + random resettable
     `installId` to the worker, marks them uploaded.
+  - `companion.ts` — Native-Messaging bridge to the desktop companion:
+    `connectNative('dev.davidxu.flowguard')`, hello + lockStateSync on
+    connect, 20s heartbeats, incoming state → `mergeRemoteLockState` (the
+    storage write wakes `lock-enforcer.ts` — zero enforcement code here).
+    Host-not-found = silent free-tier no-op (retry on SW start + daily
+    alarm); while connected a 30s `companion-keepalive` alarm revives the SW
+    if Chrome reaps it despite the open port (else the companion watchdog
+    would false-positive). Snapshot cached in storage.local
+    `companionSnapshot` for the options page (`GET_COMPANION_STATUS`).
   - `history-ingester.ts` scans chrome.history; `index.ts` wires listeners,
     first-run onboarding, and the `OVERRIDE` / `REPORT_FN` / `CLOSE_TAB`
     handlers.
@@ -116,12 +139,28 @@ Commit and push when appropriate.
   `build-input.ts` (`buildClassifierText` + `inputCacheKey(input, modelKey)`),
   `api.ts` (cross-browser shim + `IS_FIREFOX`), `messages.ts` (message
   contract), `titles.ts` (URL gates + `cleanTitle`), `lock-math.ts` (pure
-  lock/schedule time math — no browser APIs, Node-testable), `lock.ts` (the
-  `lockState` store + the ONLY legal lock transitions: timer/frozen extend-only,
-  password arm/unlock, schedule editing refused while locked).
+  lock/schedule time math — no browser APIs, Node-testable; also
+  `mergeLockStates` + `sanitizeLockState`, MIRRORED in the companion's
+  `merge.rs`/`lock_math.rs` — change both together, parity enforced by
+  `companion/crates/flowguard-core/tests/fixtures/lock-cases.json` which both
+  test suites consume), `lock.ts` (the `lockState` store + the ONLY legal
+  lock transitions: timer/frozen extend-only, password arm/unlock, schedule
+  editing refused while locked; `mergeRemoteLockState` is the companion's
+  merge-only write path), `companion-protocol.ts` (NM wire types v1 —
+  mirrored in `protocol.rs`, erasable-syntax-only).
 - `feedback-worker/` — Cloudflare Worker (wrangler + D1) receiving opt-in
   feedback batches. NOT part of the extension build; deploy is manual (see
   wrangler.toml header; set `FEEDBACK_ENDPOINT` after deploying).
+- `companion/` — the Phase 4 desktop companion (cargo workspace, NOT part of
+  the extension build; see `companion/README.md`). `flowguard-core` = ALL
+  logic (protocol/framing/lock math mirror/merge/store/enforcer/procwatch/
+  ipc/daemon/registration/policy/license), `flowguard-nm-host` = the
+  browser-spawned stdio↔IPC relay, `flowguard-daemon` = headless Linux/e2e
+  face, `flowguard-companion` = Tauri shell (Windows; excluded from
+  default-members). Extension IDs are pinned: chrome/edge
+  `dhbhbhhcjkfdkfbloeaeedndfjfadajh` (from the committed manifest `"key"`;
+  private key `flowguard-dev-key.pem` at repo root, gitignored — DO NOT
+  lose it), firefox `flowguard-poc@davidxu.dev`.
 - Build passes (one Vite config each, since `inlineDynamicImports` forbids
   multi-input): `vite.config.background.ts`, `vite.config.offscreen.ts`
   (chrome only), `vite.config.popup.ts`, `vite.config.options.ts`.
@@ -237,3 +276,19 @@ Commit and push when appropriate.
   shorten never). Import direction is `settings.ts` → `lock.ts`, never the
   reverse (cycle). The lock is SOFT by design: devtools/uninstall/clock
   changes bypass it; the Phase 4 desktop companion is the hard enforcer.
+- **Companion sync must stay loop-free**: every side (extension `lock.ts`,
+  daemon `merge_in`) persists + re-broadcasts a received lock state ONLY if
+  the merge changed it. The merge is commutative/idempotent/monotonic — if
+  you touch it, change `lock-math.ts` AND `merge.rs` together and extend the
+  shared fixtures, or the two stores drift and never converge.
+- **Companion connections are only "a browser" after hello.** The nm-host
+  relay caches the browser's hello and REPLAYS it when it reconnects to a
+  restarted daemon (the extension never re-hellos on a daemon bounce);
+  the daemon pushes companionStatus to every fresh IPC connection for the
+  same reason. Remove either half and the watchdog will suspect (and
+  eventually close) a perfectly healthy browser after a daemon restart.
+  UI clients deliberately DON'T hello, so they can't mask a dead extension.
+- The companion e2e runs the daemon with REAL kills: fake processes are
+  copies of /bin/sleep named `fakegame`/`fakebrowser` (exe-stem matching —
+  Linux `Process::name()` truncates at 15 chars, so procwatch reads exe()).
+  The test's own Chromium is safe because its extension heartbeats.

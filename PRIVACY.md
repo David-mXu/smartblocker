@@ -45,3 +45,11 @@ evaluation datasets and models for FlowGuard.
 
 Prefer not to flip the toggle but still want to help? Use **Export as JSON**
 and attach the file to a GitHub issue.
+
+## Desktop companion (FlowGuard Companion)
+
+The optional desktop companion (`companion/`) has **zero network code**. It
+talks only to your browsers over OS-local Native Messaging pipes and stores
+only your lock state and its own settings (blocked app names) in a local
+data folder. It observes running process names on your machine solely to
+enforce blocks you configured; nothing it sees is transmitted anywhere.
