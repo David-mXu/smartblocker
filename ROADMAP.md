@@ -252,6 +252,42 @@ Design facts that matter later:
 - Marketing: Show HN, r/ADHD, r/productivity, Product Hunt. Hook: *"Stop blocking
   the whole internet. Start blocking your bad habits."*
 
+### Design note: collective feedback → a better model for everyone
+
+How opt-in shared feedback (the `feedback-worker/` D1 store) becomes model
+improvements, once there are external users:
+
+1. **Export** — periodic manual dump of the D1 `feedback` table (wrangler
+   d1 execute / export). No live pipeline; cadence follows volume.
+2. **Sanitize** — drop `installId`s, dedupe identical titles, discard
+   anything that looks personal (names, emails, account numbers in titles).
+   Records are hostname-only by design (PRIVACY.md), but titles can still
+   leak PII — treat every title as untrusted user data.
+3. **Curate (human step, non-negotiable)** — read the misclassifications and
+   pick real, generalizable failures. This is the poisoning firewall: a
+   hostile or confused uploader can submit "facebook.com should be
+   productive" records at volume; nothing they send reaches the model
+   without a human deciding it's a genuine failure mode.
+4. **Eval first, seeds second** — each curated failure becomes an
+   `eval-dataset.json` case FIRST (measure the gap, protect against
+   regression forever), and only then — if a fix is needed — new
+   `prototype-seeds.json` seed texts with *different wording* (the
+   train/test disjointness rule). Every change gates through
+   `scripts/benchmark.mjs`.
+5. **Ship** — seed/dataset changes ride normal releases. Centroids rebuild
+   client-side automatically (version-keyed over seed texts), so a release
+   IS the model update; no download infrastructure needed.
+
+Explicitly ruled out: auto-updating centroids from remote feedback. Three
+reasons: poisoning (one uploader skews a shared centroid for everyone),
+provenance (no way to audit why the model changed), and privacy (raw titles
+would flow into every install). The only *automatic* learning path stays
+local: the user's own corrections folding into their own centroids
+(`feedback.ts getPrototypeExamples`).
+
+Useful aggregate (no curation needed): per-category FP/FN counts from the
+D1 store tell us WHERE to grow the dataset next, without reading titles.
+
 ---
 
 ## Phase 4 — Paid Pro (tamper-proof companion) — core ✅ (2026-07-04)

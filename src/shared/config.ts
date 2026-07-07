@@ -16,7 +16,10 @@ export const CLASSIFIER_BACKEND: 'embed' | 'nli' = 'embed';
 export const EMBED_MODEL_ID = 'Xenova/bge-small-en-v1.5';
 // Softmax temperature over centroid cosine similarities, calibrated on the
 // eval set so the natural operating point sits at the default 0.5 threshold.
-export const SOFTMAX_TEMPERATURE = 0.03;
+// Recalibrated 0.03 -> 0.026 when the 18th centroid (neutral "accounts and
+// sign-in") was added: every extra centroid grows the softmax denominator and
+// deflates all scores, so the temperature re-sharpens to keep 0.5 natural.
+export const SOFTMAX_TEMPERATURE = 0.026;
 
 // Legacy NLI backend (bake-off baseline). Known ceiling: doesn't recognize
 // newer proper nouns — e.g. "Elden Ring Boss Fight" classifies as sports.

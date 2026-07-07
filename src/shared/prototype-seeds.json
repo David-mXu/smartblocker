@@ -110,7 +110,8 @@
         "Official brand store: shop the latest phones, laptops, and accessories",
         "The all-new flagship smartphone. Pro camera. All-day battery. Buy now with trade-in.",
         "Introducing the next-generation smartwatch, available in two sizes and new finishes",
-        "Our thinnest, lightest laptop ever, supercharged by the new chip. Order today, free delivery."
+        "Our thinnest, lightest laptop ever, supercharged by the new chip. Order today, free delivery.",
+        "Online store checkout page. Review your cart and complete your order."
       ]
     },
     "social media and networking": {
@@ -122,7 +123,8 @@
         "Follower growth tips for your profile",
         "What's trending today on the timeline",
         "New followers, likes and mentions",
-        "Explore page: accounts you might like"
+        "Explore page: accounts you might like",
+        "Log in or sign up to see photos and updates from your friends"
       ]
     },
     "gambling and betting": {
@@ -199,7 +201,25 @@
         "Directions and estimated arrival time",
         "Simple dinner recipes for busy weeknights",
         "How to unclog a drain without a plumber",
-        "Flight check-in and boarding pass"
+        "Flight check-in and boarding pass",
+        "Insurance member portal: coverage, claims and documents",
+        "Utility bill payment: view your monthly statement and usage"
+      ]
+    },
+    "accounts and sign-in": {
+      "description": "Sign-in, authentication and account management pages: logins, passwords, verification codes, statements and billing portals for banks, government, schools and other institutions.",
+      "examples": [
+        "Secure sign-in: enter your username and password",
+        "Enter the security code we sent to your phone",
+        "Session timed out: please sign in again to continue",
+        "Account sign-in page. Access your account securely.",
+        "Account management page. Update your contact details, billing and preferences.",
+        "Bank or financial institution page. Chequing, savings, mortgages and credit cards.",
+        "Government services page. Taxes, benefits and permits for residents.",
+        "University or school page. Programs, admissions and student services.",
+        "My Accounts · Transfers · Bill Payments · Statements",
+        "Online banking secure message centre",
+        "Alerts and notices for your account"
       ]
     },
     "career and learning": {
@@ -211,7 +231,8 @@
         "Certification exam study plan",
         "Language learning: daily practice session",
         "Online course progress: module 4 of 8",
-        "Networking event for early-career engineers"
+        "Networking event for early-career engineers",
+        "Student portal: tuition balance and course enrollment"
       ]
     }
   }

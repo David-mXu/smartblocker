@@ -32,7 +32,7 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
 - `npm run typecheck` — `tsc --noEmit`
 - `node scripts/benchmark.mjs <nli:modelId | embed:modelId>` — THE model
   decision gate: runs a candidate against `scripts/eval-dataset.json`
-  (232 hand-checked cases incl. 57 productive negatives) and reports top-1,
+  (274 hand-checked cases incl. 95 productive negatives) and reports top-1,
   productive-FP rate, must-block recall, latency, and a threshold sweep.
   Flags: `--template=N` (NLI hypothesis variants), `--temp=T` (embed softmax
   temperature), `--verbose`.
@@ -209,11 +209,13 @@ Commit and push when appropriate.
 ## Model facts (scripts/benchmark.mjs, 2026-07 bake-off)
 
 - **Shipped: embedding-prototype backend** — `Xenova/bge-small-en-v1.5` q8
-  (~34MB), softmax temperature 0.03, threshold 0.5. One forward pass per title
+  (~34MB), softmax temperature 0.026, threshold 0.5. One forward pass per title
   (label count is FREE), classified against centroids built from
   `prototype-seeds.json` + user corrections. Neutral "productive" centroids
-  (work/docs/errands/career + user-approved) absorb non-distraction pages and
-  can never block.
+  (work/docs/errands/accounts/career + user-approved) absorb non-distraction
+  pages and can never block. NOTE: adding a centroid grows the softmax
+  denominator and deflates every score — recalibrate the temperature (the
+  0.03 → 0.026 move paid for the 18th centroid).
 - Bake-off @0.5 threshold (223-case eval): **bge-small embed: 87.8% top-1,
   1.8% productive FP, 75.4% must-block recall, ~3ms/title (Node)** vs the old
   `nli-deberta-v3-xsmall`: 65.2% / 7.1% / 31.9% @ ~111ms. MiniLM-L6 embed:
@@ -233,8 +235,25 @@ Commit and push when appropriate.
   description meta. Grounds spec-heavy marketing copy; 232-case eval:
   **89.1% top-1, 3.5% productive FP, 79.5% must-block recall @0.5**,
   shopping 22/22. `benchmark.mjs --temp` now defaults to config's
-  SOFTMAX_TEMPERATURE (0.03) — running it at any other temp silently
-  deflates/inflates every threshold metric.
+  SOFTMAX_TEMPERATURE (a hardcoded mirror — keep in sync) — running it at any
+  other temp silently deflates/inflates every threshold metric.
+- 2026-07-07 institutional fix (real usage: bank/gov/university sign-in and
+  account pages blocked as social media — "Sign In", "Messages",
+  "Notifications" titles are near-verbatim social seeds). Fixes, all at zero
+  added latency: (1) `blocker.ts` URL signals — hostname as channel fallback
+  + whole-segment path hints (/login → "Account sign-in page.", /checkout →
+  shopping, /shorts|reels|feed → social; "watch" deliberately absent);
+  (2) `extract-meta.ts` — institutional JSON-LD types (BankOrCreditUnion,
+  GovernmentOrganization, …) map to page-kind hints CHECKED BEFORE product
+  (banks declare credit-card Products), password-field probe emits the same
+  sign-in sentence (blocker dedupes by substring), nav-link fingerprint
+  ("Accounts · Transfers · …") used only when the description is <80 chars;
+  (3) new neutral "accounts and sign-in" centroid + counter-seeds in
+  social/shopping so login/checkout language doesn't leak. 274-case eval:
+  **88.8% top-1, 2.1% productive FP (institutional slice 0), 80.5%
+  must-block recall @0.5**. Deliberate policy: sign-in pages NEVER block —
+  "Log in to Facebook" is eval'd as must-not-block (SSO popups share that
+  title; the post-login feed still blocks).
 - Remaining weak spots: sparse titles ("Home / X" → neutral), enriched
   marketing copy pulling toward spec-y categories (mitigated, watch it), and
   programming/science titles sometimes landing in neutral documentation/work

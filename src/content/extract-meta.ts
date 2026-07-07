@@ -190,6 +190,23 @@ export function extractMeta(): { channel?: string; context?: string } {
         }
       }
       const has = (...names: string[]) => names.some((n) => types.has(n));
+      // Institutional identities first: a bank describing a credit card also
+      // declares Product, but "who the site is" (bank/gov/school) grounds the
+      // classifier better than "what this page sells" — these are exactly the
+      // pages whose sparse account/sign-in titles drift into social media.
+      if (has('bankorcreditunion', 'financialservice', 'bankaccount', 'creditcard')) {
+        return 'Bank or financial institution page.';
+      }
+      if (has('governmentorganization', 'governmentoffice', 'governmentservice')) {
+        return 'Government services page.';
+      }
+      if (has('educationalorganization', 'collegeoruniversity', 'school', 'university')) {
+        return 'University or school page.';
+      }
+      if (has('hospital', 'medicalorganization', 'medicalclinic', 'physician')) {
+        return 'Medical provider page.';
+      }
+      if (has('insuranceagency')) return 'Insurance company page.';
       if (has('product', 'productgroup', 'offer', 'aggregateoffer', 'product.group')) {
         return 'Online store product page.';
       }
@@ -205,6 +222,22 @@ export function extractMeta(): { channel?: string; context?: string } {
       return '';
     }
 
+    // Nav-link fingerprint: a site's own navigation is a strong site-type
+    // signature ("Accounts · Transfers · Bill Payments" vs "Home · Explore ·
+    // Reels"), and it exists on exactly the legacy bank/gov/utility sites
+    // that ship no og: metadata. Only used when the description signal is
+    // missing or short, so it never dilutes a good description.
+    function navFingerprint(): string {
+      const links = document.querySelectorAll('header a, nav a');
+      const texts: string[] = [];
+      for (let i = 0; i < links.length && texts.length < 8; i++) {
+        const t = (links[i].textContent ?? '').trim().replace(/\s+/g, ' ');
+        if (!t || t.length > 24 || texts.indexOf(t) !== -1) continue;
+        texts.push(t);
+      }
+      return trimTo(texts.join(' · '), 80);
+    }
+
     const channel = metaContent('og:site_name') || metaContent('author');
     let body = metaContent('description') || metaContent('og:description');
     if (!body) {
@@ -213,8 +246,16 @@ export function extractMeta(): { channel?: string; context?: string } {
       const h1 = trimTo(textOf(document.querySelector('h1')), 80);
       if (h1 && !document.title.toLowerCase().includes(h1.toLowerCase())) body = h1;
     }
+    if (!body || body.length < 80) {
+      const nav = navFingerprint();
+      if (nav) body = [body, nav].filter(Boolean).join(' ');
+    }
+    // A password field marks account/auth pages — almost never the distraction
+    // itself, and exactly the pages whose sparse titles ("Sign In", "Verify
+    // your identity") otherwise drift into the social media centroid.
+    const signIn = document.querySelector('input[type="password"]') ? 'Account sign-in page.' : '';
     const hint = pageKindHint();
-    const context = trimTo([hint, body].filter(Boolean).join(' '), SNIPPET_LEN);
+    const context = trimTo([signIn, hint, body].filter(Boolean).join(' '), SNIPPET_LEN);
     const result: { channel?: string; context?: string } = {};
     if (channel) result.channel = channel;
     if (context) result.context = context;
