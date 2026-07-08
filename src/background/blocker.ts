@@ -23,11 +23,19 @@ type BlockDecisionInput = Pick<ClassifyOutcome, 'label' | 'score' | 'cached' | '
 
 const armedAt = new Map<number, number>(); // tabId -> nav commit epoch ms
 const lastClassified = new Map<number, string>();
+// Bumped on every arm() (i.e. every committed/SPA navigation). onTitle
+// captures it before its async classify() work and checks it again just
+// before injecting — if the user has since navigated away (e.g. hit back
+// while a slow classification was in flight) the generation has moved on
+// and the now-stale verdict is dropped instead of painting a block screen
+// over a page the user already left.
+const navGeneration = new Map<number, number>();
 
 function arm(tabId: number, url: string) {
   if (isClassifiableUrl(url)) {
     armedAt.set(tabId, Date.now());
     lastClassified.delete(tabId);
+    navGeneration.set(tabId, (navGeneration.get(tabId) ?? 0) + 1);
   }
 }
 
@@ -96,6 +104,7 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
   const title = cleanTitle(rawTitle);
   if (!title || lastClassified.get(tabId) === title) return;
   lastClassified.set(tabId, title);
+  const myGeneration = navGeneration.get(tabId) ?? 0;
 
   const settings = await getSettings();
   const lock = await getLockStatus();
@@ -145,6 +154,12 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
   // EXCEPT during a forced-blocking lock, whose whole point is that past
   // exceptions stop applying.
   if (blocked && !lock.forceBlocking && (await isOverridden(title))) blocked = false;
+
+  // The user may have navigated again (e.g. pressed back) while classify()
+  // was still running — arm() would have bumped the generation. Painting a
+  // block screen for a page the user already left is worse than a missed
+  // block, so drop the stale verdict instead of injecting.
+  if (blocked && navGeneration.get(tabId) !== myGeneration) blocked = false;
 
   let injectMs = 0;
   if (blocked) {
@@ -206,5 +221,6 @@ export function initBlocker() {
   api.tabs.onRemoved.addListener((tabId) => {
     armedAt.delete(tabId);
     lastClassified.delete(tabId);
+    navGeneration.delete(tabId);
   });
 }
