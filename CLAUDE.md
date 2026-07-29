@@ -298,11 +298,20 @@ Commit and push when appropriate.
 - 2026-07-29 measurement overhaul + `v2` eval slice (121 url-bearing cases,
   104 grounded by real `--capture` scrapes). Metrics are reported PER SLICE so
   the v1 numbers above stay directly comparable; `v1` is unchanged at
-  **88.8 / 2.1 / 80.5**. New figures: `v2` **79.1% top-1, 0.0% productive FP,
-  62.8% must-block recall, 85.8% e2e**; combined (395 cases) **86.2% top-1,
+  **88.8 / 2.1 / 80.5**. New figures: `v2` **83.6% top-1, 0.0% productive FP,
+  62.8% must-block recall, 85.8% e2e**; combined (395 cases) **87.4% top-1,
   1.3% productive FP, 74.4% must-block recall, 91.0% e2e decision accuracy**.
   v2 is deliberately harder — real homepages/feeds, institutional pages, and
   whitelisted-host pages whose titles look distracting.
+- **Auth-walled pages must not be capture-grounded.** Anonymous `--capture` of
+  a logged-in surface (linkedin.com/feed, x.com/explore, pinterest search,
+  roblox, 888casino, olg.ca) returns a sign-in interstitial, and
+  `extract-meta.ts`'s password-field probe then prepends "Account sign-in
+  page." — encoding "block this sign-in page" on a must-block case, the exact
+  inverse of the never-block-sign-in policy. Those 6 carry `noCapture` and
+  score on their authored input, which is what a signed-in user actually sees.
+  Capture is ground truth ONLY where the anonymous view matches the user view;
+  check new url-bearing cases for this before trusting a capture.
 - **OPEN FINDING — threshold calibration.** 20 of the 32 combined must-block
   misses have the CORRECT top-1 label but score just under the 0.5 threshold
   (0.18–0.50; a cluster at 0.37–0.48). Richer captured context spreads softmax

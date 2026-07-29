@@ -100,7 +100,7 @@ hand-written guesses about it.
 The shipped classifier is an **embedding-prototype** model
 (`Xenova/bge-small-en-v1.5`, ~34MB): the page text is embedded once and
 matched against per-category prototype embeddings, so adding categories is
-free and inference is ~3ms in Node / ~10ms live. It scores **86.2% top-1 with
+free and inference is ~3ms in Node / ~10ms live. It scores **87.4% top-1 with
 a 1.3% false-positive rate on productive pages and 91.0% end-to-end decision
 accuracy** across all 395 cases — versus 65.2% / 7.1% at ~111ms for the
 zero-shot NLI model it replaced (which remains available as a config

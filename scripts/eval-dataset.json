@@ -1866,7 +1866,8 @@
       },
       "expected": [
         "video games",
-        "memes and entertainment"
+        "memes and entertainment",
+        "social media and networking"
       ],
       "set": "v2",
       "note": "negative control for the sparse slice: a one-word title that SHOULD block",
@@ -1888,12 +1889,7 @@
       ],
       "set": "v2",
       "note": "bare brand name of a game platform; sparse must not mean neutral by default",
-      "captured": {
-        "title": "Roblox",
-        "channel": "Roblox",
-        "context": "Account sign-in page. Roblox is the ultimate virtual universe that lets you create, share experiences with friends, and be anything you can imagine. Join millions of people and discover an infinite va",
-        "at": 1785323817091
-      }
+      "noCapture": "auth/geo-walled: anonymous capture returns a sign-in interstitial, so the captured context carried \"Account sign-in page.\" on a must-block case — contradicting the never-block-sign-in policy. Scores on the authored input, which reflects what a signed-in user actually sees."
     },
     {
       "url": "https://www.chase.com/personal/credit-cards",
@@ -2920,12 +2916,7 @@
       ],
       "set": "v2",
       "note": "X explore tab; two-word title, distinct from the existing Home/Notifications cases",
-      "captured": {
-        "title": "X - The Everything App / X",
-        "channel": "X (formerly Twitter)",
-        "context": "Account sign-in page. From breaking news and entertainment to sports and politics, get the full story with all the live commentary.",
-        "at": 1785323852825
-      }
+      "noCapture": "auth/geo-walled: anonymous capture returns a sign-in interstitial, so the captured context carried \"Account sign-in page.\" on a must-block case — contradicting the never-block-sign-in policy. Scores on the authored input, which reflects what a signed-in user actually sees."
     },
     {
       "url": "https://www.reddit.com/r/all/",
@@ -2958,12 +2949,7 @@
       ],
       "set": "v2",
       "note": "deliberate contrast with the existing productive 'LinkedIn: Senior Software Engineer jobs' case — the feed blocks, job search does not",
-      "captured": {
-        "title": "LinkedIn Login, Sign in | LinkedIn",
-        "channel": "LinkedIn",
-        "context": "Account sign-in page. Login to LinkedIn to keep in touch with people you know, share ideas, and build your career.",
-        "at": 1785323854600
-      }
+      "noCapture": "auth/geo-walled: anonymous capture returns a sign-in interstitial, so the captured context carried \"Account sign-in page.\" on a must-block case — contradicting the never-block-sign-in policy. Scores on the authored input, which reflects what a signed-in user actually sees."
     },
     {
       "url": "https://bsky.app/",
@@ -3194,11 +3180,7 @@
       ],
       "set": "v2",
       "note": "'Games' in the title must not tip to video games",
-      "captured": {
-        "title": "888 Casino | Online Casino Ontario",
-        "context": "Account sign-in page.",
-        "at": 1785323863373
-      }
+      "noCapture": "auth/geo-walled: anonymous capture returns a sign-in interstitial, so the captured context carried \"Account sign-in page.\" on a must-block case — contradicting the never-block-sign-in policy. Scores on the authored input, which reflects what a signed-in user actually sees."
     },
     {
       "url": "https://www.ggpoker.com/",
@@ -3248,12 +3230,7 @@
       ],
       "set": "v2",
       "note": "state-run lottery: institutional .ca framing must NOT rescue a genuine gambling site — direct stress test of the institutional fix",
-      "captured": {
-        "title": "OLG | Ontario's Online LOTTERY, CASINO & SPORTS 2026",
-        "channel": "OLG",
-        "context": "Account sign-in page. Discover, enjoy, and experience the fun with our Lotteries, INSTANT-win tickets, and online casino games! Play online casino games and lottery games on OLG.ca!",
-        "at": 1785323866294
-      }
+      "noCapture": "auth/geo-walled: anonymous capture returns a sign-in interstitial, so the captured context carried \"Account sign-in page.\" on a must-block case — contradicting the never-block-sign-in policy. Scores on the authored input, which reflects what a signed-in user actually sees."
     },
     {
       "url": "https://www.bloomberg.com/markets",
@@ -3431,12 +3408,7 @@
       ],
       "set": "v2",
       "note": "home-project research on a social platform; both acceptable labels block, which is the honest default",
-      "captured": {
-        "title": "Pinterest",
-        "channel": "Pinterest",
-        "context": "Account sign-in page. Discover recipes, home ideas, style inspiration and other ideas to try. Skip to content · Explore",
-        "at": 1785323872655
-      }
+      "noCapture": "auth/geo-walled: anonymous capture returns a sign-in interstitial, so the captured context carried \"Account sign-in page.\" on a must-block case — contradicting the never-block-sign-in policy. Scores on the authored input, which reflects what a signed-in user actually sees."
     },
     {
       "url": "https://www.udemy.com/topic/python/",

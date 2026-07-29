@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-29T11:20:08.486Z",
+  "generatedAt": "2026-07-29T13:39:54.294Z",
   "config": {
     "modelId": "Xenova/bge-small-en-v1.5",
     "temperature": 0.026,
@@ -7,7 +7,7 @@
     "centroidCount": 13
   },
   "summary": {
-    "top-1 accuracy": 86.18,
+    "top-1 accuracy": 87.4,
     "productive FP rate": 1.34,
     "must-block recall": 74.4,
     "collateral FP rate": 0,
@@ -22,7 +22,7 @@
       "e2e decision accuracy": 93.16
     },
     "v2": {
-      "top-1 accuracy": 79.1,
+      "top-1 accuracy": 83.58,
       "productive FP rate": 0,
       "must-block recall": 62.79,
       "collateral FP rate": 0,
@@ -1476,8 +1476,8 @@
       "decision": "allow"
     },
     "https://www.roblox.com/|Roblox": {
-      "label": "neutral: accounts and sign-in",
-      "score": 0.3756,
+      "label": "video games",
+      "score": 0.4105,
       "decision": "allow"
     },
     "https://www.chase.com/personal/credit-cards|Credit Cards | Chase": {
@@ -1801,9 +1801,9 @@
       "decision": "block"
     },
     "https://x.com/explore|Explore / X": {
-      "label": "social media and networking",
-      "score": 0.6355,
-      "decision": "block"
+      "label": "adult content",
+      "score": 0.2145,
+      "decision": "allow"
     },
     "https://www.reddit.com/r/all/|r/all": {
       "label": "social media and networking",
@@ -1811,9 +1811,9 @@
       "decision": "block"
     },
     "https://www.linkedin.com/feed/|Feed | LinkedIn": {
-      "label": "neutral: accounts and sign-in",
-      "score": 0.4524,
-      "decision": "allow"
+      "label": "social media and networking",
+      "score": 0.935,
+      "decision": "block"
     },
     "https://bsky.app/|Bluesky Social": {
       "label": "social media and networking",
@@ -1881,9 +1881,9 @@
       "decision": "allow"
     },
     "https://www.888casino.com/|888casino: Online Casino Games": {
-      "label": "neutral: accounts and sign-in",
-      "score": 0.8367,
-      "decision": "allow"
+      "label": "gambling and betting",
+      "score": 0.9016,
+      "decision": "block"
     },
     "https://www.ggpoker.com/|GGPoker | The World's Biggest Poker Room": {
       "label": "gambling and betting",
@@ -1897,7 +1897,7 @@
     },
     "https://www.olg.ca/|OLG | Ontario Lottery and Gaming": {
       "label": "gambling and betting",
-      "score": 0.9328,
+      "score": 0.8623,
       "decision": "block"
     },
     "https://www.bloomberg.com/markets|Markets - Bloomberg": {
@@ -1946,9 +1946,9 @@
       "decision": "allow"
     },
     "https://www.pinterest.com/search/pins/?q=kitchen%20renovation|kitchen renovation ideas | Pinterest": {
-      "label": "social media and networking",
-      "score": 0.6059,
-      "decision": "block"
+      "label": "online shopping",
+      "score": 0.258,
+      "decision": "allow"
     },
     "https://www.udemy.com/topic/python/|Top Python Courses Online | Udemy": {
       "label": "neutral: career and learning",
