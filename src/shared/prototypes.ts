@@ -7,7 +7,10 @@
 // sentence + example titles from prototype-seeds.json). Neutral centroids
 // catch productive/utility pages: a neutral top-1 NEVER blocks, because its
 // label carries the NEUTRAL_PREFIX and can't collide with settings.labels.
-import seeds from './prototype-seeds.json';
+// Import attribute is load-bearing: it lets Node's type-stripping loader import
+// this module directly, which is how scripts/lib/eval-harness.mjs classifies
+// with the REAL centroid pipeline instead of a mirror that can drift.
+import seeds from './prototype-seeds.json' with { type: 'json' };
 
 export const NEUTRAL_PREFIX = 'neutral: ';
 

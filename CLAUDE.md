@@ -30,12 +30,33 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
 - `npm run build` — build both targets: `dist/chrome` (also Edge) + `dist/firefox`
 - `npm run build:chrome` / `npm run build:firefox` — single target
 - `npm run typecheck` — `tsc --noEmit`
-- `node scripts/benchmark.mjs <nli:modelId | embed:modelId>` — THE model
-  decision gate: runs a candidate against `scripts/eval-dataset.json`
-  (274 hand-checked cases incl. 95 productive negatives) and reports top-1,
-  productive-FP rate, must-block recall, latency, and a threshold sweep.
+- `npm run eval` (`scripts/eval.mjs`) — **THE regression gate.** Runs the
+  SHIPPED config over `scripts/eval-dataset.json` (395 cases: 274 `v1` +
+  121 url-bearing `v2`), scores the real block/allow decision (whitelist →
+  blocklist → threshold, not just classifier top-1), and diffs every case
+  against the committed `scripts/eval-baseline.json`. Prints what FIXED and
+  what REGRESSED by name; **exits non-zero on any regression**. Accept new
+  results with `--update-baseline` — the git history of `eval-baseline.json`
+  IS the score history. `--verbose` lists every failing case.
+  `--capture` (opt-in, network) re-scrapes live pages for cases with a `url`
+  using the REAL `extract-meta.ts` under Playwright and writes the result to
+  each case's `captured` field; `--limit=N`/`--only=<substr>` narrow it.
+  Cases flagged `noCapture` are skipped (dead URL, or the site bot-walls
+  headless Chromium) and stay on their hand-authored `input`.
+- `node scripts/benchmark.mjs <nli:modelId | embed:modelId>` — the model
+  **bake-off** tool: runs a CANDIDATE model against the same dataset and
+  reports top-1, productive-FP rate, must-block recall, e2e decision
+  accuracy, latency, and a threshold sweep. Use this to compare candidates;
+  use `npm run eval` to check the shipped config for regressions.
   Flags: `--template=N` (NLI hypothesis variants), `--temp=T` (embed softmax
   temperature), `--verbose`.
+- `node scripts/import-feedback.mjs <export.json | --from-worker …>` — turns
+  real user corrections into **candidate** eval cases in
+  `scripts/feedback-candidates.json` (gitignored review queue). Dedupes
+  against the eval set, refuses anything colliding with `prototype-seeds.json`
+  (train/test split), and groups by how many distinct installs agree.
+  It NEVER writes `eval-dataset.json` or `prototype-seeds.json` — a human
+  moves each candidate to exactly one side.
 - `node scripts/smoke-test.mjs [modelId]` — quick NLI-only sanity check
   (defaults to the legacy NLI model; the shipped backend is `embed`).
 - `node scripts/lock-math-test.mjs` — pure-math unit tests for the lock
@@ -60,7 +81,9 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   directions + fake app/browser kills. Run the plain e2e first (warm model).
 
 Run typecheck + build + e2e before considering any background change done
-(+ the cargo gate and companion e2e when `companion/` or the bridge changed).
+(+ `npm run eval` when anything touching classification changed: seeds,
+config, `extract-meta.ts`, `url-signals.ts`, `build-input.ts`, `prototypes.ts`;
++ the cargo gate and companion e2e when `companion/` or the bridge changed).
 Commit and push when appropriate.
 
 ## Architecture
@@ -138,7 +161,10 @@ Commit and push when appropriate.
   centroids = on-device learning), `overrides.ts` (title-only allow store),
   `build-input.ts` (`buildClassifierText` + `inputCacheKey(input, modelKey)`),
   `api.ts` (cross-browser shim + `IS_FIREFOX`), `messages.ts` (message
-  contract), `titles.ts` (URL gates + `cleanTitle`), `lock-math.ts` (pure
+  contract), `titles.ts` (URL gates + `cleanTitle`), `url-signals.ts`
+  (`hostnameOf` + `urlPathHint` + `applyUrlSignals` — URL-derived hints; in
+  shared/ NOT background/ so the offline evaluator builds classifier input
+  through the same code the blocker uses), `lock-math.ts` (pure
   lock/schedule time math — no browser APIs, Node-testable; also
   `mergeLockStates` + `sanitizeLockState`, MIRRORED in the companion's
   `merge.rs`/`lock_math.rs` — change both together, parity enforced by
@@ -148,9 +174,20 @@ Commit and push when appropriate.
   editing refused while locked; `mergeRemoteLockState` is the companion's
   merge-only write path), `companion-protocol.ts` (NM wire types v1 —
   mirrored in `protocol.rs`, erasable-syntax-only).
-- `feedback-worker/` — Cloudflare Worker (wrangler + D1) receiving opt-in
-  feedback batches. NOT part of the extension build; deploy is manual (see
-  wrangler.toml header; set `FEEDBACK_ENDPOINT` after deploying).
+- `feedback-worker/` — Cloudflare Worker (wrangler + D1). `POST /v1/feedback`
+  ingests opt-in batches **unauthenticated** (every install would otherwise
+  need a secret baked into a public bundle); `GET /v1/export` serves them back
+  to `scripts/import-feedback.mjs` and **requires the `EXPORT_TOKEN` secret**
+  — the table holds users' page titles, so bulk read must never be open, and
+  an unconfigured deploy fails closed (503). NOT part of the extension build;
+  deploy is manual (see wrangler.toml header; set `FEEDBACK_ENDPOINT` after
+  deploying). **Not deployed yet** — `database_id` is still a placeholder and
+  `FEEDBACK_ENDPOINT` is `''`, so no real records flow.
+- `scripts/lib/eval-harness.mjs` — shared by `eval.mjs` and `benchmark.mjs`.
+  Imports the REAL `src/shared` modules (config, prototypes, titles,
+  build-input, url-signals) under Node type-stripping and never mirrors them;
+  that is why `prototypes.ts` carries `with { type: 'json' }` on its seeds
+  import. Owns the block-decision ladder and all metric math.
 - `companion/` — the Phase 4 desktop companion (cargo workspace, NOT part of
   the extension build; see `companion/README.md`). `flowguard-core` = ALL
   logic (protocol/framing/lock math mirror/merge/store/enforcer/procwatch/
@@ -258,8 +295,27 @@ Commit and push when appropriate.
   marketing copy pulling toward spec-y categories (mitigated, watch it), and
   programming/science titles sometimes landing in neutral documentation/work
   centroids — harmless for blocking (neutral never blocks), visible in top-1.
-- Improving the model is now dataset work: grow `eval-dataset.json` (and
-  seeds — but keep them disjoint) from real feedback records.
+- 2026-07-29 measurement overhaul + `v2` eval slice (121 url-bearing cases,
+  104 grounded by real `--capture` scrapes). Metrics are reported PER SLICE so
+  the v1 numbers above stay directly comparable; `v1` is unchanged at
+  **88.8 / 2.1 / 80.5**. New figures: `v2` **79.1% top-1, 0.0% productive FP,
+  62.8% must-block recall, 85.8% e2e**; combined (395 cases) **86.2% top-1,
+  1.3% productive FP, 74.4% must-block recall, 91.0% e2e decision accuracy**.
+  v2 is deliberately harder — real homepages/feeds, institutional pages, and
+  whitelisted-host pages whose titles look distracting.
+- **OPEN FINDING — threshold calibration.** 20 of the 32 combined must-block
+  misses have the CORRECT top-1 label but score just under the 0.5 threshold
+  (0.18–0.50; a cluster at 0.37–0.48). Richer captured context spreads softmax
+  mass across centroids and deflates the max score, so real pages score lower
+  than the terse hand-written v1 titles the temperature was calibrated on.
+  Sweep (combined): @0.50 → 74.4% recall / 1.3% FP; @0.40 → 81.6% / 2.0%;
+  @0.35 → 86.4% / 2.7%. Lowering the threshold (or re-tuning
+  SOFTMAX_TEMPERATURE against the v2 slice) is the obvious next move — it is a
+  product call about blocking aggressiveness, so it was left at 0.5.
+- Improving the model is now dataset work, and it is mechanical: run
+  `scripts/import-feedback.mjs` over real corrections → review
+  `feedback-candidates.json` → move each case into `eval-dataset.json` (test)
+  or `prototype-seeds.json` (train), never both → `npm run eval`.
 - Legacy NLI facts: zero-shot = one pass per label; tiny NLI models miss newer
   proper nouns; enrichment can backfire ("FromSoftware" contains "Software" →
   programming). Kept in `TEST_TITLES` deliberately.

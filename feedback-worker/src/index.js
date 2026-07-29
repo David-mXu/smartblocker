@@ -3,14 +3,22 @@
 // them in D1. Records contain page title + hostname + verdicts only — the
 // extension never sends full URLs or browsing history (see ../PRIVACY.md).
 //
-// Deliberately boring: one POST route, schema validation, size caps, CORS for
+// Deliberately boring: POST ingest with schema validation, size caps, CORS for
 // extension origins, idempotent inserts (the uploader retries un-acked
-// batches). No auth — the data is low-sensitivity and per-IP abuse is bounded
-// by the caps; revisit if the endpoint ever attracts junk.
+// batches), plus an authenticated GET export used by scripts/import-feedback.mjs
+// to turn shared corrections into eval cases.
+//
+// AUTH ASYMMETRY, on purpose: ingest is unauthenticated (the data is
+// low-sensitivity, per-IP abuse is bounded by the caps, and every install would
+// otherwise need a shared secret baked into a public extension bundle) but
+// EXPORT IS NOT. The table holds users' page titles, so bulk read requires the
+// EXPORT_TOKEN secret. Never relax that.
 
 const MAX_BATCH = 100;
 const MAX_TEXT = 500;
 const KINDS = new Set(['false_positive', 'false_negative']);
+const EXPORT_PAGE_MAX = 500;
+const EXPORT_PAGE_DEFAULT = 200;
 
 const CORS_HEADERS = {
   'access-control-allow-origin': '*', // extension origins are per-install ids
@@ -45,11 +53,70 @@ export function validateRecord(r) {
   return null;
 }
 
+/**
+ * Constant-time-ish bearer check. Returns null when authorized, else a
+ * Response. A missing EXPORT_TOKEN secret disables export entirely rather than
+ * defaulting open — an unconfigured deploy must never serve user titles.
+ */
+function authorizeExport(request, env) {
+  if (!env.EXPORT_TOKEN) return json(503, { error: 'export not configured' });
+  const header = request.headers.get('authorization') ?? '';
+  const presented = header.startsWith('Bearer ') ? header.slice(7) : '';
+  const expected = env.EXPORT_TOKEN;
+  // Length check first, then a full-width compare so early bytes don't leak.
+  let diff = presented.length === expected.length ? 0 : 1;
+  for (let i = 0; i < Math.max(presented.length, expected.length); i++) {
+    diff |= presented.charCodeAt(i % (presented.length || 1)) ^ expected.charCodeAt(i % (expected.length || 1));
+  }
+  if (diff !== 0) return json(401, { error: 'unauthorized' });
+  return null;
+}
+
+/**
+ * GET /v1/export?since=<id>&limit=<n>
+ * Cursor-paginated by autoincrement id (stable under concurrent inserts, which
+ * a timestamp cursor would not be). Returns { rows, nextCursor, done }.
+ */
+async function handleExport(request, env, url) {
+  const denied = authorizeExport(request, env);
+  if (denied) return denied;
+
+  const since = Number(url.searchParams.get('since') ?? '0');
+  const limitRaw = Number(url.searchParams.get('limit') ?? String(EXPORT_PAGE_DEFAULT));
+  if (!Number.isInteger(since) || since < 0) return json(400, { error: 'bad since' });
+  const limit = Number.isInteger(limitRaw)
+    ? Math.min(Math.max(limitRaw, 1), EXPORT_PAGE_MAX)
+    : EXPORT_PAGE_DEFAULT;
+
+  const { results } = await env.DB.prepare(
+    `SELECT id, install_id, ext_version, kind, title, channel, context, domain,
+            model_label, score, corrected_label, model_id, ts, received_at
+       FROM feedback
+      WHERE id > ?
+      ORDER BY id ASC
+      LIMIT ?`,
+  )
+    .bind(since, limit)
+    .all();
+
+  const rows = results ?? [];
+  return json(200, {
+    rows,
+    nextCursor: rows.length ? rows[rows.length - 1].id : since,
+    done: rows.length < limit,
+  });
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS_HEADERS });
 
     const url = new URL(request.url);
+
+    if (request.method === 'GET' && url.pathname === '/v1/export') {
+      return handleExport(request, env, url);
+    }
+
     if (request.method !== 'POST' || url.pathname !== '/v1/feedback') {
       return json(404, { error: 'not found' });
     }

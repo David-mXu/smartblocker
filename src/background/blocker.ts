@@ -5,6 +5,7 @@ import { getLockStatus } from '../shared/lock';
 import { isOverridden } from '../shared/overrides';
 import type { ClassifyOutcome, LatencySample } from '../shared/messages';
 import { cleanTitle, isClassifiableUrl, isWhitelisted, matchedBlocklistEntry } from '../shared/titles';
+import { applyUrlSignals } from '../shared/url-signals';
 import { extractMeta } from '../content/extract-meta';
 import { classify } from './classifier';
 import { showBlockScreen } from './blockscreen';
@@ -53,42 +54,6 @@ async function logSample(sample: LatencySample) {
   );
 }
 
-// URL-derived signals — cheap, and available even when extractMeta gets
-// nothing (legacy pages with no metadata, injection failures, DOM not
-// painted yet at title time).
-
-function hostnameOf(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, '');
-  } catch {
-    return '';
-  }
-}
-
-// Whole path segments only (never substrings): high-precision page-type
-// declarations sites make in their own URLs. "watch" is deliberately absent —
-// youtube.com/watch spans tutorials as much as distractions, and YouTube
-// pages already carry channel + description signals.
-const PATH_HINTS: [string[], string][] = [
-  [['login', 'signin', 'sign-in', 'signon', 'sign-on', 'auth'], 'Account sign-in page.'],
-  [['account', 'accounts', 'myaccount', 'billing'], 'Account management page.'],
-  [['checkout', 'cart', 'basket'], 'Online store checkout page.'],
-  [['shorts', 'reels', 'feed'], 'Video or social media feed page.'],
-];
-
-function urlPathHint(url: string): string {
-  let segments: string[];
-  try {
-    segments = new URL(url).pathname.toLowerCase().split('/');
-  } catch {
-    return '';
-  }
-  for (const [tokens, hint] of PATH_HINTS) {
-    if (tokens.some((t) => segments.includes(t))) return hint;
-  }
-  return '';
-}
-
 // Pull richer page signals (channel, description/post-body snippet) from the
 // live DOM. extractMeta is self-contained so it serializes for executeScript.
 async function gatherMeta(tabId: number): Promise<{ channel?: string; context?: string }> {
@@ -133,19 +98,10 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
     result = { label: `blocked rule: "${blocklistHit}"`, score: 1, cached: false, loadMs: 0, inferMs: 0 };
     blocked = true;
   } else {
-    const { channel, context } = await gatherMeta(tabId);
-    // URL fallbacks: the hostname stands in for a missing site name, and the
-    // path hint is prepended unless extractMeta already said the same thing
-    // (e.g. its password-field probe emits the identical sign-in sentence).
-    const hint = urlPathHint(url);
-    result = await classify({
-      title,
-      channel: channel || hostnameOf(url) || undefined,
-      context:
-        hint && !(context ?? '').includes(hint)
-          ? [hint, context].filter(Boolean).join(' ')
-          : context,
-    });
+    // URL fallbacks (hostname as channel, path hint prepended) live in
+    // shared/url-signals.ts so the offline evaluator builds identical input.
+    const { channel, context } = applyUrlSignals(url, await gatherMeta(tabId));
+    result = await classify({ title, channel, context });
     blocked =
       settings.blockedLabels.includes(result.label) && result.score >= settings.blockThreshold;
   }

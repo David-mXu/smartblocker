@@ -1,0 +1,2009 @@
+{
+  "generatedAt": "2026-07-29T11:20:08.486Z",
+  "config": {
+    "modelId": "Xenova/bge-small-en-v1.5",
+    "temperature": 0.026,
+    "threshold": 0.5,
+    "centroidCount": 13
+  },
+  "summary": {
+    "top-1 accuracy": 86.18,
+    "productive FP rate": 1.34,
+    "must-block recall": 74.4,
+    "collateral FP rate": 0,
+    "e2e decision accuracy": 90.96
+  },
+  "slices": {
+    "v1": {
+      "top-1 accuracy": 88.83,
+      "productive FP rate": 2.11,
+      "must-block recall": 80.49,
+      "collateral FP rate": 0,
+      "e2e decision accuracy": 93.16
+    },
+    "v2": {
+      "top-1 accuracy": 79.1,
+      "productive FP rate": 0,
+      "must-block recall": 62.79,
+      "collateral FP rate": 0,
+      "e2e decision accuracy": 85.84
+    }
+  },
+  "cases": {
+    "|Elden Ring Boss Fight": {
+      "label": "video games",
+      "score": 0.9304,
+      "decision": "block"
+    },
+    "|I spent 100 days in Hardcore Minecraft": {
+      "label": "video games",
+      "score": 0.8551,
+      "decision": "block"
+    },
+    "|Hogwarts Legacy 100% Walkthrough Part 12": {
+      "label": "video games",
+      "score": 0.8107,
+      "decision": "block"
+    },
+    "|Baldur's Gate 3 Honour Mode is pure chaos": {
+      "label": "video games",
+      "score": 0.9869,
+      "decision": "block"
+    },
+    "|TOP 5 Fortnite Chapter 5 tips to win more games": {
+      "label": "video games",
+      "score": 0.7898,
+      "decision": "block"
+    },
+    "|Zelda: Tears of the Kingdom - All Shrine Locations": {
+      "label": "video games",
+      "score": 0.9348,
+      "decision": "block"
+    },
+    "|Ranking every Call of Duty campaign from worst to best": {
+      "label": "video games",
+      "score": 0.7843,
+      "decision": "block"
+    },
+    "|Speedrunning Portal 2 until I lose my mind": {
+      "label": "video games",
+      "score": 0.9235,
+      "decision": "block"
+    },
+    "|Stardew Valley 1.6 update: everything new": {
+      "label": "video games",
+      "score": 0.6673,
+      "decision": "block"
+    },
+    "|Finally hit Diamond in League after 500 games": {
+      "label": "sports",
+      "score": 0.5748,
+      "decision": "allow"
+    },
+    "|GTA 6 trailer breakdown frame by frame": {
+      "label": "programming and software development",
+      "score": 0.4944,
+      "decision": "allow"
+    },
+    "|Helldivers 2 best loadouts for Helldive difficulty": {
+      "label": "video games",
+      "score": 0.9373,
+      "decision": "block"
+    },
+    "|POV: you queue solo in Valorant ranked": {
+      "label": "video games",
+      "score": 0.4456,
+      "decision": "allow"
+    },
+    "|Steam Summer Sale 2026 hidden gems under $10": {
+      "label": "online shopping",
+      "score": 0.5766,
+      "decision": "block"
+    },
+    "|Top 10 memes of the week": {
+      "label": "memes and entertainment",
+      "score": 0.9699,
+      "decision": "block"
+    },
+    "|Try not to laugh challenge (IMPOSSIBLE)": {
+      "label": "memes and entertainment",
+      "score": 0.8634,
+      "decision": "block"
+    },
+    "|r/facepalm - Guy tries to argue with a parking meter": {
+      "label": "memes and entertainment",
+      "score": 0.5866,
+      "decision": "block"
+    },
+    "|Cats being jerks for 10 minutes straight": {
+      "label": "memes and entertainment",
+      "score": 0.8831,
+      "decision": "block"
+    },
+    "|The most unhinged Family Feud answers ever": {
+      "label": "memes and entertainment",
+      "score": 0.9107,
+      "decision": "block"
+    },
+    "|I bought every weird gadget TikTok recommended": {
+      "label": "online shopping",
+      "score": 0.6082,
+      "decision": "block"
+    },
+    "|Reacting to my old cringe videos": {
+      "label": "memes and entertainment",
+      "score": 0.9281,
+      "decision": "block"
+    },
+    "|Best fails compilation 2026 - week 14": {
+      "label": "memes and entertainment",
+      "score": 0.4081,
+      "decision": "allow"
+    },
+    "|This AI made the cursed images ever": {
+      "label": "memes and entertainment",
+      "score": 0.8406,
+      "decision": "block"
+    },
+    "|MrBeast - I Gave Away $1,000,000 To Random Strangers": {
+      "label": "finance and investing",
+      "score": 0.3929,
+      "decision": "allow"
+    },
+    "|Skibidi toilet explained by a 40 year old dad": {
+      "label": "science and education",
+      "score": 0.3007,
+      "decision": "allow"
+    },
+    "|9GAG - Just for fun": {
+      "label": "memes and entertainment",
+      "score": 0.7576,
+      "decision": "block"
+    },
+    "|Nike Air Max 90 - Buy Online": {
+      "label": "online shopping",
+      "score": 0.9757,
+      "decision": "block"
+    },
+    "|Black Friday deals: up to 70% off electronics": {
+      "label": "online shopping",
+      "score": 0.9957,
+      "decision": "block"
+    },
+    "|Amazon.com: Sony WH-1000XM5 Wireless Headphones": {
+      "label": "online shopping",
+      "score": 0.9914,
+      "decision": "block"
+    },
+    "|Your cart (3 items) - Checkout": {
+      "label": "online shopping",
+      "score": 0.9014,
+      "decision": "block"
+    },
+    "|SHEIN haul: I ordered 25 items so you don't have to": {
+      "label": "online shopping",
+      "score": 0.883,
+      "decision": "block"
+    },
+    "|Best mechanical keyboards under $100 (2026 buying guide)": {
+      "label": "online shopping",
+      "score": 0.9675,
+      "decision": "block"
+    },
+    "|AliExpress 11.11 mega sale starts now": {
+      "label": "online shopping",
+      "score": 0.9858,
+      "decision": "block"
+    },
+    "|Etsy - Handmade ceramic coffee mugs": {
+      "label": "online shopping",
+      "score": 0.7755,
+      "decision": "block"
+    },
+    "|Wayfair | Sofas & Couches You'll Love in 2026": {
+      "label": "online shopping",
+      "score": 0.8696,
+      "decision": "block"
+    },
+    "|Unboxing my entire $2,000 tech haul": {
+      "label": "online shopping",
+      "score": 0.9254,
+      "decision": "block"
+    },
+    "|Flash sale: last chance for 40% off sitewide": {
+      "label": "online shopping",
+      "score": 0.981,
+      "decision": "block"
+    },
+    "|eBay: iphone 15 pro max 256gb unlocked": {
+      "label": "online shopping",
+      "score": 0.9397,
+      "decision": "block"
+    },
+    "|iPhone 16 Pro and iPhone 16 Pro Max - Apple": {
+      "label": "online shopping",
+      "score": 0.719,
+      "decision": "block"
+    },
+    "|Apple Store Online - Apple": {
+      "label": "online shopping",
+      "score": 0.9273,
+      "decision": "block"
+    },
+    "|Apple Watch Series 10 - Apple": {
+      "label": "online shopping",
+      "score": 0.6058,
+      "decision": "block"
+    },
+    "|Samsung Galaxy S25 Ultra | Samsung US": {
+      "label": "online shopping",
+      "score": 0.892,
+      "decision": "block"
+    },
+    "|iPhone 16 Pro and iPhone 16 Pro Max - Apple#1": {
+      "label": "online shopping",
+      "score": 0.4797,
+      "decision": "allow"
+    },
+    "|MacBook Air 13-inch and 15-inch - Apple": {
+      "label": "online shopping",
+      "score": 0.5888,
+      "decision": "block"
+    },
+    "|Home / X": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.3877,
+      "decision": "allow"
+    },
+    "|Instagram": {
+      "label": "social media and networking",
+      "score": 0.9939,
+      "decision": "block"
+    },
+    "|(2) Facebook": {
+      "label": "social media and networking",
+      "score": 0.9653,
+      "decision": "block"
+    },
+    "|TikTok - Make Your Day": {
+      "label": "social media and networking",
+      "score": 0.7212,
+      "decision": "block"
+    },
+    "|Threads - Say more": {
+      "label": "memes and entertainment",
+      "score": 0.2969,
+      "decision": "allow"
+    },
+    "|For You | TikTok": {
+      "label": "social media and networking",
+      "score": 0.4985,
+      "decision": "allow"
+    },
+    "|Snapchat Web": {
+      "label": "social media and networking",
+      "score": 0.725,
+      "decision": "block"
+    },
+    "|Who to follow on X in 2026": {
+      "label": "social media and networking",
+      "score": 0.1762,
+      "decision": "allow"
+    },
+    "|My tweet went viral and ruined my week": {
+      "label": "memes and entertainment",
+      "score": 0.6598,
+      "decision": "block"
+    },
+    "|Reddit - Dive into anything": {
+      "label": "social media and networking",
+      "score": 0.6175,
+      "decision": "block"
+    },
+    "|Pinterest - Discover recipes, home ideas, style inspiration": {
+      "label": "social media and networking",
+      "score": 0.6611,
+      "decision": "block"
+    },
+    "|BeReal. Your friends for real.": {
+      "label": "social media and networking",
+      "score": 0.3767,
+      "decision": "allow"
+    },
+    "|Best online casino bonuses 2026": {
+      "label": "gambling and betting",
+      "score": 0.9779,
+      "decision": "block"
+    },
+    "|Stake.com - Online Casino & Sports Betting": {
+      "label": "gambling and betting",
+      "score": 0.9907,
+      "decision": "block"
+    },
+    "|How I turned $50 into $5,000 on slots (INSANE bonus buy)": {
+      "label": "gambling and betting",
+      "score": 0.6072,
+      "decision": "block"
+    },
+    "|DraftKings Sportsbook: Bet on NFL, NBA & more": {
+      "label": "gambling and betting",
+      "score": 0.9013,
+      "decision": "block"
+    },
+    "|Today's parlay picks: 5-leg NBA special": {
+      "label": "sports",
+      "score": 0.6182,
+      "decision": "allow"
+    },
+    "|Live blackjack dealer takes the whole table's money": {
+      "label": "gambling and betting",
+      "score": 0.9949,
+      "decision": "block"
+    },
+    "|PokerStars - Play Texas Hold'em online": {
+      "label": "gambling and betting",
+      "score": 0.9458,
+      "decision": "block"
+    },
+    "|Bet365 - Online Sports Betting": {
+      "label": "gambling and betting",
+      "score": 0.9057,
+      "decision": "block"
+    },
+    "|Roobet Crash strategy that actually works": {
+      "label": "gambling and betting",
+      "score": 0.2766,
+      "decision": "allow"
+    },
+    "|Vegas trip vlog: 24 hours at the Bellagio poker room": {
+      "label": "gambling and betting",
+      "score": 0.9296,
+      "decision": "block"
+    },
+    "|Pornhub - Free Porn Videos": {
+      "label": "adult content",
+      "score": 0.901,
+      "decision": "block"
+    },
+    "|OnlyFans - Sign Up to Support Your Favorite Creators": {
+      "label": "memes and entertainment",
+      "score": 0.6372,
+      "decision": "block"
+    },
+    "|Hot singles in your area want to meet": {
+      "label": "social media and networking",
+      "score": 0.5175,
+      "decision": "block"
+    },
+    "|NSFW subreddits you should know about": {
+      "label": "adult content",
+      "score": 0.749,
+      "decision": "block"
+    },
+    "|xHamster: Free Adult Videos": {
+      "label": "adult content",
+      "score": 0.9885,
+      "decision": "block"
+    },
+    "|18+ only: the internet's spiciest content": {
+      "label": "adult content",
+      "score": 0.6929,
+      "decision": "block"
+    },
+    "|Top adult webcam sites ranked": {
+      "label": "adult content",
+      "score": 0.9974,
+      "decision": "block"
+    },
+    "|Erotic stories archive - new chapters weekly": {
+      "label": "social media and networking",
+      "score": 0.4242,
+      "decision": "allow"
+    },
+    "|Watch Dune: Part Two (2024) full movie": {
+      "label": "movies and tv shows",
+      "score": 0.9719,
+      "decision": "allow"
+    },
+    "|The Bear season 4 review: still the best show on TV": {
+      "label": "movies and tv shows",
+      "score": 0.7604,
+      "decision": "allow"
+    },
+    "|Netflix Home": {
+      "label": "movies and tv shows",
+      "score": 0.4789,
+      "decision": "allow"
+    },
+    "|Every Marvel movie ranked from worst to best": {
+      "label": "movies and tv shows",
+      "score": 0.7955,
+      "decision": "allow"
+    },
+    "|Oppenheimer ending explained": {
+      "label": "science and education",
+      "score": 0.8937,
+      "decision": "allow"
+    },
+    "|HBO Max: Stream TV & Movies": {
+      "label": "movies and tv shows",
+      "score": 0.6413,
+      "decision": "allow"
+    },
+    "|Binge-worthy shows to watch this weekend": {
+      "label": "movies and tv shows",
+      "score": 0.9549,
+      "decision": "allow"
+    },
+    "|One Piece live action season 2 first look": {
+      "label": "movies and tv shows",
+      "score": 0.8875,
+      "decision": "allow"
+    },
+    "|IMDb: The Shawshank Redemption (1994)": {
+      "label": "movies and tv shows",
+      "score": 0.9177,
+      "decision": "allow"
+    },
+    "|Anime winter 2026 season preview": {
+      "label": "movies and tv shows",
+      "score": 0.3744,
+      "decision": "allow"
+    },
+    "|Stranger Things 5 trailer reaction": {
+      "label": "movies and tv shows",
+      "score": 0.88,
+      "decision": "allow"
+    },
+    "|Letterboxd | Your life in film": {
+      "label": "movies and tv shows",
+      "score": 0.8873,
+      "decision": "allow"
+    },
+    "|lofi hip hop radio - beats to relax/study to": {
+      "label": "music",
+      "score": 0.7982,
+      "decision": "allow"
+    },
+    "|Taylor Swift - Anti-Hero (Official Music Video)": {
+      "label": "music",
+      "score": 0.7283,
+      "decision": "allow"
+    },
+    "|Spotify - Web Player: Music for everyone": {
+      "label": "music",
+      "score": 0.8492,
+      "decision": "allow"
+    },
+    "|Kendrick Lamar's new album is a masterpiece": {
+      "label": "music",
+      "score": 0.9804,
+      "decision": "allow"
+    },
+    "|How to mix a punchy kick and bass": {
+      "label": "music",
+      "score": 0.8977,
+      "decision": "allow"
+    },
+    "|Coachella 2026 lineup announced": {
+      "label": "music",
+      "score": 0.7065,
+      "decision": "allow"
+    },
+    "|Learn guitar in 30 days: day 1": {
+      "label": "music",
+      "score": 0.6349,
+      "decision": "allow"
+    },
+    "|The 100 greatest basslines of all time": {
+      "label": "music",
+      "score": 0.9574,
+      "decision": "allow"
+    },
+    "|SoundCloud - Hear the world's sounds": {
+      "label": "music",
+      "score": 0.941,
+      "decision": "allow"
+    },
+    "|Billie Eilish tiny desk concert": {
+      "label": "music",
+      "score": 0.9116,
+      "decision": "allow"
+    },
+    "|NBA Finals Game 7 highlights": {
+      "label": "sports",
+      "score": 0.9441,
+      "decision": "allow"
+    },
+    "|Messi's first season in MLS: every goal": {
+      "label": "sports",
+      "score": 0.8333,
+      "decision": "allow"
+    },
+    "|Premier League table after matchweek 30": {
+      "label": "sports",
+      "score": 0.9199,
+      "decision": "allow"
+    },
+    "|UFC 312 full fight card predictions": {
+      "label": "gambling and betting",
+      "score": 0.4128,
+      "decision": "allow"
+    },
+    "|F1 Monaco Grand Prix qualifying results": {
+      "label": "sports",
+      "score": 0.743,
+      "decision": "allow"
+    },
+    "|ESPN - Serving sports fans. Anytime. Anywhere.": {
+      "label": "sports",
+      "score": 0.6209,
+      "decision": "allow"
+    },
+    "|Why the Chiefs dynasty isn't over yet": {
+      "label": "sports",
+      "score": 0.4309,
+      "decision": "allow"
+    },
+    "|Olympic 100m final: fastest race in history": {
+      "label": "sports",
+      "score": 0.8216,
+      "decision": "allow"
+    },
+    "|Fantasy football week 12 waiver wire pickups": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.2711,
+      "decision": "allow"
+    },
+    "|How to fix your golf slice in 10 minutes": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.4631,
+      "decision": "allow"
+    },
+    "|Cricket World Cup 2027 schedule released": {
+      "label": "sports",
+      "score": 0.3277,
+      "decision": "allow"
+    },
+    "|LeBron James career retrospective": {
+      "label": "sports",
+      "score": 0.6381,
+      "decision": "allow"
+    },
+    "|Trump announces new tariff policy": {
+      "label": "news and politics",
+      "score": 0.6962,
+      "decision": "allow"
+    },
+    "|BBC News - Home": {
+      "label": "news and politics",
+      "score": 0.9258,
+      "decision": "allow"
+    },
+    "|Election 2026: what the polls actually say": {
+      "label": "news and politics",
+      "score": 0.9732,
+      "decision": "allow"
+    },
+    "|Supreme Court ruling explained in 5 minutes": {
+      "label": "science and education",
+      "score": 0.3796,
+      "decision": "allow"
+    },
+    "|Breaking: earthquake strikes off the coast of Japan": {
+      "label": "news and politics",
+      "score": 0.445,
+      "decision": "allow"
+    },
+    "|The Daily - Today's episode: the border deal": {
+      "label": "news and politics",
+      "score": 0.462,
+      "decision": "allow"
+    },
+    "|CNN: Live updates on the summit": {
+      "label": "news and politics",
+      "score": 0.8669,
+      "decision": "allow"
+    },
+    "|EU passes landmark AI regulation": {
+      "label": "news and politics",
+      "score": 0.32,
+      "decision": "allow"
+    },
+    "|Opinion: Why housing policy is broken": {
+      "label": "news and politics",
+      "score": 0.739,
+      "decision": "allow"
+    },
+    "|Reuters | Breaking International News & Views": {
+      "label": "news and politics",
+      "score": 0.8809,
+      "decision": "allow"
+    },
+    "|Late night hosts react to the debate": {
+      "label": "news and politics",
+      "score": 0.7485,
+      "decision": "allow"
+    },
+    "|Ukraine peace talks: what we know so far": {
+      "label": "news and politics",
+      "score": 0.9495,
+      "decision": "allow"
+    },
+    "|How the Fed's rate decision affects your portfolio": {
+      "label": "finance and investing",
+      "score": 0.9719,
+      "decision": "allow"
+    },
+    "|S&P 500 hits all-time high as tech rallies": {
+      "label": "finance and investing",
+      "score": 0.53,
+      "decision": "allow"
+    },
+    "|Bogleheads guide to the three-fund portfolio": {
+      "label": "finance and investing",
+      "score": 0.992,
+      "decision": "allow"
+    },
+    "|Bitcoin breaks $100k: what happens next": {
+      "label": "finance and investing",
+      "score": 0.927,
+      "decision": "allow"
+    },
+    "|Roth IRA vs 401k: which should you max first?": {
+      "label": "finance and investing",
+      "score": 0.9773,
+      "decision": "allow"
+    },
+    "|I analyzed 10 years of NVDA earnings calls": {
+      "label": "finance and investing",
+      "score": 0.7795,
+      "decision": "allow"
+    },
+    "|Yahoo Finance - Stock Market Live, Quotes, Business News": {
+      "label": "finance and investing",
+      "score": 0.59,
+      "decision": "allow"
+    },
+    "|How to read a balance sheet like Warren Buffett": {
+      "label": "finance and investing",
+      "score": 0.7402,
+      "decision": "allow"
+    },
+    "|GME to the moon again? Here's the setup": {
+      "label": "programming and software development",
+      "score": 0.5154,
+      "decision": "allow"
+    },
+    "|The hidden fees in your index funds": {
+      "label": "finance and investing",
+      "score": 0.9946,
+      "decision": "allow"
+    },
+    "|Real estate vs stocks: 30-year comparison": {
+      "label": "finance and investing",
+      "score": 0.975,
+      "decision": "allow"
+    },
+    "|Dave Ramsey reacts to $300k in student loans": {
+      "label": "finance and investing",
+      "score": 0.916,
+      "decision": "allow"
+    },
+    "|MIT 6.006 Introduction to Algorithms, Lecture 1": {
+      "label": "science and education",
+      "score": 0.9329,
+      "decision": "allow"
+    },
+    "|Veritasium: The Surprising Physics of Spinning Objects": {
+      "label": "science and education",
+      "score": 0.9538,
+      "decision": "allow"
+    },
+    "|How CRISPR gene editing actually works": {
+      "label": "science and education",
+      "score": 0.8248,
+      "decision": "allow"
+    },
+    "|Khan Academy | Free Online Courses, Lessons & Practice": {
+      "label": "neutral: career and learning",
+      "score": 0.5765,
+      "decision": "allow"
+    },
+    "|What happens inside a black hole?": {
+      "label": "science and education",
+      "score": 0.2543,
+      "decision": "allow"
+    },
+    "|3Blue1Brown - The essence of linear algebra, chapter 3": {
+      "label": "science and education",
+      "score": 0.8597,
+      "decision": "allow"
+    },
+    "|James Webb telescope spots earliest galaxy yet": {
+      "label": "science and education",
+      "score": 0.4951,
+      "decision": "allow"
+    },
+    "|The immune system explained: T cells": {
+      "label": "science and education",
+      "score": 0.9379,
+      "decision": "allow"
+    },
+    "|Coursera | Machine Learning Specialization - Week 2": {
+      "label": "neutral: career and learning",
+      "score": 0.4571,
+      "decision": "allow"
+    },
+    "|Why planes actually fly: lift explained properly": {
+      "label": "science and education",
+      "score": 0.7963,
+      "decision": "allow"
+    },
+    "|Anki settings that actually work for med school": {
+      "label": "neutral: career and learning",
+      "score": 0.467,
+      "decision": "allow"
+    },
+    "|History of Rome: the fall of the Republic": {
+      "label": "science and education",
+      "score": 0.302,
+      "decision": "allow"
+    },
+    "|React Router Tutorial": {
+      "label": "programming and software development",
+      "score": 0.542,
+      "decision": "allow"
+    },
+    "|Why TypeScript generics confuse everyone": {
+      "label": "programming and software development",
+      "score": 0.9729,
+      "decision": "allow"
+    },
+    "|Rust vs Go in 2026: which should you learn?": {
+      "label": "programming and software development",
+      "score": 0.398,
+      "decision": "allow"
+    },
+    "|Building a compiler from scratch, part 3: parsing": {
+      "label": "programming and software development",
+      "score": 0.8869,
+      "decision": "allow"
+    },
+    "|PostgreSQL indexing deep dive": {
+      "label": "programming and software development",
+      "score": 0.4619,
+      "decision": "allow"
+    },
+    "|Fireship - 100 seconds of Kubernetes": {
+      "label": "programming and software development",
+      "score": 0.5633,
+      "decision": "allow"
+    },
+    "|System design interview: design a URL shortener": {
+      "label": "programming and software development",
+      "score": 0.4196,
+      "decision": "allow"
+    },
+    "|The Primeagen reacts to your worst code": {
+      "label": "memes and entertainment",
+      "score": 0.5068,
+      "decision": "block"
+    },
+    "|Docker networking finally explained": {
+      "label": "programming and software development",
+      "score": 0.4884,
+      "decision": "allow"
+    },
+    "|Clean architecture is a lie (sort of)": {
+      "label": "news and politics",
+      "score": 0.2862,
+      "decision": "allow"
+    },
+    "|Next.js 16 app router migration guide": {
+      "label": "programming and software development",
+      "score": 0.4265,
+      "decision": "allow"
+    },
+    "|LeetCode 146: LRU Cache in Python": {
+      "label": "programming and software development",
+      "score": 0.7912,
+      "decision": "allow"
+    },
+    "|Pull requests · facebook/react": {
+      "label": "social media and networking",
+      "score": 0.6433,
+      "decision": "block"
+    },
+    "|TypeError: Cannot read properties of undefined (reading 'map') - Stack Overflow": {
+      "label": "programming and software development",
+      "score": 0.9544,
+      "decision": "allow"
+    },
+    "|MDN Web Docs: Array.prototype.reduce()": {
+      "label": "programming and software development",
+      "score": 0.8032,
+      "decision": "allow"
+    },
+    "|Jira - FLOW-142: Block screen flashes on SPA navigation": {
+      "label": "neutral: work and productivity",
+      "score": 0.3076,
+      "decision": "allow"
+    },
+    "|Q3 planning doc - Google Docs": {
+      "label": "neutral: work and productivity",
+      "score": 0.7295,
+      "decision": "allow"
+    },
+    "|Inbox (12) - david@company.com": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.3396,
+      "decision": "allow"
+    },
+    "|AWS Console - EC2 Dashboard": {
+      "label": "programming and software development",
+      "score": 0.5746,
+      "decision": "allow"
+    },
+    "|Sprint retro board | Miro": {
+      "label": "online shopping",
+      "score": 0.6335,
+      "decision": "block"
+    },
+    "|Figma - Onboarding flow v3": {
+      "label": "neutral: work and productivity",
+      "score": 0.3739,
+      "decision": "allow"
+    },
+    "|Untitled document - Overleaf, Online LaTeX Editor": {
+      "label": "neutral: documentation and reference",
+      "score": 0.6953,
+      "decision": "allow"
+    },
+    "|CS 341 Assignment 4: Dynamic Programming - University of Waterloo": {
+      "label": "programming and software development",
+      "score": 0.3657,
+      "decision": "allow"
+    },
+    "|IEEE Xplore: Attention Is All You Need": {
+      "label": "neutral: work and productivity",
+      "score": 0.3655,
+      "decision": "allow"
+    },
+    "|arXiv:2405.01234 - Efficient On-Device Text Classification": {
+      "label": "science and education",
+      "score": 0.2887,
+      "decision": "allow"
+    },
+    "|Zoom Meeting - Weekly 1:1 with Sarah": {
+      "label": "neutral: work and productivity",
+      "score": 0.7433,
+      "decision": "allow"
+    },
+    "|Notion – Team wiki: deployment runbook": {
+      "label": "neutral: work and productivity",
+      "score": 0.5927,
+      "decision": "allow"
+    },
+    "|Confluence - API versioning strategy RFC": {
+      "label": "programming and software development",
+      "score": 0.4923,
+      "decision": "allow"
+    },
+    "|Google Scholar: zero-shot text classification survey": {
+      "label": "neutral: documentation and reference",
+      "score": 0.3752,
+      "decision": "allow"
+    },
+    "|Dependabot alerts · myorg/backend": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.3364,
+      "decision": "allow"
+    },
+    "|Vercel Dashboard - Production deployment": {
+      "label": "neutral: work and productivity",
+      "score": 0.4257,
+      "decision": "allow"
+    },
+    "|Grammarly - Cover letter draft": {
+      "label": "neutral: career and learning",
+      "score": 0.3656,
+      "decision": "allow"
+    },
+    "|LinkedIn: Senior Software Engineer jobs in Toronto": {
+      "label": "neutral: career and learning",
+      "score": 0.7975,
+      "decision": "allow"
+    },
+    "|Indeed.com: backend developer remote": {
+      "label": "programming and software development",
+      "score": 0.5854,
+      "decision": "allow"
+    },
+    "|IRS Form 1040 instructions 2025": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.3583,
+      "decision": "allow"
+    },
+    "|TurboTax: File your 2025 taxes online": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.4316,
+      "decision": "allow"
+    },
+    "|Chase Online - Account activity": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.5912,
+      "decision": "allow"
+    },
+    "|Wealthsimple - Portfolio overview": {
+      "label": "finance and investing",
+      "score": 0.9788,
+      "decision": "allow"
+    },
+    "|Google Calendar - Week of July 6": {
+      "label": "neutral: work and productivity",
+      "score": 0.5525,
+      "decision": "allow"
+    },
+    "|DoorDash order status: your lunch is on the way": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.8462,
+      "decision": "allow"
+    },
+    "|Uber - Request a ride": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.9087,
+      "decision": "allow"
+    },
+    "|Airbnb: apartments in Berlin for the conference week": {
+      "label": "neutral: work and productivity",
+      "score": 0.2978,
+      "decision": "allow"
+    },
+    "|Google Flights - YYZ to SFO, Aug 12": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.6222,
+      "decision": "allow"
+    },
+    "|WebMD: persistent wrist pain from typing": {
+      "label": "neutral: documentation and reference",
+      "score": 0.2756,
+      "decision": "allow"
+    },
+    "|MyChart - Appointment confirmation": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.7756,
+      "decision": "allow"
+    },
+    "|Duolingo - Spanish: Unit 12 Checkpoint": {
+      "label": "programming and software development",
+      "score": 0.3804,
+      "decision": "allow"
+    },
+    "|The Rust Programming Language - Chapter 10: Generics": {
+      "label": "programming and software development",
+      "score": 0.9586,
+      "decision": "allow"
+    },
+    "|Python 3.13 documentation: asyncio": {
+      "label": "programming and software development",
+      "score": 0.7099,
+      "decision": "allow"
+    },
+    "|npm: @huggingface/transformers": {
+      "label": "programming and software development",
+      "score": 0.4476,
+      "decision": "allow"
+    },
+    "|Can I use... CSS container queries": {
+      "label": "programming and software development",
+      "score": 0.7113,
+      "decision": "allow"
+    },
+    "|regex101: build, test, and debug regex": {
+      "label": "programming and software development",
+      "score": 0.5402,
+      "decision": "allow"
+    },
+    "|Excalidraw - system architecture sketch": {
+      "label": "programming and software development",
+      "score": 0.6933,
+      "decision": "allow"
+    },
+    "|ChatGPT - debugging a segfault in my C++ allocator": {
+      "label": "programming and software development",
+      "score": 0.9471,
+      "decision": "allow"
+    },
+    "|Claude - draft performance review feedback": {
+      "label": "neutral: work and productivity",
+      "score": 0.7682,
+      "decision": "allow"
+    },
+    "|Wikipedia: Byzantine fault tolerance": {
+      "label": "programming and software development",
+      "score": 0.7302,
+      "decision": "allow"
+    },
+    "|Investopedia: What Is Dollar-Cost Averaging?": {
+      "label": "finance and investing",
+      "score": 0.9884,
+      "decision": "allow"
+    },
+    "|Hacker News: Show HN: I built a local-first distraction blocker": {
+      "label": "memes and entertainment",
+      "score": 0.3429,
+      "decision": "allow"
+    },
+    "|Recipe: 20-minute weeknight chicken stir fry": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.3821,
+      "decision": "allow"
+    },
+    "|AllRecipes - Easy overnight oats": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.5001,
+      "decision": "allow"
+    },
+    "|Strava - Morning run activity": {
+      "label": "neutral: work and productivity",
+      "score": 0.3437,
+      "decision": "allow"
+    },
+    "|Hevy - Push day workout log": {
+      "label": "neutral: work and productivity",
+      "score": 0.4338,
+      "decision": "allow"
+    },
+    "|Google Maps - directions to dentist": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.7789,
+      "decision": "allow"
+    },
+    "|Canada Post - Track your package": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.8506,
+      "decision": "allow"
+    },
+    "|Ikea assembly instructions: BILLY bookcase": {
+      "label": "online shopping",
+      "score": 0.3539,
+      "decision": "allow"
+    },
+    "|YouTube - How to replace a bike chain": {
+      "label": "programming and software development",
+      "score": 0.4084,
+      "decision": "allow"
+    },
+    "|Home Depot: how to patch drywall": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.4624,
+      "decision": "allow"
+    },
+    "|Quora: What's it like to work at a quant firm?": {
+      "label": "neutral: career and learning",
+      "score": 0.8445,
+      "decision": "allow"
+    },
+    "|Elden Ring Boss Fight#1": {
+      "label": "video games",
+      "score": 0.9909,
+      "decision": "block"
+    },
+    "|Hogwarts Legacy 100% Walkthrough": {
+      "label": "video games",
+      "score": 0.9872,
+      "decision": "block"
+    },
+    "|Finally hit Diamond rank after 500 games": {
+      "label": "video games",
+      "score": 0.4989,
+      "decision": "allow"
+    },
+    "|The Fed just moved": {
+      "label": "finance and investing",
+      "score": 0.9313,
+      "decision": "allow"
+    },
+    "|Silksong is finally real": {
+      "label": "video games",
+      "score": 0.9439,
+      "decision": "block"
+    },
+    "|Day in the life": {
+      "label": "neutral: career and learning",
+      "score": 0.3282,
+      "decision": "allow"
+    },
+    "|You won't believe this comeback": {
+      "label": "sports",
+      "score": 0.61,
+      "decision": "allow"
+    },
+    "|New drop just landed": {
+      "label": "online shopping",
+      "score": 0.9626,
+      "decision": "block"
+    },
+    "|This changes everything": {
+      "label": "online shopping",
+      "score": 0.7186,
+      "decision": "block"
+    },
+    "|Episode 214": {
+      "label": "science and education",
+      "score": 0.6719,
+      "decision": "allow"
+    },
+    "|Watch live": {
+      "label": "news and politics",
+      "score": 0.951,
+      "decision": "allow"
+    },
+    "|Full album out now": {
+      "label": "music",
+      "score": 0.9608,
+      "decision": "allow"
+    },
+    "|Season finale tonight": {
+      "label": "movies and tv shows",
+      "score": 0.7173,
+      "decision": "allow"
+    },
+    "|Big win compilation": {
+      "label": "gambling and betting",
+      "score": 0.9717,
+      "decision": "block"
+    },
+    "|Getting started with pgvector": {
+      "label": "science and education",
+      "score": 0.5586,
+      "decision": "allow"
+    },
+    "|Buy MacBook Air - Apple": {
+      "label": "online shopping",
+      "score": 0.9568,
+      "decision": "block"
+    },
+    "|Buy MacBook Air, 15-inch, M5 Chip, 10-core CPU, 10-core GPU, Midnight, 16GB memory, 512GB storage - Apple": {
+      "label": "online shopping",
+      "score": 0.9229,
+      "decision": "block"
+    },
+    "|Store": {
+      "label": "online shopping",
+      "score": 0.7885,
+      "decision": "block"
+    },
+    "|Dune: Part Three (2026)": {
+      "label": "movies and tv shows",
+      "score": 0.7762,
+      "decision": "allow"
+    },
+    "|Central bank holds rates steady": {
+      "label": "finance and investing",
+      "score": 0.5494,
+      "decision": "allow"
+    },
+    "|One-pot pasta": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.3579,
+      "decision": "allow"
+    },
+    "|Sign In": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9159,
+      "decision": "allow"
+    },
+    "|Sign In - RBC Royal Bank": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9769,
+      "decision": "allow"
+    },
+    "|TD Canada Trust - EasyWeb Login": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.8494,
+      "decision": "allow"
+    },
+    "|CIBC Online Banking - Sign On": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9385,
+      "decision": "allow"
+    },
+    "|Scotiabank - Sign in to online banking": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9709,
+      "decision": "allow"
+    },
+    "|BMO Online Banking: Account Summary": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.7807,
+      "decision": "allow"
+    },
+    "|Tangerine - My Accounts": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.8576,
+      "decision": "allow"
+    },
+    "|Account Summary": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.7257,
+      "decision": "allow"
+    },
+    "|Messages - Online Banking": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9171,
+      "decision": "allow"
+    },
+    "|Verify your identity": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.8722,
+      "decision": "allow"
+    },
+    "|Enter your one-time passcode": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.5809,
+      "decision": "allow"
+    },
+    "|My Account - Canada Revenue Agency": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9133,
+      "decision": "allow"
+    },
+    "|My Service Canada Account - Sign in": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.99,
+      "decision": "allow"
+    },
+    "|ServiceOntario: renew your health card": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.6126,
+      "decision": "allow"
+    },
+    "|Quest - University of Waterloo": {
+      "label": "neutral: career and learning",
+      "score": 0.5108,
+      "decision": "allow"
+    },
+    "|LEARN - Course Home": {
+      "label": "neutral: career and learning",
+      "score": 0.5545,
+      "decision": "allow"
+    },
+    "|Student Center: tuition and fee account balance": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.7814,
+      "decision": "allow"
+    },
+    "|Manulife - Group benefits sign in": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.8562,
+      "decision": "allow"
+    },
+    "|Sun Life: my claims and coverage": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.3104,
+      "decision": "allow"
+    },
+    "|Hydro One - View and pay your bill": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.7405,
+      "decision": "allow"
+    },
+    "|Rogers: manage your account and billing": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.7502,
+      "decision": "allow"
+    },
+    "|Bell - MyBell account overview": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.6955,
+      "decision": "allow"
+    },
+    "|Sign In#1": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9785,
+      "decision": "allow"
+    },
+    "|Online Banking Sign In": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9923,
+      "decision": "allow"
+    },
+    "|EasyWeb - Login": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9717,
+      "decision": "allow"
+    },
+    "|My Accounts": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9632,
+      "decision": "allow"
+    },
+    "|Account overview": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.8541,
+      "decision": "allow"
+    },
+    "|Notifications": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.8794,
+      "decision": "allow"
+    },
+    "|Messages": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.8949,
+      "decision": "allow"
+    },
+    "|Sign in": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9955,
+      "decision": "allow"
+    },
+    "|My Account": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.981,
+      "decision": "allow"
+    },
+    "|Health card renewal": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.5344,
+      "decision": "allow"
+    },
+    "|Quest": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.7075,
+      "decision": "allow"
+    },
+    "|Sign in to LEARN": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9911,
+      "decision": "allow"
+    },
+    "|Patient portal sign in": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9535,
+      "decision": "allow"
+    },
+    "|My insurance account": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9545,
+      "decision": "allow"
+    },
+    "|Pay your bill": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.6576,
+      "decision": "allow"
+    },
+    "|Log in to Facebook": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.693,
+      "decision": "allow"
+    },
+    "|(2) Notifications / X": {
+      "label": "social media and networking",
+      "score": 0.4177,
+      "decision": "allow"
+    },
+    "|Instagram#1": {
+      "label": "social media and networking",
+      "score": 0.8763,
+      "decision": "block"
+    },
+    "|For You": {
+      "label": "social media and networking",
+      "score": 0.9328,
+      "decision": "block"
+    },
+    "|Checkout": {
+      "label": "online shopping",
+      "score": 0.5437,
+      "decision": "block"
+    },
+    "https://www.icloud.com/|iCloud": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9245,
+      "decision": "allow"
+    },
+    "https://app.monday.com/|monday.com": {
+      "label": "neutral: work and productivity",
+      "score": 0.3155,
+      "decision": "allow"
+    },
+    "https://dashboard.stripe.com/|Stripe Login | Sign in to the Stripe Dashboard": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9768,
+      "decision": "allow"
+    },
+    "https://portal.azure.com/|Microsoft Azure": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9842,
+      "decision": "allow"
+    },
+    "https://supabase.com/dashboard/projects|Dashboard | Supabase": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9771,
+      "decision": "allow"
+    },
+    "https://app.clickup.com/|ClickUp": {
+      "label": "neutral: work and productivity",
+      "score": 0.3087,
+      "decision": "allow"
+    },
+    "https://app.asana.com/|Asana": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.8857,
+      "decision": "allow"
+    },
+    "https://linear.app/|Linear – Plan and build products": {
+      "label": "science and education",
+      "score": 0.2911,
+      "decision": "allow"
+    },
+    "https://app.netlify.com/|Netlify App": {
+      "label": "programming and software development",
+      "score": 0.1741,
+      "decision": "allow"
+    },
+    "https://mail.zoho.com/|Zoho Mail": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.8396,
+      "decision": "allow"
+    },
+    "https://www.dropbox.com/home|Dropbox": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.925,
+      "decision": "allow"
+    },
+    "https://obsidian.md/|Obsidian - Sharpen your thinking": {
+      "label": "video games",
+      "score": 0.1795,
+      "decision": "allow"
+    },
+    "https://www.zotero.org/|Zotero | Your personal research assistant": {
+      "label": "neutral: documentation and reference",
+      "score": 0.8156,
+      "decision": "allow"
+    },
+    "https://time.is/|Time.is - exact time, any time zone, every country": {
+      "label": "science and education",
+      "score": 0.1848,
+      "decision": "allow"
+    },
+    "https://www.twitch.tv/|Twitch": {
+      "label": "social media and networking",
+      "score": 0.2236,
+      "decision": "allow"
+    },
+    "https://www.roblox.com/|Roblox": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.3756,
+      "decision": "allow"
+    },
+    "https://www.chase.com/personal/credit-cards|Credit Cards | Chase": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.3385,
+      "decision": "allow"
+    },
+    "https://www.bankofamerica.com/|Bank of America - Banking, Credit Cards, Loans and Merrill Investing": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9647,
+      "decision": "allow"
+    },
+    "https://www.wellsfargo.com/|Wells Fargo Bank | Financial Services & Online Banking": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9792,
+      "decision": "allow"
+    },
+    "https://www.rbcroyalbank.com/credit-cards/index.html|Credit Cards | RBC Royal Bank": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.4937,
+      "decision": "allow"
+    },
+    "https://www.paypal.com/signin|Log in to your PayPal account": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9915,
+      "decision": "allow"
+    },
+    "https://login.microsoftonline.com/|Sign in to your account": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9893,
+      "decision": "allow"
+    },
+    "https://www.irs.gov/payments|Payments | Internal Revenue Service": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.6662,
+      "decision": "allow"
+    },
+    "https://www.ssa.gov/myaccount/|my Social Security | SSA": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9474,
+      "decision": "allow"
+    },
+    "https://www.usa.gov/|USAGov | The Official Guide to Government Information and Services": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.633,
+      "decision": "allow"
+    },
+    "https://www.gov.uk/sign-in-universal-credit|Sign in to your Universal Credit account - GOV.UK": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9817,
+      "decision": "allow"
+    },
+    "https://www.canada.ca/en/services/benefits/ei.html|Employment Insurance benefits and leave - Canada.ca": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.3933,
+      "decision": "allow"
+    },
+    "https://www.dmv.ca.gov/portal/appointments/|Appointments - California DMV": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.6978,
+      "decision": "allow"
+    },
+    "https://studentaid.gov/|Federal Student Aid": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.6879,
+      "decision": "allow"
+    },
+    "https://acorn.utoronto.ca/|ACORN": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9571,
+      "decision": "allow"
+    },
+    "https://canvas.instructure.com/login/canvas|Log In to Canvas": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.902,
+      "decision": "allow"
+    },
+    "https://www.mycigna.com/|myCigna - Member Login": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.6131,
+      "decision": "allow"
+    },
+    "https://healthy.kaiserpermanente.org/|Kaiser Permanente": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.5429,
+      "decision": "allow"
+    },
+    "https://www.mayoclinic.org/patient-visitor-guide|Patient and Visitor Guide - Mayo Clinic": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.3918,
+      "decision": "allow"
+    },
+    "https://www.nhs.uk/nhs-services/gp-services/|GP services - NHS": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.3954,
+      "decision": "allow"
+    },
+    "https://www.fidelity.com/|Fidelity Investments - Retirement Plans, Investing, Brokerage, Wealth Management": {
+      "label": "finance and investing",
+      "score": 0.9944,
+      "decision": "allow"
+    },
+    "https://www.uscis.gov/|USCIS": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.5303,
+      "decision": "allow"
+    },
+    "https://www.att.com/acctmgmt/billandpay|Bill & Pay - AT&T": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.9847,
+      "decision": "allow"
+    },
+    "https://secure.aircanada.com/|Manage my booking - Air Canada": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.5773,
+      "decision": "allow"
+    },
+    "https://www.tesla.com/modely|Model Y | Tesla": {
+      "label": "online shopping",
+      "score": 0.6669,
+      "decision": "block"
+    },
+    "https://www.toyota.com/rav4/|2026 Toyota RAV4 | Specs, Price, MPG & Reviews": {
+      "label": "online shopping",
+      "score": 0.3418,
+      "decision": "allow"
+    },
+    "https://www.lg.com/us/tvs|TVs: Explore OLED, QNED & 4K Smart TVs | LG USA": {
+      "label": "online shopping",
+      "score": 0.9642,
+      "decision": "block"
+    },
+    "https://www.lenovo.com/us/en/laptops/|Laptops | Lenovo US": {
+      "label": "online shopping",
+      "score": 0.9795,
+      "decision": "block"
+    },
+    "https://www.dyson.com/vacuum-cleaners|Vacuum Cleaners | Dyson": {
+      "label": "online shopping",
+      "score": 0.9477,
+      "decision": "block"
+    },
+    "https://www.ikea.com/us/en/cat/desks-computer-desks-20649/|Desks & Computer Desks - IKEA": {
+      "label": "online shopping",
+      "score": 0.8587,
+      "decision": "block"
+    },
+    "https://www.logitech.com/en-us/products/mice/mx-master-3s-bluetooth-mouse.html|MX Master 3S Wireless Performance Mouse": {
+      "label": "online shopping",
+      "score": 0.9193,
+      "decision": "block"
+    },
+    "https://www.nvidia.com/en-us/geforce/graphics-cards/50-series/|GeForce RTX 50 Series Graphics Cards | NVIDIA": {
+      "label": "video games",
+      "score": 0.3735,
+      "decision": "allow"
+    },
+    "https://www.raspberrypi.com/products/raspberry-pi-5/|Raspberry Pi 5": {
+      "label": "online shopping",
+      "score": 0.469,
+      "decision": "allow"
+    },
+    "https://www.notion.com/pricing|Pricing | Notion": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.3714,
+      "decision": "allow"
+    },
+    "https://aws.amazon.com/pricing/|AWS Pricing": {
+      "label": "neutral: everyday errands and utilities",
+      "score": 0.294,
+      "decision": "allow"
+    },
+    "https://vercel.com/pricing|Pricing – Vercel": {
+      "label": "online shopping",
+      "score": 0.4693,
+      "decision": "allow"
+    },
+    "https://www.datadoghq.com/pricing/|Pricing | Datadog": {
+      "label": "online shopping",
+      "score": 0.3018,
+      "decision": "allow"
+    },
+    "https://kubernetes.io/docs/concepts/workloads/controllers/deployment/|Deployments | Kubernetes": {
+      "label": "programming and software development",
+      "score": 0.7243,
+      "decision": "allow"
+    },
+    "https://redis.io/docs/latest/develop/data-types/streams/|Redis Streams | Docs": {
+      "label": "neutral: documentation and reference",
+      "score": 0.5735,
+      "decision": "allow"
+    },
+    "https://react.dev/learn/thinking-in-react|Thinking in React – React": {
+      "label": "programming and software development",
+      "score": 0.7976,
+      "decision": "allow"
+    },
+    "https://web.dev/articles/lcp|Largest Contentful Paint (LCP) | Articles | web.dev": {
+      "label": "science and education",
+      "score": 0.2717,
+      "decision": "allow"
+    },
+    "https://martinfowler.com/articles/microservices.html|Microservices": {
+      "label": "neutral: documentation and reference",
+      "score": 0.6103,
+      "decision": "allow"
+    },
+    "https://roadmap.sh/frontend|Frontend Developer Roadmap": {
+      "label": "programming and software development",
+      "score": 0.383,
+      "decision": "allow"
+    },
+    "https://www.freecodecamp.org/learn|Learn to Code — For Free": {
+      "label": "neutral: career and learning",
+      "score": 0.4219,
+      "decision": "allow"
+    },
+    "https://pytorch.org/tutorials/beginner/basics/intro.html|Learn the Basics — PyTorch Tutorials": {
+      "label": "neutral: documentation and reference",
+      "score": 0.3487,
+      "decision": "allow"
+    },
+    "https://ocw.mit.edu/courses/8-01sc-classical-mechanics-fall-2016/|Classical Mechanics | Physics | MIT OpenCourseWare": {
+      "label": "science and education",
+      "score": 0.8689,
+      "decision": "allow"
+    },
+    "https://plato.stanford.edu/entries/functionalism/|Functionalism (Stanford Encyclopedia of Philosophy)": {
+      "label": "science and education",
+      "score": 0.5273,
+      "decision": "allow"
+    },
+    "https://www.nasa.gov/mission/artemis-2/|Artemis II - NASA": {
+      "label": "science and education",
+      "score": 0.2272,
+      "decision": "allow"
+    },
+    "https://pubmed.ncbi.nlm.nih.gov/|PubMed": {
+      "label": "neutral: documentation and reference",
+      "score": 0.8559,
+      "decision": "allow"
+    },
+    "https://github.com/godotengine/godot|GitHub - godotengine/godot: Godot Engine – Multi-platform 2D and 3D game engine": {
+      "label": "programming and software development",
+      "score": 0.6236,
+      "decision": "allow"
+    },
+    "https://github.com/ppy/osu|GitHub - ppy/osu: rhythm is just a *click* away!": {
+      "label": "programming and software development",
+      "score": 0.3426,
+      "decision": "allow"
+    },
+    "https://github.com/topics/casino|casino · GitHub Topics": {
+      "label": "gambling and betting",
+      "score": 0.8987,
+      "decision": "allow"
+    },
+    "https://stackoverflow.com/questions/tagged/minecraft|Newest 'minecraft' Questions - Stack Overflow": {
+      "label": "video games",
+      "score": 0.4886,
+      "decision": "allow"
+    },
+    "https://gitlab.com/gitlab-org/gitlab|GitLab.org / GitLab · GitLab": {
+      "label": "programming and software development",
+      "score": 0.8343,
+      "decision": "allow"
+    },
+    "https://miro.com/templates/event-planning/|Event Planning Template | Miro": {
+      "label": "neutral: work and productivity",
+      "score": 0.3638,
+      "decision": "allow"
+    },
+    "https://www.figma.com/templates/|Templates | Figma": {
+      "label": "neutral: work and productivity",
+      "score": 0.6662,
+      "decision": "allow"
+    },
+    "https://www.notion.so/templates|Notion Templates": {
+      "label": "online shopping",
+      "score": 0.2632,
+      "decision": "allow"
+    },
+    "https://www.ign.com/|IGN - Video Games, Trailers, Reviews, News, Wikis": {
+      "label": "video games",
+      "score": 0.8682,
+      "decision": "block"
+    },
+    "https://store.steampowered.com/|Welcome to Steam": {
+      "label": "video games",
+      "score": 0.4,
+      "decision": "allow"
+    },
+    "https://www.epicgames.com/store/en-US/|Epic Games Store | Download & Play PC Games": {
+      "label": "video games",
+      "score": 0.5409,
+      "decision": "block"
+    },
+    "https://www.nexusmods.com/skyrimspecialedition|Skyrim Special Edition Nexus - Mods and Community": {
+      "label": "video games",
+      "score": 0.6824,
+      "decision": "block"
+    },
+    "https://knowyourmeme.com/|Internet Meme Database | Know Your Meme": {
+      "label": "memes and entertainment",
+      "score": 0.3815,
+      "decision": "allow"
+    },
+    "https://imgur.com/gallery/hot|Most Viral Images | Imgur": {
+      "label": "social media and networking",
+      "score": 0.3681,
+      "decision": "allow"
+    },
+    "https://www.buzzfeed.com/quizzes|Quizzes - BuzzFeed": {
+      "label": "memes and entertainment",
+      "score": 0.4458,
+      "decision": "allow"
+    },
+    "https://www.tiktok.com/@khaby.lame|Khaby Lame (@khaby.lame) Official | TikTok": {
+      "label": "memes and entertainment",
+      "score": 0.7478,
+      "decision": "block"
+    },
+    "https://x.com/explore|Explore / X": {
+      "label": "social media and networking",
+      "score": 0.6355,
+      "decision": "block"
+    },
+    "https://www.reddit.com/r/all/|r/all": {
+      "label": "social media and networking",
+      "score": 0.5649,
+      "decision": "block"
+    },
+    "https://www.linkedin.com/feed/|Feed | LinkedIn": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.4524,
+      "decision": "allow"
+    },
+    "https://bsky.app/|Bluesky Social": {
+      "label": "social media and networking",
+      "score": 0.8804,
+      "decision": "block"
+    },
+    "https://www.temu.com/|Temu | Shop Like a Billionaire": {
+      "label": "online shopping",
+      "score": 0.8686,
+      "decision": "block"
+    },
+    "https://www.zara.com/us/|ZARA United States | New Collection Online": {
+      "label": "online shopping",
+      "score": 0.3933,
+      "decision": "allow"
+    },
+    "https://www.bestbuy.com/site/misc/deal-of-the-day|Deal of the Day - Best Buy": {
+      "label": "online shopping",
+      "score": 0.9924,
+      "decision": "block"
+    },
+    "https://www.amazon.com/gp/bestsellers|Amazon Best Sellers": {
+      "label": "online shopping",
+      "score": 0.9295,
+      "decision": "block"
+    },
+    "https://www.pornhub.com/categories|Porn Video Categories | Pornhub": {
+      "label": "adult content",
+      "score": 0.8891,
+      "decision": "block"
+    },
+    "https://www.xvideos.com/|XVIDEOS.COM": {
+      "label": "adult content",
+      "score": 0.9381,
+      "decision": "block"
+    },
+    "https://www.redtube.com/|RedTube": {
+      "label": "adult content",
+      "score": 0.9265,
+      "decision": "block"
+    },
+    "https://chaturbate.com/|Chaturbate - Free Adult Webcams": {
+      "label": "adult content",
+      "score": 0.9943,
+      "decision": "block"
+    },
+    "https://www.brazzers.com/|Brazzers": {
+      "label": "adult content",
+      "score": 0.8698,
+      "decision": "block"
+    },
+    "https://fansly.com/|Fansly": {
+      "label": "social media and networking",
+      "score": 0.645,
+      "decision": "block"
+    },
+    "https://www.fanduel.com/|FanDuel | Online Sportsbook, Casino & Daily Fantasy": {
+      "label": "gambling and betting",
+      "score": 0.966,
+      "decision": "block"
+    },
+    "https://www.betmgm.com/|BetMGM | Online Casino & Sportsbook": {
+      "label": "gambling and betting",
+      "score": 0.45,
+      "decision": "allow"
+    },
+    "https://www.888casino.com/|888casino: Online Casino Games": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.8367,
+      "decision": "allow"
+    },
+    "https://www.ggpoker.com/|GGPoker | The World's Biggest Poker Room": {
+      "label": "gambling and betting",
+      "score": 0.9698,
+      "decision": "block"
+    },
+    "https://www.oddschecker.com/|Oddschecker: Compare Betting Odds": {
+      "label": "gambling and betting",
+      "score": 0.7466,
+      "decision": "block"
+    },
+    "https://www.olg.ca/|OLG | Ontario Lottery and Gaming": {
+      "label": "gambling and betting",
+      "score": 0.9328,
+      "decision": "block"
+    },
+    "https://www.bloomberg.com/markets|Markets - Bloomberg": {
+      "label": "finance and investing",
+      "score": 0.4466,
+      "decision": "allow"
+    },
+    "https://www.cnbc.com/|Stock Markets, Business News, Financials, Earnings - CNBC": {
+      "label": "finance and investing",
+      "score": 0.4028,
+      "decision": "allow"
+    },
+    "https://www.actionnetwork.com/|Sports Betting Odds, Picks & Predictions | Action Network": {
+      "label": "gambling and betting",
+      "score": 0.3012,
+      "decision": "allow"
+    },
+    "https://www.reddit.com/r/movies/|r/movies": {
+      "label": "movies and tv shows",
+      "score": 0.4366,
+      "decision": "allow"
+    },
+    "https://www.reddit.com/r/wallstreetbets/|r/wallstreetbets": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.459,
+      "decision": "allow"
+    },
+    "https://www.twitch.tv/directory/category/just-chatting|Just Chatting - Twitch": {
+      "label": "social media and networking",
+      "score": 0.341,
+      "decision": "allow"
+    },
+    "https://www.nature.com/|Nature": {
+      "label": "science and education",
+      "score": 0.5304,
+      "decision": "allow"
+    },
+    "https://www.quantamagazine.org/|Quanta Magazine": {
+      "label": "science and education",
+      "score": 0.8227,
+      "decision": "allow"
+    },
+    "https://discord.com/app|Discord": {
+      "label": "social media and networking",
+      "score": 0.2973,
+      "decision": "allow"
+    },
+    "https://www.pinterest.com/search/pins/?q=kitchen%20renovation|kitchen renovation ideas | Pinterest": {
+      "label": "social media and networking",
+      "score": 0.6059,
+      "decision": "block"
+    },
+    "https://www.udemy.com/topic/python/|Top Python Courses Online | Udemy": {
+      "label": "neutral: career and learning",
+      "score": 0.7429,
+      "decision": "allow"
+    },
+    "https://apnews.com/hub/entertainment|Entertainment News | AP News": {
+      "label": "social media and networking",
+      "score": 0.6444,
+      "decision": "block"
+    },
+    "https://www.chess.com/|Chess.com - Play Chess Online": {
+      "label": "video games",
+      "score": 0.3295,
+      "decision": "allow"
+    },
+    "https://www.lemonde.fr/|Le Monde.fr - Actualités et Infos en France et dans le monde": {
+      "label": "social media and networking",
+      "score": 0.2596,
+      "decision": "allow"
+    },
+    "https://www.mercadolibre.com.ar/|Mercado Libre Argentina - Envíos Gratis en el día": {
+      "label": "online shopping",
+      "score": 0.6243,
+      "decision": "block"
+    },
+    "https://www.taobao.com/|淘宝网 - 淘！我喜欢": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.3947,
+      "decision": "allow"
+    },
+    "https://weibo.com/|微博": {
+      "label": "social media and networking",
+      "score": 0.7994,
+      "decision": "block"
+    },
+    "https://www3.nhk.or.jp/news/|NHKニュース - NHK NEWS WEB": {
+      "label": "video games",
+      "score": 0.1474,
+      "decision": "allow"
+    },
+    "https://www.jeuxvideo.com/|Jeuxvideo.com : Actu, Tests, Vidéos et Astuces des Jeux Vidéo": {
+      "label": "video games",
+      "score": 0.1925,
+      "decision": "allow"
+    },
+    "https://www.impots.gouv.fr/accueil|impots.gouv.fr": {
+      "label": "neutral: accounts and sign-in",
+      "score": 0.3063,
+      "decision": "allow"
+    },
+    "https://www.tum.de/studium|Studium - TUM": {
+      "label": "neutral: documentation and reference",
+      "score": 0.6385,
+      "decision": "allow"
+    }
+  }
+}

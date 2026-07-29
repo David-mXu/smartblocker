@@ -1,296 +1,3627 @@
 {
-  "$schema-note": "Each case: { input: string | {title, channel?, context?}, expected: string[] | 'productive' }. `expected` as an array = acceptable top-1 labels (top-1 accuracy + block-recall scoring). `expected: 'productive'` = the page must NOT be blocked (top label in BLOCKED_LABELS with score >= threshold counts as a false positive); top-1 accuracy is not scored for these. Enriched inputs mirror ClassifyInput/buildClassifierText.",
+  "$schema-note": "Each case: { input: string | {title, channel?, context?}, expected: string[] | 'productive' }. `expected` as an array = acceptable top-1 labels (top-1 accuracy + block-recall scoring). `expected: 'productive'` = the page must NOT be blocked (top label in BLOCKED_LABELS with score >= threshold counts as a false positive); top-1 accuracy is not scored for these. Enriched inputs mirror ClassifyInput/buildClassifierText. Optional `url` enables whitelist/blocklist scoring and URL path hints; optional `captured` (written by eval.mjs --capture) holds real signals scraped from the live page by the production extractMeta and takes precedence over `input`. `set` tags the batch a case belongs to (absent = v1) so metrics can be reported per-slice.",
   "cases": [
-    { "input": "Elden Ring Boss Fight", "expected": ["video games"] },
-    { "input": "I spent 100 days in Hardcore Minecraft", "expected": ["video games"] },
-    { "input": "Hogwarts Legacy 100% Walkthrough Part 12", "expected": ["video games"] },
-    { "input": "Baldur's Gate 3 Honour Mode is pure chaos", "expected": ["video games"] },
-    { "input": "TOP 5 Fortnite Chapter 5 tips to win more games", "expected": ["video games"] },
-    { "input": "Zelda: Tears of the Kingdom - All Shrine Locations", "expected": ["video games"] },
-    { "input": "Ranking every Call of Duty campaign from worst to best", "expected": ["video games"] },
-    { "input": "Speedrunning Portal 2 until I lose my mind", "expected": ["video games"] },
-    { "input": "Stardew Valley 1.6 update: everything new", "expected": ["video games"] },
-    { "input": "Finally hit Diamond in League after 500 games", "expected": ["video games"] },
-    { "input": "GTA 6 trailer breakdown frame by frame", "expected": ["video games"] },
-    { "input": "Helldivers 2 best loadouts for Helldive difficulty", "expected": ["video games"] },
-    { "input": "POV: you queue solo in Valorant ranked", "expected": ["video games", "memes and entertainment"] },
-    { "input": "Steam Summer Sale 2026 hidden gems under $10", "expected": ["video games", "online shopping"] },
-
-    { "input": "Top 10 memes of the week", "expected": ["memes and entertainment"] },
-    { "input": "Try not to laugh challenge (IMPOSSIBLE)", "expected": ["memes and entertainment"] },
-    { "input": "r/facepalm - Guy tries to argue with a parking meter", "expected": ["memes and entertainment", "social media and networking"] },
-    { "input": "Cats being jerks for 10 minutes straight", "expected": ["memes and entertainment"] },
-    { "input": "The most unhinged Family Feud answers ever", "expected": ["memes and entertainment", "movies and tv shows"] },
-    { "input": "I bought every weird gadget TikTok recommended", "expected": ["memes and entertainment", "online shopping"] },
-    { "input": "Reacting to my old cringe videos", "expected": ["memes and entertainment"] },
-    { "input": "Best fails compilation 2026 - week 14", "expected": ["memes and entertainment"] },
-    { "input": "This AI made the cursed images ever", "expected": ["memes and entertainment"] },
-    { "input": "MrBeast - I Gave Away $1,000,000 To Random Strangers", "expected": ["memes and entertainment"] },
-    { "input": "Skibidi toilet explained by a 40 year old dad", "expected": ["memes and entertainment"] },
-    { "input": "9GAG - Just for fun", "expected": ["memes and entertainment", "social media and networking"] },
-
-    { "input": "Nike Air Max 90 - Buy Online", "expected": ["online shopping"] },
-    { "input": "Black Friday deals: up to 70% off electronics", "expected": ["online shopping"] },
-    { "input": "Amazon.com: Sony WH-1000XM5 Wireless Headphones", "expected": ["online shopping"] },
-    { "input": "Your cart (3 items) - Checkout", "expected": ["online shopping"] },
-    { "input": "SHEIN haul: I ordered 25 items so you don't have to", "expected": ["online shopping"] },
-    { "input": "Best mechanical keyboards under $100 (2026 buying guide)", "expected": ["online shopping", "programming and software development"] },
-    { "input": "AliExpress 11.11 mega sale starts now", "expected": ["online shopping"] },
-    { "input": "Etsy - Handmade ceramic coffee mugs", "expected": ["online shopping"] },
-    { "input": "Wayfair | Sofas & Couches You'll Love in 2026", "expected": ["online shopping"] },
-    { "input": "Unboxing my entire $2,000 tech haul", "expected": ["online shopping", "memes and entertainment"] },
-    { "input": "Flash sale: last chance for 40% off sitewide", "expected": ["online shopping"] },
-    { "input": "eBay: iphone 15 pro max 256gb unlocked", "expected": ["online shopping"] },
-    { "input": "iPhone 16 Pro and iPhone 16 Pro Max - Apple", "expected": ["online shopping"] },
-    { "input": "Apple Store Online - Apple", "expected": ["online shopping"] },
-    { "input": "Apple Watch Series 10 - Apple", "expected": ["online shopping"] },
-    { "input": "Samsung Galaxy S25 Ultra | Samsung US", "expected": ["online shopping"] },
-    { "input": { "title": "iPhone 16 Pro and iPhone 16 Pro Max - Apple", "channel": "Apple", "context": "Built for Apple Intelligence, with a stunning titanium design and the fastest chip ever in an iPhone." }, "expected": ["online shopping"] },
-    { "input": { "title": "MacBook Air 13-inch and 15-inch - Apple", "channel": "Apple", "context": "Supercharged by the M4 chip, MacBook Air is up to 23x faster than Intel-based models." }, "expected": ["online shopping"] },
-
-    { "input": "Home / X", "expected": ["social media and networking"] },
-    { "input": "Instagram", "expected": ["social media and networking"] },
-    { "input": "(2) Facebook", "expected": ["social media and networking"] },
-    { "input": "TikTok - Make Your Day", "expected": ["social media and networking"] },
-    { "input": "Threads - Say more", "expected": ["social media and networking"] },
-    { "input": "For You | TikTok", "expected": ["social media and networking"] },
-    { "input": "Snapchat Web", "expected": ["social media and networking"] },
-    { "input": "Who to follow on X in 2026", "expected": ["social media and networking"] },
-    { "input": "My tweet went viral and ruined my week", "expected": ["social media and networking", "memes and entertainment"] },
-    { "input": "Reddit - Dive into anything", "expected": ["social media and networking"] },
-    { "input": "Pinterest - Discover recipes, home ideas, style inspiration", "expected": ["social media and networking"] },
-    { "input": "BeReal. Your friends for real.", "expected": ["social media and networking"] },
-
-    { "input": "Best online casino bonuses 2026", "expected": ["gambling and betting"] },
-    { "input": "Stake.com - Online Casino & Sports Betting", "expected": ["gambling and betting"] },
-    { "input": "How I turned $50 into $5,000 on slots (INSANE bonus buy)", "expected": ["gambling and betting"] },
-    { "input": "DraftKings Sportsbook: Bet on NFL, NBA & more", "expected": ["gambling and betting", "sports"] },
-    { "input": "Today's parlay picks: 5-leg NBA special", "expected": ["gambling and betting", "sports"] },
-    { "input": "Live blackjack dealer takes the whole table's money", "expected": ["gambling and betting"] },
-    { "input": "PokerStars - Play Texas Hold'em online", "expected": ["gambling and betting"] },
-    { "input": "Bet365 - Online Sports Betting", "expected": ["gambling and betting", "sports"] },
-    { "input": "Roobet Crash strategy that actually works", "expected": ["gambling and betting"] },
-    { "input": "Vegas trip vlog: 24 hours at the Bellagio poker room", "expected": ["gambling and betting", "memes and entertainment"] },
-
-    { "input": "Pornhub - Free Porn Videos", "expected": ["adult content"] },
-    { "input": "OnlyFans - Sign Up to Support Your Favorite Creators", "expected": ["adult content", "social media and networking"] },
-    { "input": "Hot singles in your area want to meet", "expected": ["adult content"] },
-    { "input": "NSFW subreddits you should know about", "expected": ["adult content", "social media and networking"] },
-    { "input": "xHamster: Free Adult Videos", "expected": ["adult content"] },
-    { "input": "18+ only: the internet's spiciest content", "expected": ["adult content"] },
-    { "input": "Top adult webcam sites ranked", "expected": ["adult content"] },
-    { "input": "Erotic stories archive - new chapters weekly", "expected": ["adult content"] },
-
-    { "input": "Watch Dune: Part Two (2024) full movie", "expected": ["movies and tv shows"] },
-    { "input": "The Bear season 4 review: still the best show on TV", "expected": ["movies and tv shows"] },
-    { "input": "Netflix Home", "expected": ["movies and tv shows"] },
-    { "input": "Every Marvel movie ranked from worst to best", "expected": ["movies and tv shows"] },
-    { "input": "Oppenheimer ending explained", "expected": ["movies and tv shows"] },
-    { "input": "HBO Max: Stream TV & Movies", "expected": ["movies and tv shows"] },
-    { "input": "Binge-worthy shows to watch this weekend", "expected": ["movies and tv shows"] },
-    { "input": "One Piece live action season 2 first look", "expected": ["movies and tv shows"] },
-    { "input": "IMDb: The Shawshank Redemption (1994)", "expected": ["movies and tv shows"] },
-    { "input": "Anime winter 2026 season preview", "expected": ["movies and tv shows"] },
-    { "input": "Stranger Things 5 trailer reaction", "expected": ["movies and tv shows", "memes and entertainment"] },
-    { "input": "Letterboxd | Your life in film", "expected": ["movies and tv shows", "social media and networking"] },
-
-    { "input": "lofi hip hop radio - beats to relax/study to", "expected": ["music"] },
-    { "input": "Taylor Swift - Anti-Hero (Official Music Video)", "expected": ["music"] },
-    { "input": "Spotify - Web Player: Music for everyone", "expected": ["music"] },
-    { "input": "Kendrick Lamar's new album is a masterpiece", "expected": ["music"] },
-    { "input": "How to mix a punchy kick and bass", "expected": ["music"] },
-    { "input": "Coachella 2026 lineup announced", "expected": ["music", "news and politics"] },
-    { "input": "Learn guitar in 30 days: day 1", "expected": ["music", "science and education"] },
-    { "input": "The 100 greatest basslines of all time", "expected": ["music"] },
-    { "input": "SoundCloud - Hear the world's sounds", "expected": ["music"] },
-    { "input": "Billie Eilish tiny desk concert", "expected": ["music"] },
-
-    { "input": "NBA Finals Game 7 highlights", "expected": ["sports"] },
-    { "input": "Messi's first season in MLS: every goal", "expected": ["sports"] },
-    { "input": "Premier League table after matchweek 30", "expected": ["sports"] },
-    { "input": "UFC 312 full fight card predictions", "expected": ["sports"] },
-    { "input": "F1 Monaco Grand Prix qualifying results", "expected": ["sports"] },
-    { "input": "ESPN - Serving sports fans. Anytime. Anywhere.", "expected": ["sports"] },
-    { "input": "Why the Chiefs dynasty isn't over yet", "expected": ["sports"] },
-    { "input": "Olympic 100m final: fastest race in history", "expected": ["sports"] },
-    { "input": "Fantasy football week 12 waiver wire pickups", "expected": ["sports"] },
-    { "input": "How to fix your golf slice in 10 minutes", "expected": ["sports"] },
-    { "input": "Cricket World Cup 2027 schedule released", "expected": ["sports"] },
-    { "input": "LeBron James career retrospective", "expected": ["sports"] },
-
-    { "input": "Trump announces new tariff policy", "expected": ["news and politics"] },
-    { "input": "BBC News - Home", "expected": ["news and politics"] },
-    { "input": "Election 2026: what the polls actually say", "expected": ["news and politics"] },
-    { "input": "Supreme Court ruling explained in 5 minutes", "expected": ["news and politics"] },
-    { "input": "Breaking: earthquake strikes off the coast of Japan", "expected": ["news and politics"] },
-    { "input": "The Daily - Today's episode: the border deal", "expected": ["news and politics"] },
-    { "input": "CNN: Live updates on the summit", "expected": ["news and politics"] },
-    { "input": "EU passes landmark AI regulation", "expected": ["news and politics", "science and education"] },
-    { "input": "Opinion: Why housing policy is broken", "expected": ["news and politics"] },
-    { "input": "Reuters | Breaking International News & Views", "expected": ["news and politics"] },
-    { "input": "Late night hosts react to the debate", "expected": ["news and politics", "memes and entertainment", "movies and tv shows"] },
-    { "input": "Ukraine peace talks: what we know so far", "expected": ["news and politics"] },
-
-    { "input": "How the Fed's rate decision affects your portfolio", "expected": ["finance and investing"] },
-    { "input": "S&P 500 hits all-time high as tech rallies", "expected": ["finance and investing", "news and politics"] },
-    { "input": "Bogleheads guide to the three-fund portfolio", "expected": ["finance and investing"] },
-    { "input": "Bitcoin breaks $100k: what happens next", "expected": ["finance and investing"] },
-    { "input": "Roth IRA vs 401k: which should you max first?", "expected": ["finance and investing"] },
-    { "input": "I analyzed 10 years of NVDA earnings calls", "expected": ["finance and investing"] },
-    { "input": "Yahoo Finance - Stock Market Live, Quotes, Business News", "expected": ["finance and investing", "news and politics"] },
-    { "input": "How to read a balance sheet like Warren Buffett", "expected": ["finance and investing"] },
-    { "input": "GME to the moon again? Here's the setup", "expected": ["finance and investing"] },
-    { "input": "The hidden fees in your index funds", "expected": ["finance and investing"] },
-    { "input": "Real estate vs stocks: 30-year comparison", "expected": ["finance and investing"] },
-    { "input": "Dave Ramsey reacts to $300k in student loans", "expected": ["finance and investing", "memes and entertainment"] },
-
-    { "input": "MIT 6.006 Introduction to Algorithms, Lecture 1", "expected": ["science and education", "programming and software development"] },
-    { "input": "Veritasium: The Surprising Physics of Spinning Objects", "expected": ["science and education"] },
-    { "input": "How CRISPR gene editing actually works", "expected": ["science and education"] },
-    { "input": "Khan Academy | Free Online Courses, Lessons & Practice", "expected": ["science and education"] },
-    { "input": "What happens inside a black hole?", "expected": ["science and education"] },
-    { "input": "3Blue1Brown - The essence of linear algebra, chapter 3", "expected": ["science and education"] },
-    { "input": "James Webb telescope spots earliest galaxy yet", "expected": ["science and education", "news and politics"] },
-    { "input": "The immune system explained: T cells", "expected": ["science and education"] },
-    { "input": "Coursera | Machine Learning Specialization - Week 2", "expected": ["science and education", "programming and software development"] },
-    { "input": "Why planes actually fly: lift explained properly", "expected": ["science and education"] },
-    { "input": "Anki settings that actually work for med school", "expected": ["science and education"] },
-    { "input": "History of Rome: the fall of the Republic", "expected": ["science and education"] },
-
-    { "input": "React Router Tutorial", "expected": ["programming and software development"] },
-    { "input": "Why TypeScript generics confuse everyone", "expected": ["programming and software development"] },
-    { "input": "Rust vs Go in 2026: which should you learn?", "expected": ["programming and software development"] },
-    { "input": "Building a compiler from scratch, part 3: parsing", "expected": ["programming and software development"] },
-    { "input": "PostgreSQL indexing deep dive", "expected": ["programming and software development"] },
-    { "input": "Fireship - 100 seconds of Kubernetes", "expected": ["programming and software development"] },
-    { "input": "System design interview: design a URL shortener", "expected": ["programming and software development"] },
-    { "input": "The Primeagen reacts to your worst code", "expected": ["programming and software development", "memes and entertainment"] },
-    { "input": "Docker networking finally explained", "expected": ["programming and software development"] },
-    { "input": "Clean architecture is a lie (sort of)", "expected": ["programming and software development"] },
-    { "input": "Next.js 16 app router migration guide", "expected": ["programming and software development"] },
-    { "input": "LeetCode 146: LRU Cache in Python", "expected": ["programming and software development"] },
-
-    { "input": "Pull requests · facebook/react", "expected": "productive" },
-    { "input": "TypeError: Cannot read properties of undefined (reading 'map') - Stack Overflow", "expected": "productive" },
-    { "input": "MDN Web Docs: Array.prototype.reduce()", "expected": "productive" },
-    { "input": "Jira - FLOW-142: Block screen flashes on SPA navigation", "expected": "productive" },
-    { "input": "Q3 planning doc - Google Docs", "expected": "productive" },
-    { "input": "Inbox (12) - david@company.com", "expected": "productive" },
-    { "input": "AWS Console - EC2 Dashboard", "expected": "productive" },
-    { "input": "Sprint retro board | Miro", "expected": "productive" },
-    { "input": "Figma - Onboarding flow v3", "expected": "productive" },
-    { "input": "Untitled document - Overleaf, Online LaTeX Editor", "expected": "productive" },
-    { "input": "CS 341 Assignment 4: Dynamic Programming - University of Waterloo", "expected": "productive" },
-    { "input": "IEEE Xplore: Attention Is All You Need", "expected": "productive" },
-    { "input": "arXiv:2405.01234 - Efficient On-Device Text Classification", "expected": "productive" },
-    { "input": "Zoom Meeting - Weekly 1:1 with Sarah", "expected": "productive" },
-    { "input": "Notion – Team wiki: deployment runbook", "expected": "productive" },
-    { "input": "Confluence - API versioning strategy RFC", "expected": "productive" },
-    { "input": "Google Scholar: zero-shot text classification survey", "expected": "productive" },
-    { "input": "Dependabot alerts · myorg/backend", "expected": "productive" },
-    { "input": "Vercel Dashboard - Production deployment", "expected": "productive" },
-    { "input": "Grammarly - Cover letter draft", "expected": "productive" },
-    { "input": "LinkedIn: Senior Software Engineer jobs in Toronto", "expected": "productive" },
-    { "input": "Indeed.com: backend developer remote", "expected": "productive" },
-    { "input": "IRS Form 1040 instructions 2025", "expected": "productive" },
-    { "input": "TurboTax: File your 2025 taxes online", "expected": "productive" },
-    { "input": "Chase Online - Account activity", "expected": "productive" },
-    { "input": "Wealthsimple - Portfolio overview", "expected": "productive" },
-    { "input": "Google Calendar - Week of July 6", "expected": "productive" },
-    { "input": "DoorDash order status: your lunch is on the way", "expected": "productive" },
-    { "input": "Uber - Request a ride", "expected": "productive" },
-    { "input": "Airbnb: apartments in Berlin for the conference week", "expected": "productive" },
-    { "input": "Google Flights - YYZ to SFO, Aug 12", "expected": "productive" },
-    { "input": "WebMD: persistent wrist pain from typing", "expected": "productive" },
-    { "input": "MyChart - Appointment confirmation", "expected": "productive" },
-    { "input": "Duolingo - Spanish: Unit 12 Checkpoint", "expected": "productive" },
-    { "input": "The Rust Programming Language - Chapter 10: Generics", "expected": "productive" },
-    { "input": "Python 3.13 documentation: asyncio", "expected": "productive" },
-    { "input": "npm: @huggingface/transformers", "expected": "productive" },
-    { "input": "Can I use... CSS container queries", "expected": "productive" },
-    { "input": "regex101: build, test, and debug regex", "expected": "productive" },
-    { "input": "Excalidraw - system architecture sketch", "expected": "productive" },
-    { "input": "ChatGPT - debugging a segfault in my C++ allocator", "expected": "productive" },
-    { "input": "Claude - draft performance review feedback", "expected": "productive" },
-    { "input": "Wikipedia: Byzantine fault tolerance", "expected": "productive" },
-    { "input": "Investopedia: What Is Dollar-Cost Averaging?", "expected": "productive" },
-    { "input": "Hacker News: Show HN: I built a local-first distraction blocker", "expected": "productive" },
-    { "input": "Recipe: 20-minute weeknight chicken stir fry", "expected": "productive" },
-    { "input": "AllRecipes - Easy overnight oats", "expected": "productive" },
-    { "input": "Strava - Morning run activity", "expected": "productive" },
-    { "input": "Hevy - Push day workout log", "expected": "productive" },
-    { "input": "Google Maps - directions to dentist", "expected": "productive" },
-    { "input": "Canada Post - Track your package", "expected": "productive" },
-    { "input": "Ikea assembly instructions: BILLY bookcase", "expected": "productive" },
-    { "input": "YouTube - How to replace a bike chain", "expected": "productive" },
-    { "input": "Home Depot: how to patch drywall", "expected": "productive" },
-    { "input": "Quora: What's it like to work at a quant firm?", "expected": "productive" },
-
-    { "input": { "title": "Elden Ring Boss Fight", "channel": "VaatiVidya", "context": "FromSoftware soulslike boss gameplay walkthrough" }, "expected": ["video games"] },
-    { "input": { "title": "Hogwarts Legacy 100% Walkthrough", "channel": "PotterFan", "context": "Open world RPG Harry Potter game full playthrough" }, "expected": ["video games"] },
-    { "input": { "title": "Finally hit Diamond rank after 500 games", "channel": "r/leagueoflegends", "context": "Ranked solo queue grind tips" }, "expected": ["video games"] },
-    { "input": { "title": "The Fed just moved", "channel": "r/wallstreetbets", "context": "Interest rate hike impact on portfolio and stock market" }, "expected": ["finance and investing"] },
-    { "input": { "title": "Silksong is finally real", "channel": "Team Cherry", "context": "Hollow Knight Silksong gameplay reveal trailer" }, "expected": ["video games"] },
-    { "input": { "title": "Day in the life", "channel": "r/cscareerquestions", "context": "What a typical day looks like as a junior backend developer at a bank" }, "expected": ["programming and software development"] },
-    { "input": { "title": "You won't believe this comeback", "channel": "ESPN", "context": "NBA playoffs fourth quarter comeback highlights" }, "expected": ["sports"] },
-    { "input": { "title": "New drop just landed", "channel": "StockX", "context": "Buy and sell authentic Jordan sneakers, streetwear and collectibles" }, "expected": ["online shopping"] },
-    { "input": { "title": "This changes everything", "channel": "MKBHD", "context": "Smartphone review camera comparison and verdict" }, "expected": ["science and education", "memes and entertainment", "online shopping"] },
-    { "input": { "title": "Episode 214", "channel": "Lex Fridman Podcast", "context": "Conversation about artificial intelligence, consciousness and the future of humanity" }, "expected": ["science and education"] },
-    { "input": { "title": "Watch live", "channel": "Sky News", "context": "Breaking news coverage of the general election results" }, "expected": ["news and politics"] },
-    { "input": { "title": "Full album out now", "channel": "Arctic Monkeys", "context": "Official audio stream of the new studio album" }, "expected": ["music"] },
-    { "input": { "title": "Season finale tonight", "channel": "Netflix", "context": "The final episode of the crime drama series premieres tonight" }, "expected": ["movies and tv shows"] },
-    { "input": { "title": "Big win compilation", "channel": "SlotKing", "context": "Online casino slot machine biggest wins and bonus rounds this week" }, "expected": ["gambling and betting"] },
-    { "input": { "title": "Getting started with pgvector", "channel": "Supabase", "context": "Tutorial on vector similarity search in Postgres for AI applications" }, "expected": "productive" },
-    { "input": { "title": "Buy MacBook Air - Apple", "channel": "Apple", "context": "Online store product page. Get a new MacBook Air laptop with the M5 chip from only $108.25 per month. Built for AI. Lightweight, with all-day battery life." }, "expected": ["online shopping"] },
-    { "input": { "title": "Buy MacBook Air, 15-inch, M5 Chip, 10-core CPU, 10-core GPU, Midnight, 16GB memory, 512GB storage - Apple", "channel": "Apple", "context": "Online store product page. Get a new MacBook Air laptop with the M5 chip from only $108.25 per month." }, "expected": ["online shopping"] },
-    { "input": { "title": "Store", "context": "Online store product page." }, "expected": ["online shopping"] },
-    { "input": { "title": "Dune: Part Three (2026)", "context": "Movie or TV show page. Paul Atreides unites with the Fremen once more." }, "expected": ["movies and tv shows"] },
-    { "input": { "title": "Central bank holds rates steady", "context": "News article. The decision surprised markets expecting a cut." }, "expected": ["finance and investing", "news and politics"] },
-    { "input": { "title": "One-pot pasta", "context": "Recipe page. Ready in 20 minutes with pantry staples." }, "expected": "productive" },
-
-    { "input": "Sign In", "expected": "productive" },
-    { "input": "Sign In - RBC Royal Bank", "expected": "productive" },
-    { "input": "TD Canada Trust - EasyWeb Login", "expected": "productive" },
-    { "input": "CIBC Online Banking - Sign On", "expected": "productive" },
-    { "input": "Scotiabank - Sign in to online banking", "expected": "productive" },
-    { "input": "BMO Online Banking: Account Summary", "expected": "productive" },
-    { "input": "Tangerine - My Accounts", "expected": "productive" },
-    { "input": "Account Summary", "expected": "productive" },
-    { "input": "Messages - Online Banking", "expected": "productive" },
-    { "input": "Verify your identity", "expected": "productive" },
-    { "input": "Enter your one-time passcode", "expected": "productive" },
-    { "input": "My Account - Canada Revenue Agency", "expected": "productive" },
-    { "input": "My Service Canada Account - Sign in", "expected": "productive" },
-    { "input": "ServiceOntario: renew your health card", "expected": "productive" },
-    { "input": "Quest - University of Waterloo", "expected": "productive" },
-    { "input": "LEARN - Course Home", "expected": "productive" },
-    { "input": "Student Center: tuition and fee account balance", "expected": "productive" },
-    { "input": "Manulife - Group benefits sign in", "expected": "productive" },
-    { "input": "Sun Life: my claims and coverage", "expected": "productive" },
-    { "input": "Hydro One - View and pay your bill", "expected": "productive" },
-    { "input": "Rogers: manage your account and billing", "expected": "productive" },
-    { "input": "Bell - MyBell account overview", "expected": "productive" },
-
-    { "input": { "title": "Sign In", "channel": "rbcroyalbank.com", "context": "Account sign-in page." }, "expected": "productive" },
-    { "input": { "title": "Online Banking Sign In", "channel": "cibc.com", "context": "Account sign-in page. Bank or financial institution page." }, "expected": "productive" },
-    { "input": { "title": "EasyWeb - Login", "channel": "td.com", "context": "Account sign-in page." }, "expected": "productive" },
-    { "input": { "title": "My Accounts", "channel": "scotiabank.com", "context": "Bank or financial institution page. Personal · Accounts · Transfers · Bill Payments · Investments" }, "expected": "productive" },
-    { "input": { "title": "Account overview", "channel": "bmo.com", "context": "Account management page. My Accounts · Payments & Transfers · eStatements · Profile" }, "expected": "productive" },
-    { "input": { "title": "Notifications", "channel": "rbcroyalbank.com", "context": "Bank or financial institution page." }, "expected": "productive" },
-    { "input": { "title": "Messages", "channel": "wealthsimple.com", "context": "Account management page." }, "expected": "productive" },
-    { "input": { "title": "Sign in", "channel": "canada.ca", "context": "Account sign-in page. Government services page." }, "expected": "productive" },
-    { "input": { "title": "My Account", "channel": "cra-arc.gc.ca", "context": "Government services page." }, "expected": "productive" },
-    { "input": { "title": "Health card renewal", "channel": "ontario.ca", "context": "Government services page. Renew your Ontario health card online." }, "expected": "productive" },
-    { "input": { "title": "Quest", "channel": "uwaterloo.ca", "context": "University or school page. Class Schedule · Enroll · Finances · Academics" }, "expected": "productive" },
-    { "input": { "title": "Sign in to LEARN", "channel": "uwaterloo.ca", "context": "Account sign-in page. University or school page." }, "expected": "productive" },
-    { "input": { "title": "Patient portal sign in", "channel": "oakvillehealth.ca", "context": "Account sign-in page. Medical provider page." }, "expected": "productive" },
-    { "input": { "title": "My insurance account", "channel": "manulife.ca", "context": "Insurance company page. Sign in to view your policies and claims." }, "expected": "productive" },
-    { "input": { "title": "Pay your bill", "channel": "hydroone.com", "context": "Account management page. View usage, compare rates and pay your electricity bill." }, "expected": "productive" },
-
-    { "input": "Log in to Facebook", "expected": "productive" },
-    { "input": "(2) Notifications / X", "expected": ["social media and networking"] },
-    { "input": { "title": "Instagram", "channel": "instagram.com", "context": "Account sign-in page. Log in to see photos and videos from friends." }, "expected": ["social media and networking"] },
-    { "input": { "title": "For You", "channel": "tiktok.com", "context": "Video or social media feed page." }, "expected": ["social media and networking"] },
-    { "input": { "title": "Checkout", "channel": "shein.com", "context": "Online store checkout page." }, "expected": ["online shopping"] }
+    {
+      "input": "Elden Ring Boss Fight",
+      "expected": [
+        "video games"
+      ]
+    },
+    {
+      "input": "I spent 100 days in Hardcore Minecraft",
+      "expected": [
+        "video games"
+      ]
+    },
+    {
+      "input": "Hogwarts Legacy 100% Walkthrough Part 12",
+      "expected": [
+        "video games"
+      ]
+    },
+    {
+      "input": "Baldur's Gate 3 Honour Mode is pure chaos",
+      "expected": [
+        "video games"
+      ]
+    },
+    {
+      "input": "TOP 5 Fortnite Chapter 5 tips to win more games",
+      "expected": [
+        "video games"
+      ]
+    },
+    {
+      "input": "Zelda: Tears of the Kingdom - All Shrine Locations",
+      "expected": [
+        "video games"
+      ]
+    },
+    {
+      "input": "Ranking every Call of Duty campaign from worst to best",
+      "expected": [
+        "video games"
+      ]
+    },
+    {
+      "input": "Speedrunning Portal 2 until I lose my mind",
+      "expected": [
+        "video games"
+      ]
+    },
+    {
+      "input": "Stardew Valley 1.6 update: everything new",
+      "expected": [
+        "video games"
+      ]
+    },
+    {
+      "input": "Finally hit Diamond in League after 500 games",
+      "expected": [
+        "video games"
+      ]
+    },
+    {
+      "input": "GTA 6 trailer breakdown frame by frame",
+      "expected": [
+        "video games"
+      ]
+    },
+    {
+      "input": "Helldivers 2 best loadouts for Helldive difficulty",
+      "expected": [
+        "video games"
+      ]
+    },
+    {
+      "input": "POV: you queue solo in Valorant ranked",
+      "expected": [
+        "video games",
+        "memes and entertainment"
+      ]
+    },
+    {
+      "input": "Steam Summer Sale 2026 hidden gems under $10",
+      "expected": [
+        "video games",
+        "online shopping"
+      ]
+    },
+    {
+      "input": "Top 10 memes of the week",
+      "expected": [
+        "memes and entertainment"
+      ]
+    },
+    {
+      "input": "Try not to laugh challenge (IMPOSSIBLE)",
+      "expected": [
+        "memes and entertainment"
+      ]
+    },
+    {
+      "input": "r/facepalm - Guy tries to argue with a parking meter",
+      "expected": [
+        "memes and entertainment",
+        "social media and networking"
+      ]
+    },
+    {
+      "input": "Cats being jerks for 10 minutes straight",
+      "expected": [
+        "memes and entertainment"
+      ]
+    },
+    {
+      "input": "The most unhinged Family Feud answers ever",
+      "expected": [
+        "memes and entertainment",
+        "movies and tv shows"
+      ]
+    },
+    {
+      "input": "I bought every weird gadget TikTok recommended",
+      "expected": [
+        "memes and entertainment",
+        "online shopping"
+      ]
+    },
+    {
+      "input": "Reacting to my old cringe videos",
+      "expected": [
+        "memes and entertainment"
+      ]
+    },
+    {
+      "input": "Best fails compilation 2026 - week 14",
+      "expected": [
+        "memes and entertainment"
+      ]
+    },
+    {
+      "input": "This AI made the cursed images ever",
+      "expected": [
+        "memes and entertainment"
+      ]
+    },
+    {
+      "input": "MrBeast - I Gave Away $1,000,000 To Random Strangers",
+      "expected": [
+        "memes and entertainment"
+      ]
+    },
+    {
+      "input": "Skibidi toilet explained by a 40 year old dad",
+      "expected": [
+        "memes and entertainment"
+      ]
+    },
+    {
+      "input": "9GAG - Just for fun",
+      "expected": [
+        "memes and entertainment",
+        "social media and networking"
+      ]
+    },
+    {
+      "input": "Nike Air Max 90 - Buy Online",
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "input": "Black Friday deals: up to 70% off electronics",
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "input": "Amazon.com: Sony WH-1000XM5 Wireless Headphones",
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "input": "Your cart (3 items) - Checkout",
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "input": "SHEIN haul: I ordered 25 items so you don't have to",
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "input": "Best mechanical keyboards under $100 (2026 buying guide)",
+      "expected": [
+        "online shopping",
+        "programming and software development"
+      ]
+    },
+    {
+      "input": "AliExpress 11.11 mega sale starts now",
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "input": "Etsy - Handmade ceramic coffee mugs",
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "input": "Wayfair | Sofas & Couches You'll Love in 2026",
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "input": "Unboxing my entire $2,000 tech haul",
+      "expected": [
+        "online shopping",
+        "memes and entertainment"
+      ]
+    },
+    {
+      "input": "Flash sale: last chance for 40% off sitewide",
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "input": "eBay: iphone 15 pro max 256gb unlocked",
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "input": "iPhone 16 Pro and iPhone 16 Pro Max - Apple",
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "input": "Apple Store Online - Apple",
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "input": "Apple Watch Series 10 - Apple",
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "input": "Samsung Galaxy S25 Ultra | Samsung US",
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "input": {
+        "title": "iPhone 16 Pro and iPhone 16 Pro Max - Apple",
+        "channel": "Apple",
+        "context": "Built for Apple Intelligence, with a stunning titanium design and the fastest chip ever in an iPhone."
+      },
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "input": {
+        "title": "MacBook Air 13-inch and 15-inch - Apple",
+        "channel": "Apple",
+        "context": "Supercharged by the M4 chip, MacBook Air is up to 23x faster than Intel-based models."
+      },
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "input": "Home / X",
+      "expected": [
+        "social media and networking"
+      ]
+    },
+    {
+      "input": "Instagram",
+      "expected": [
+        "social media and networking"
+      ]
+    },
+    {
+      "input": "(2) Facebook",
+      "expected": [
+        "social media and networking"
+      ]
+    },
+    {
+      "input": "TikTok - Make Your Day",
+      "expected": [
+        "social media and networking"
+      ]
+    },
+    {
+      "input": "Threads - Say more",
+      "expected": [
+        "social media and networking"
+      ]
+    },
+    {
+      "input": "For You | TikTok",
+      "expected": [
+        "social media and networking"
+      ]
+    },
+    {
+      "input": "Snapchat Web",
+      "expected": [
+        "social media and networking"
+      ]
+    },
+    {
+      "input": "Who to follow on X in 2026",
+      "expected": [
+        "social media and networking"
+      ]
+    },
+    {
+      "input": "My tweet went viral and ruined my week",
+      "expected": [
+        "social media and networking",
+        "memes and entertainment"
+      ]
+    },
+    {
+      "input": "Reddit - Dive into anything",
+      "expected": [
+        "social media and networking"
+      ]
+    },
+    {
+      "input": "Pinterest - Discover recipes, home ideas, style inspiration",
+      "expected": [
+        "social media and networking"
+      ]
+    },
+    {
+      "input": "BeReal. Your friends for real.",
+      "expected": [
+        "social media and networking"
+      ]
+    },
+    {
+      "input": "Best online casino bonuses 2026",
+      "expected": [
+        "gambling and betting"
+      ]
+    },
+    {
+      "input": "Stake.com - Online Casino & Sports Betting",
+      "expected": [
+        "gambling and betting"
+      ]
+    },
+    {
+      "input": "How I turned $50 into $5,000 on slots (INSANE bonus buy)",
+      "expected": [
+        "gambling and betting"
+      ]
+    },
+    {
+      "input": "DraftKings Sportsbook: Bet on NFL, NBA & more",
+      "expected": [
+        "gambling and betting",
+        "sports"
+      ]
+    },
+    {
+      "input": "Today's parlay picks: 5-leg NBA special",
+      "expected": [
+        "gambling and betting",
+        "sports"
+      ]
+    },
+    {
+      "input": "Live blackjack dealer takes the whole table's money",
+      "expected": [
+        "gambling and betting"
+      ]
+    },
+    {
+      "input": "PokerStars - Play Texas Hold'em online",
+      "expected": [
+        "gambling and betting"
+      ]
+    },
+    {
+      "input": "Bet365 - Online Sports Betting",
+      "expected": [
+        "gambling and betting",
+        "sports"
+      ]
+    },
+    {
+      "input": "Roobet Crash strategy that actually works",
+      "expected": [
+        "gambling and betting"
+      ]
+    },
+    {
+      "input": "Vegas trip vlog: 24 hours at the Bellagio poker room",
+      "expected": [
+        "gambling and betting",
+        "memes and entertainment"
+      ]
+    },
+    {
+      "input": "Pornhub - Free Porn Videos",
+      "expected": [
+        "adult content"
+      ]
+    },
+    {
+      "input": "OnlyFans - Sign Up to Support Your Favorite Creators",
+      "expected": [
+        "adult content",
+        "social media and networking"
+      ]
+    },
+    {
+      "input": "Hot singles in your area want to meet",
+      "expected": [
+        "adult content"
+      ]
+    },
+    {
+      "input": "NSFW subreddits you should know about",
+      "expected": [
+        "adult content",
+        "social media and networking"
+      ]
+    },
+    {
+      "input": "xHamster: Free Adult Videos",
+      "expected": [
+        "adult content"
+      ]
+    },
+    {
+      "input": "18+ only: the internet's spiciest content",
+      "expected": [
+        "adult content"
+      ]
+    },
+    {
+      "input": "Top adult webcam sites ranked",
+      "expected": [
+        "adult content"
+      ]
+    },
+    {
+      "input": "Erotic stories archive - new chapters weekly",
+      "expected": [
+        "adult content"
+      ]
+    },
+    {
+      "input": "Watch Dune: Part Two (2024) full movie",
+      "expected": [
+        "movies and tv shows"
+      ]
+    },
+    {
+      "input": "The Bear season 4 review: still the best show on TV",
+      "expected": [
+        "movies and tv shows"
+      ]
+    },
+    {
+      "input": "Netflix Home",
+      "expected": [
+        "movies and tv shows"
+      ]
+    },
+    {
+      "input": "Every Marvel movie ranked from worst to best",
+      "expected": [
+        "movies and tv shows"
+      ]
+    },
+    {
+      "input": "Oppenheimer ending explained",
+      "expected": [
+        "movies and tv shows"
+      ]
+    },
+    {
+      "input": "HBO Max: Stream TV & Movies",
+      "expected": [
+        "movies and tv shows"
+      ]
+    },
+    {
+      "input": "Binge-worthy shows to watch this weekend",
+      "expected": [
+        "movies and tv shows"
+      ]
+    },
+    {
+      "input": "One Piece live action season 2 first look",
+      "expected": [
+        "movies and tv shows"
+      ]
+    },
+    {
+      "input": "IMDb: The Shawshank Redemption (1994)",
+      "expected": [
+        "movies and tv shows"
+      ]
+    },
+    {
+      "input": "Anime winter 2026 season preview",
+      "expected": [
+        "movies and tv shows"
+      ]
+    },
+    {
+      "input": "Stranger Things 5 trailer reaction",
+      "expected": [
+        "movies and tv shows",
+        "memes and entertainment"
+      ]
+    },
+    {
+      "input": "Letterboxd | Your life in film",
+      "expected": [
+        "movies and tv shows",
+        "social media and networking"
+      ]
+    },
+    {
+      "input": "lofi hip hop radio - beats to relax/study to",
+      "expected": [
+        "music"
+      ]
+    },
+    {
+      "input": "Taylor Swift - Anti-Hero (Official Music Video)",
+      "expected": [
+        "music"
+      ]
+    },
+    {
+      "input": "Spotify - Web Player: Music for everyone",
+      "expected": [
+        "music"
+      ]
+    },
+    {
+      "input": "Kendrick Lamar's new album is a masterpiece",
+      "expected": [
+        "music"
+      ]
+    },
+    {
+      "input": "How to mix a punchy kick and bass",
+      "expected": [
+        "music"
+      ]
+    },
+    {
+      "input": "Coachella 2026 lineup announced",
+      "expected": [
+        "music",
+        "news and politics"
+      ]
+    },
+    {
+      "input": "Learn guitar in 30 days: day 1",
+      "expected": [
+        "music",
+        "science and education"
+      ]
+    },
+    {
+      "input": "The 100 greatest basslines of all time",
+      "expected": [
+        "music"
+      ]
+    },
+    {
+      "input": "SoundCloud - Hear the world's sounds",
+      "expected": [
+        "music"
+      ]
+    },
+    {
+      "input": "Billie Eilish tiny desk concert",
+      "expected": [
+        "music"
+      ]
+    },
+    {
+      "input": "NBA Finals Game 7 highlights",
+      "expected": [
+        "sports"
+      ]
+    },
+    {
+      "input": "Messi's first season in MLS: every goal",
+      "expected": [
+        "sports"
+      ]
+    },
+    {
+      "input": "Premier League table after matchweek 30",
+      "expected": [
+        "sports"
+      ]
+    },
+    {
+      "input": "UFC 312 full fight card predictions",
+      "expected": [
+        "sports"
+      ]
+    },
+    {
+      "input": "F1 Monaco Grand Prix qualifying results",
+      "expected": [
+        "sports"
+      ]
+    },
+    {
+      "input": "ESPN - Serving sports fans. Anytime. Anywhere.",
+      "expected": [
+        "sports"
+      ]
+    },
+    {
+      "input": "Why the Chiefs dynasty isn't over yet",
+      "expected": [
+        "sports"
+      ]
+    },
+    {
+      "input": "Olympic 100m final: fastest race in history",
+      "expected": [
+        "sports"
+      ]
+    },
+    {
+      "input": "Fantasy football week 12 waiver wire pickups",
+      "expected": [
+        "sports"
+      ]
+    },
+    {
+      "input": "How to fix your golf slice in 10 minutes",
+      "expected": [
+        "sports"
+      ]
+    },
+    {
+      "input": "Cricket World Cup 2027 schedule released",
+      "expected": [
+        "sports"
+      ]
+    },
+    {
+      "input": "LeBron James career retrospective",
+      "expected": [
+        "sports"
+      ]
+    },
+    {
+      "input": "Trump announces new tariff policy",
+      "expected": [
+        "news and politics"
+      ]
+    },
+    {
+      "input": "BBC News - Home",
+      "expected": [
+        "news and politics"
+      ]
+    },
+    {
+      "input": "Election 2026: what the polls actually say",
+      "expected": [
+        "news and politics"
+      ]
+    },
+    {
+      "input": "Supreme Court ruling explained in 5 minutes",
+      "expected": [
+        "news and politics"
+      ]
+    },
+    {
+      "input": "Breaking: earthquake strikes off the coast of Japan",
+      "expected": [
+        "news and politics"
+      ]
+    },
+    {
+      "input": "The Daily - Today's episode: the border deal",
+      "expected": [
+        "news and politics"
+      ]
+    },
+    {
+      "input": "CNN: Live updates on the summit",
+      "expected": [
+        "news and politics"
+      ]
+    },
+    {
+      "input": "EU passes landmark AI regulation",
+      "expected": [
+        "news and politics",
+        "science and education"
+      ]
+    },
+    {
+      "input": "Opinion: Why housing policy is broken",
+      "expected": [
+        "news and politics"
+      ]
+    },
+    {
+      "input": "Reuters | Breaking International News & Views",
+      "expected": [
+        "news and politics"
+      ]
+    },
+    {
+      "input": "Late night hosts react to the debate",
+      "expected": [
+        "news and politics",
+        "memes and entertainment",
+        "movies and tv shows"
+      ]
+    },
+    {
+      "input": "Ukraine peace talks: what we know so far",
+      "expected": [
+        "news and politics"
+      ]
+    },
+    {
+      "input": "How the Fed's rate decision affects your portfolio",
+      "expected": [
+        "finance and investing"
+      ]
+    },
+    {
+      "input": "S&P 500 hits all-time high as tech rallies",
+      "expected": [
+        "finance and investing",
+        "news and politics"
+      ]
+    },
+    {
+      "input": "Bogleheads guide to the three-fund portfolio",
+      "expected": [
+        "finance and investing"
+      ]
+    },
+    {
+      "input": "Bitcoin breaks $100k: what happens next",
+      "expected": [
+        "finance and investing"
+      ]
+    },
+    {
+      "input": "Roth IRA vs 401k: which should you max first?",
+      "expected": [
+        "finance and investing"
+      ]
+    },
+    {
+      "input": "I analyzed 10 years of NVDA earnings calls",
+      "expected": [
+        "finance and investing"
+      ]
+    },
+    {
+      "input": "Yahoo Finance - Stock Market Live, Quotes, Business News",
+      "expected": [
+        "finance and investing",
+        "news and politics"
+      ]
+    },
+    {
+      "input": "How to read a balance sheet like Warren Buffett",
+      "expected": [
+        "finance and investing"
+      ]
+    },
+    {
+      "input": "GME to the moon again? Here's the setup",
+      "expected": [
+        "finance and investing"
+      ]
+    },
+    {
+      "input": "The hidden fees in your index funds",
+      "expected": [
+        "finance and investing"
+      ]
+    },
+    {
+      "input": "Real estate vs stocks: 30-year comparison",
+      "expected": [
+        "finance and investing"
+      ]
+    },
+    {
+      "input": "Dave Ramsey reacts to $300k in student loans",
+      "expected": [
+        "finance and investing",
+        "memes and entertainment"
+      ]
+    },
+    {
+      "input": "MIT 6.006 Introduction to Algorithms, Lecture 1",
+      "expected": [
+        "science and education",
+        "programming and software development"
+      ]
+    },
+    {
+      "input": "Veritasium: The Surprising Physics of Spinning Objects",
+      "expected": [
+        "science and education"
+      ]
+    },
+    {
+      "input": "How CRISPR gene editing actually works",
+      "expected": [
+        "science and education"
+      ]
+    },
+    {
+      "input": "Khan Academy | Free Online Courses, Lessons & Practice",
+      "expected": [
+        "science and education"
+      ]
+    },
+    {
+      "input": "What happens inside a black hole?",
+      "expected": [
+        "science and education"
+      ]
+    },
+    {
+      "input": "3Blue1Brown - The essence of linear algebra, chapter 3",
+      "expected": [
+        "science and education"
+      ]
+    },
+    {
+      "input": "James Webb telescope spots earliest galaxy yet",
+      "expected": [
+        "science and education",
+        "news and politics"
+      ]
+    },
+    {
+      "input": "The immune system explained: T cells",
+      "expected": [
+        "science and education"
+      ]
+    },
+    {
+      "input": "Coursera | Machine Learning Specialization - Week 2",
+      "expected": [
+        "science and education",
+        "programming and software development"
+      ]
+    },
+    {
+      "input": "Why planes actually fly: lift explained properly",
+      "expected": [
+        "science and education"
+      ]
+    },
+    {
+      "input": "Anki settings that actually work for med school",
+      "expected": [
+        "science and education"
+      ]
+    },
+    {
+      "input": "History of Rome: the fall of the Republic",
+      "expected": [
+        "science and education"
+      ]
+    },
+    {
+      "input": "React Router Tutorial",
+      "expected": [
+        "programming and software development"
+      ]
+    },
+    {
+      "input": "Why TypeScript generics confuse everyone",
+      "expected": [
+        "programming and software development"
+      ]
+    },
+    {
+      "input": "Rust vs Go in 2026: which should you learn?",
+      "expected": [
+        "programming and software development"
+      ]
+    },
+    {
+      "input": "Building a compiler from scratch, part 3: parsing",
+      "expected": [
+        "programming and software development"
+      ]
+    },
+    {
+      "input": "PostgreSQL indexing deep dive",
+      "expected": [
+        "programming and software development"
+      ]
+    },
+    {
+      "input": "Fireship - 100 seconds of Kubernetes",
+      "expected": [
+        "programming and software development"
+      ]
+    },
+    {
+      "input": "System design interview: design a URL shortener",
+      "expected": [
+        "programming and software development"
+      ]
+    },
+    {
+      "input": "The Primeagen reacts to your worst code",
+      "expected": [
+        "programming and software development",
+        "memes and entertainment"
+      ]
+    },
+    {
+      "input": "Docker networking finally explained",
+      "expected": [
+        "programming and software development"
+      ]
+    },
+    {
+      "input": "Clean architecture is a lie (sort of)",
+      "expected": [
+        "programming and software development"
+      ]
+    },
+    {
+      "input": "Next.js 16 app router migration guide",
+      "expected": [
+        "programming and software development"
+      ]
+    },
+    {
+      "input": "LeetCode 146: LRU Cache in Python",
+      "expected": [
+        "programming and software development"
+      ]
+    },
+    {
+      "input": "Pull requests · facebook/react",
+      "expected": "productive"
+    },
+    {
+      "input": "TypeError: Cannot read properties of undefined (reading 'map') - Stack Overflow",
+      "expected": "productive"
+    },
+    {
+      "input": "MDN Web Docs: Array.prototype.reduce()",
+      "expected": "productive"
+    },
+    {
+      "input": "Jira - FLOW-142: Block screen flashes on SPA navigation",
+      "expected": "productive"
+    },
+    {
+      "input": "Q3 planning doc - Google Docs",
+      "expected": "productive"
+    },
+    {
+      "input": "Inbox (12) - david@company.com",
+      "expected": "productive"
+    },
+    {
+      "input": "AWS Console - EC2 Dashboard",
+      "expected": "productive"
+    },
+    {
+      "input": "Sprint retro board | Miro",
+      "expected": "productive"
+    },
+    {
+      "input": "Figma - Onboarding flow v3",
+      "expected": "productive"
+    },
+    {
+      "input": "Untitled document - Overleaf, Online LaTeX Editor",
+      "expected": "productive"
+    },
+    {
+      "input": "CS 341 Assignment 4: Dynamic Programming - University of Waterloo",
+      "expected": "productive"
+    },
+    {
+      "input": "IEEE Xplore: Attention Is All You Need",
+      "expected": "productive"
+    },
+    {
+      "input": "arXiv:2405.01234 - Efficient On-Device Text Classification",
+      "expected": "productive"
+    },
+    {
+      "input": "Zoom Meeting - Weekly 1:1 with Sarah",
+      "expected": "productive"
+    },
+    {
+      "input": "Notion – Team wiki: deployment runbook",
+      "expected": "productive"
+    },
+    {
+      "input": "Confluence - API versioning strategy RFC",
+      "expected": "productive"
+    },
+    {
+      "input": "Google Scholar: zero-shot text classification survey",
+      "expected": "productive"
+    },
+    {
+      "input": "Dependabot alerts · myorg/backend",
+      "expected": "productive"
+    },
+    {
+      "input": "Vercel Dashboard - Production deployment",
+      "expected": "productive"
+    },
+    {
+      "input": "Grammarly - Cover letter draft",
+      "expected": "productive"
+    },
+    {
+      "input": "LinkedIn: Senior Software Engineer jobs in Toronto",
+      "expected": "productive"
+    },
+    {
+      "input": "Indeed.com: backend developer remote",
+      "expected": "productive"
+    },
+    {
+      "input": "IRS Form 1040 instructions 2025",
+      "expected": "productive"
+    },
+    {
+      "input": "TurboTax: File your 2025 taxes online",
+      "expected": "productive"
+    },
+    {
+      "input": "Chase Online - Account activity",
+      "expected": "productive"
+    },
+    {
+      "input": "Wealthsimple - Portfolio overview",
+      "expected": "productive"
+    },
+    {
+      "input": "Google Calendar - Week of July 6",
+      "expected": "productive"
+    },
+    {
+      "input": "DoorDash order status: your lunch is on the way",
+      "expected": "productive"
+    },
+    {
+      "input": "Uber - Request a ride",
+      "expected": "productive"
+    },
+    {
+      "input": "Airbnb: apartments in Berlin for the conference week",
+      "expected": "productive"
+    },
+    {
+      "input": "Google Flights - YYZ to SFO, Aug 12",
+      "expected": "productive"
+    },
+    {
+      "input": "WebMD: persistent wrist pain from typing",
+      "expected": "productive"
+    },
+    {
+      "input": "MyChart - Appointment confirmation",
+      "expected": "productive"
+    },
+    {
+      "input": "Duolingo - Spanish: Unit 12 Checkpoint",
+      "expected": "productive"
+    },
+    {
+      "input": "The Rust Programming Language - Chapter 10: Generics",
+      "expected": "productive"
+    },
+    {
+      "input": "Python 3.13 documentation: asyncio",
+      "expected": "productive"
+    },
+    {
+      "input": "npm: @huggingface/transformers",
+      "expected": "productive"
+    },
+    {
+      "input": "Can I use... CSS container queries",
+      "expected": "productive"
+    },
+    {
+      "input": "regex101: build, test, and debug regex",
+      "expected": "productive"
+    },
+    {
+      "input": "Excalidraw - system architecture sketch",
+      "expected": "productive"
+    },
+    {
+      "input": "ChatGPT - debugging a segfault in my C++ allocator",
+      "expected": "productive"
+    },
+    {
+      "input": "Claude - draft performance review feedback",
+      "expected": "productive"
+    },
+    {
+      "input": "Wikipedia: Byzantine fault tolerance",
+      "expected": "productive"
+    },
+    {
+      "input": "Investopedia: What Is Dollar-Cost Averaging?",
+      "expected": "productive"
+    },
+    {
+      "input": "Hacker News: Show HN: I built a local-first distraction blocker",
+      "expected": "productive"
+    },
+    {
+      "input": "Recipe: 20-minute weeknight chicken stir fry",
+      "expected": "productive"
+    },
+    {
+      "input": "AllRecipes - Easy overnight oats",
+      "expected": "productive"
+    },
+    {
+      "input": "Strava - Morning run activity",
+      "expected": "productive"
+    },
+    {
+      "input": "Hevy - Push day workout log",
+      "expected": "productive"
+    },
+    {
+      "input": "Google Maps - directions to dentist",
+      "expected": "productive"
+    },
+    {
+      "input": "Canada Post - Track your package",
+      "expected": "productive"
+    },
+    {
+      "input": "Ikea assembly instructions: BILLY bookcase",
+      "expected": "productive"
+    },
+    {
+      "input": "YouTube - How to replace a bike chain",
+      "expected": "productive"
+    },
+    {
+      "input": "Home Depot: how to patch drywall",
+      "expected": "productive"
+    },
+    {
+      "input": "Quora: What's it like to work at a quant firm?",
+      "expected": "productive"
+    },
+    {
+      "input": {
+        "title": "Elden Ring Boss Fight",
+        "channel": "VaatiVidya",
+        "context": "FromSoftware soulslike boss gameplay walkthrough"
+      },
+      "expected": [
+        "video games"
+      ]
+    },
+    {
+      "input": {
+        "title": "Hogwarts Legacy 100% Walkthrough",
+        "channel": "PotterFan",
+        "context": "Open world RPG Harry Potter game full playthrough"
+      },
+      "expected": [
+        "video games"
+      ]
+    },
+    {
+      "input": {
+        "title": "Finally hit Diamond rank after 500 games",
+        "channel": "r/leagueoflegends",
+        "context": "Ranked solo queue grind tips"
+      },
+      "expected": [
+        "video games"
+      ]
+    },
+    {
+      "input": {
+        "title": "The Fed just moved",
+        "channel": "r/wallstreetbets",
+        "context": "Interest rate hike impact on portfolio and stock market"
+      },
+      "expected": [
+        "finance and investing"
+      ]
+    },
+    {
+      "input": {
+        "title": "Silksong is finally real",
+        "channel": "Team Cherry",
+        "context": "Hollow Knight Silksong gameplay reveal trailer"
+      },
+      "expected": [
+        "video games"
+      ]
+    },
+    {
+      "input": {
+        "title": "Day in the life",
+        "channel": "r/cscareerquestions",
+        "context": "What a typical day looks like as a junior backend developer at a bank"
+      },
+      "expected": [
+        "programming and software development"
+      ]
+    },
+    {
+      "input": {
+        "title": "You won't believe this comeback",
+        "channel": "ESPN",
+        "context": "NBA playoffs fourth quarter comeback highlights"
+      },
+      "expected": [
+        "sports"
+      ]
+    },
+    {
+      "input": {
+        "title": "New drop just landed",
+        "channel": "StockX",
+        "context": "Buy and sell authentic Jordan sneakers, streetwear and collectibles"
+      },
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "input": {
+        "title": "This changes everything",
+        "channel": "MKBHD",
+        "context": "Smartphone review camera comparison and verdict"
+      },
+      "expected": [
+        "science and education",
+        "memes and entertainment",
+        "online shopping"
+      ]
+    },
+    {
+      "input": {
+        "title": "Episode 214",
+        "channel": "Lex Fridman Podcast",
+        "context": "Conversation about artificial intelligence, consciousness and the future of humanity"
+      },
+      "expected": [
+        "science and education"
+      ]
+    },
+    {
+      "input": {
+        "title": "Watch live",
+        "channel": "Sky News",
+        "context": "Breaking news coverage of the general election results"
+      },
+      "expected": [
+        "news and politics"
+      ]
+    },
+    {
+      "input": {
+        "title": "Full album out now",
+        "channel": "Arctic Monkeys",
+        "context": "Official audio stream of the new studio album"
+      },
+      "expected": [
+        "music"
+      ]
+    },
+    {
+      "input": {
+        "title": "Season finale tonight",
+        "channel": "Netflix",
+        "context": "The final episode of the crime drama series premieres tonight"
+      },
+      "expected": [
+        "movies and tv shows"
+      ]
+    },
+    {
+      "input": {
+        "title": "Big win compilation",
+        "channel": "SlotKing",
+        "context": "Online casino slot machine biggest wins and bonus rounds this week"
+      },
+      "expected": [
+        "gambling and betting"
+      ]
+    },
+    {
+      "input": {
+        "title": "Getting started with pgvector",
+        "channel": "Supabase",
+        "context": "Tutorial on vector similarity search in Postgres for AI applications"
+      },
+      "expected": "productive"
+    },
+    {
+      "input": {
+        "title": "Buy MacBook Air - Apple",
+        "channel": "Apple",
+        "context": "Online store product page. Get a new MacBook Air laptop with the M5 chip from only $108.25 per month. Built for AI. Lightweight, with all-day battery life."
+      },
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "input": {
+        "title": "Buy MacBook Air, 15-inch, M5 Chip, 10-core CPU, 10-core GPU, Midnight, 16GB memory, 512GB storage - Apple",
+        "channel": "Apple",
+        "context": "Online store product page. Get a new MacBook Air laptop with the M5 chip from only $108.25 per month."
+      },
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "input": {
+        "title": "Store",
+        "context": "Online store product page."
+      },
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "input": {
+        "title": "Dune: Part Three (2026)",
+        "context": "Movie or TV show page. Paul Atreides unites with the Fremen once more."
+      },
+      "expected": [
+        "movies and tv shows"
+      ]
+    },
+    {
+      "input": {
+        "title": "Central bank holds rates steady",
+        "context": "News article. The decision surprised markets expecting a cut."
+      },
+      "expected": [
+        "finance and investing",
+        "news and politics"
+      ]
+    },
+    {
+      "input": {
+        "title": "One-pot pasta",
+        "context": "Recipe page. Ready in 20 minutes with pantry staples."
+      },
+      "expected": "productive"
+    },
+    {
+      "input": "Sign In",
+      "expected": "productive"
+    },
+    {
+      "input": "Sign In - RBC Royal Bank",
+      "expected": "productive"
+    },
+    {
+      "input": "TD Canada Trust - EasyWeb Login",
+      "expected": "productive"
+    },
+    {
+      "input": "CIBC Online Banking - Sign On",
+      "expected": "productive"
+    },
+    {
+      "input": "Scotiabank - Sign in to online banking",
+      "expected": "productive"
+    },
+    {
+      "input": "BMO Online Banking: Account Summary",
+      "expected": "productive"
+    },
+    {
+      "input": "Tangerine - My Accounts",
+      "expected": "productive"
+    },
+    {
+      "input": "Account Summary",
+      "expected": "productive"
+    },
+    {
+      "input": "Messages - Online Banking",
+      "expected": "productive"
+    },
+    {
+      "input": "Verify your identity",
+      "expected": "productive"
+    },
+    {
+      "input": "Enter your one-time passcode",
+      "expected": "productive"
+    },
+    {
+      "input": "My Account - Canada Revenue Agency",
+      "expected": "productive"
+    },
+    {
+      "input": "My Service Canada Account - Sign in",
+      "expected": "productive"
+    },
+    {
+      "input": "ServiceOntario: renew your health card",
+      "expected": "productive"
+    },
+    {
+      "input": "Quest - University of Waterloo",
+      "expected": "productive"
+    },
+    {
+      "input": "LEARN - Course Home",
+      "expected": "productive"
+    },
+    {
+      "input": "Student Center: tuition and fee account balance",
+      "expected": "productive"
+    },
+    {
+      "input": "Manulife - Group benefits sign in",
+      "expected": "productive"
+    },
+    {
+      "input": "Sun Life: my claims and coverage",
+      "expected": "productive"
+    },
+    {
+      "input": "Hydro One - View and pay your bill",
+      "expected": "productive"
+    },
+    {
+      "input": "Rogers: manage your account and billing",
+      "expected": "productive"
+    },
+    {
+      "input": "Bell - MyBell account overview",
+      "expected": "productive"
+    },
+    {
+      "input": {
+        "title": "Sign In",
+        "channel": "rbcroyalbank.com",
+        "context": "Account sign-in page."
+      },
+      "expected": "productive"
+    },
+    {
+      "input": {
+        "title": "Online Banking Sign In",
+        "channel": "cibc.com",
+        "context": "Account sign-in page. Bank or financial institution page."
+      },
+      "expected": "productive"
+    },
+    {
+      "input": {
+        "title": "EasyWeb - Login",
+        "channel": "td.com",
+        "context": "Account sign-in page."
+      },
+      "expected": "productive"
+    },
+    {
+      "input": {
+        "title": "My Accounts",
+        "channel": "scotiabank.com",
+        "context": "Bank or financial institution page. Personal · Accounts · Transfers · Bill Payments · Investments"
+      },
+      "expected": "productive"
+    },
+    {
+      "input": {
+        "title": "Account overview",
+        "channel": "bmo.com",
+        "context": "Account management page. My Accounts · Payments & Transfers · eStatements · Profile"
+      },
+      "expected": "productive"
+    },
+    {
+      "input": {
+        "title": "Notifications",
+        "channel": "rbcroyalbank.com",
+        "context": "Bank or financial institution page."
+      },
+      "expected": "productive"
+    },
+    {
+      "input": {
+        "title": "Messages",
+        "channel": "wealthsimple.com",
+        "context": "Account management page."
+      },
+      "expected": "productive"
+    },
+    {
+      "input": {
+        "title": "Sign in",
+        "channel": "canada.ca",
+        "context": "Account sign-in page. Government services page."
+      },
+      "expected": "productive"
+    },
+    {
+      "input": {
+        "title": "My Account",
+        "channel": "cra-arc.gc.ca",
+        "context": "Government services page."
+      },
+      "expected": "productive"
+    },
+    {
+      "input": {
+        "title": "Health card renewal",
+        "channel": "ontario.ca",
+        "context": "Government services page. Renew your Ontario health card online."
+      },
+      "expected": "productive"
+    },
+    {
+      "input": {
+        "title": "Quest",
+        "channel": "uwaterloo.ca",
+        "context": "University or school page. Class Schedule · Enroll · Finances · Academics"
+      },
+      "expected": "productive"
+    },
+    {
+      "input": {
+        "title": "Sign in to LEARN",
+        "channel": "uwaterloo.ca",
+        "context": "Account sign-in page. University or school page."
+      },
+      "expected": "productive"
+    },
+    {
+      "input": {
+        "title": "Patient portal sign in",
+        "channel": "oakvillehealth.ca",
+        "context": "Account sign-in page. Medical provider page."
+      },
+      "expected": "productive"
+    },
+    {
+      "input": {
+        "title": "My insurance account",
+        "channel": "manulife.ca",
+        "context": "Insurance company page. Sign in to view your policies and claims."
+      },
+      "expected": "productive"
+    },
+    {
+      "input": {
+        "title": "Pay your bill",
+        "channel": "hydroone.com",
+        "context": "Account management page. View usage, compare rates and pay your electricity bill."
+      },
+      "expected": "productive"
+    },
+    {
+      "input": "Log in to Facebook",
+      "expected": "productive"
+    },
+    {
+      "input": "(2) Notifications / X",
+      "expected": [
+        "social media and networking"
+      ]
+    },
+    {
+      "input": {
+        "title": "Instagram",
+        "channel": "instagram.com",
+        "context": "Account sign-in page. Log in to see photos and videos from friends."
+      },
+      "expected": [
+        "social media and networking"
+      ]
+    },
+    {
+      "input": {
+        "title": "For You",
+        "channel": "tiktok.com",
+        "context": "Video or social media feed page."
+      },
+      "expected": [
+        "social media and networking"
+      ]
+    },
+    {
+      "input": {
+        "title": "Checkout",
+        "channel": "shein.com",
+        "context": "Online store checkout page."
+      },
+      "expected": [
+        "online shopping"
+      ]
+    },
+    {
+      "url": "https://www.icloud.com/",
+      "input": {
+        "title": "iCloud",
+        "channel": "icloud.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "bare brand name, no context at all: cloud storage/account landing must stay neutral",
+      "captured": {
+        "title": "iCloud",
+        "context": "Log in to iCloud to access your photos, mail, notes, documents and more. Sign in with your Apple Account or create a new account to start using Apple services.",
+        "at": 1785323808746
+      }
+    },
+    {
+      "url": "https://app.monday.com/",
+      "input": {
+        "title": "monday.com",
+        "channel": "app.monday.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "SPA shell renders only the brand name; project-management tool must not block",
+      "noCapture": "unreachable from the capture sandbox (DNS/HTTP2); retry from a normal network"
+    },
+    {
+      "url": "https://dashboard.stripe.com/",
+      "input": {
+        "title": "Stripe Login | Sign in to the Stripe Dashboard",
+        "channel": "dashboard.stripe.com",
+        "context": "Account sign-in page."
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "developer dashboard behind a sign-in redirect; sign-in pages never block",
+      "captured": {
+        "title": "Stripe Login | Sign in to the Stripe Dashboard",
+        "context": "Account sign-in page. Sign in to the Stripe Dashboard to manage business payments and operations in your account. Manage payments and refunds, respond to disputes and more.",
+        "at": 1785323809939
+      }
+    },
+    {
+      "url": "https://portal.azure.com/",
+      "input": {
+        "title": "Microsoft Azure",
+        "channel": "portal.azure.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "cloud console SPA with a bare-brand title and no description meta",
+      "captured": {
+        "title": "Sign in to Microsoft Azure",
+        "context": "Account sign-in page.",
+        "at": 1785323808315
+      }
+    },
+    {
+      "url": "https://supabase.com/dashboard/projects",
+      "input": {
+        "title": "Dashboard | Supabase",
+        "channel": "supabase.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "literal 'Dashboard' title — the canonical sparse-SPA shape",
+      "captured": {
+        "title": "Supabase",
+        "context": "Account sign-in page. Welcome back Documentation",
+        "at": 1785323809577
+      }
+    },
+    {
+      "url": "https://app.clickup.com/",
+      "input": {
+        "title": "ClickUp",
+        "channel": "app.clickup.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "one-word app shell title; work tool",
+      "captured": {
+        "title": "Login",
+        "channel": "clickup.com",
+        "context": "Account sign-in page. ClickUp is the highest-rated and fastest growing Productivity Platform.",
+        "at": 1785323812804
+      }
+    },
+    {
+      "url": "https://app.asana.com/",
+      "input": {
+        "title": "Asana",
+        "channel": "app.asana.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "one-word app shell title; work tool",
+      "captured": {
+        "title": "Log in - Asana",
+        "context": "Asana.com · Support · Integrations · Forum · Developers & API · Resources · Guid",
+        "at": 1785323811152
+      }
+    },
+    {
+      "url": "https://linear.app/",
+      "input": {
+        "title": "Linear – Plan and build products",
+        "channel": "linear.app"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "terse marketing title for an issue tracker; 'products' must not pull toward shopping",
+      "captured": {
+        "title": "Linear – The system for product development",
+        "context": "Purpose-built for planning and building products with AI agents. Customers · Pricing · Now · Contact · Docs · Open app · Log in · Sign up",
+        "at": 1785323811406
+      }
+    },
+    {
+      "url": "https://app.netlify.com/",
+      "input": {
+        "title": "Netlify App",
+        "channel": "app.netlify.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "two-word deploy dashboard title",
+      "captured": {
+        "title": "Netlify",
+        "context": "Start building the best web experiences in record time",
+        "at": 1785323812471
+      }
+    },
+    {
+      "url": "https://mail.zoho.com/",
+      "input": {
+        "title": "Zoho Mail",
+        "channel": "mail.zoho.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "non-whitelisted webmail with a two-word title (Gmail/Outlook are whitelisted, this is not)",
+      "captured": {
+        "title": "Secure & Professional Business Email for your Organization | Zoho Mail",
+        "channel": "Zoho",
+        "context": "Account sign-in page. Online store product page. Ad-free Business Email Hosting with a clean, easy-to-use interface. Secure & professional with integrated business Calendar, Contacts, Notes & Tasks.",
+        "at": 1785323813580
+      }
+    },
+    {
+      "url": "https://www.dropbox.com/home",
+      "input": {
+        "title": "Dropbox",
+        "channel": "dropbox.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "bare brand name; file storage",
+      "captured": {
+        "title": "Login or Sign Up for a Dropbox Account",
+        "channel": "Dropbox",
+        "context": "Account sign-in page. Online store product page. Login to Dropbox. Don't have an account? Signing up is easy. Just enter your email to get started.",
+        "at": 1785323814363
+      }
+    },
+    {
+      "url": "https://obsidian.md/",
+      "input": {
+        "title": "Obsidian - Sharpen your thinking",
+        "channel": "obsidian.md"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "note-taking app landing page with an abstract tagline and no product/work vocabulary",
+      "captured": {
+        "title": "Obsidian - Sharpen your thinking",
+        "channel": "Obsidian",
+        "context": "The free and flexible app for your private thoughts. Download · Pricing · Sync · Publish · Enterprise · English · العربية · বাংলা",
+        "at": 1785323814076
+      }
+    },
+    {
+      "url": "https://www.zotero.org/",
+      "input": {
+        "title": "Zotero | Your personal research assistant",
+        "channel": "zotero.org"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "reference manager; short title, research context",
+      "captured": {
+        "title": "Zotero | Your personal research assistant",
+        "context": "Zotero is a free, easy-to-use tool to help you collect, organize, cite, and share research.",
+        "at": 1785323814358
+      }
+    },
+    {
+      "url": "https://time.is/",
+      "input": {
+        "title": "Time.is - exact time, any time zone, every country",
+        "channel": "time.is"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "single-purpose utility page with no category vocabulary at all",
+      "captured": {
+        "title": "Time.is 07:16",
+        "context": "7 milions de localitzacions, 58 llengües, sincronitzades amb l'hora del rellotge atòmic.",
+        "at": 1785323815179
+      }
+    },
+    {
+      "url": "https://www.twitch.tv/",
+      "input": {
+        "title": "Twitch",
+        "channel": "twitch.tv"
+      },
+      "expected": [
+        "video games",
+        "memes and entertainment"
+      ],
+      "set": "v2",
+      "note": "negative control for the sparse slice: a one-word title that SHOULD block",
+      "captured": {
+        "title": "Twitch",
+        "channel": "Twitch",
+        "context": "Twitch is an interactive livestreaming service for content spanning gaming, entertainment, sports, music, and more.",
+        "at": 1785323816450
+      }
+    },
+    {
+      "url": "https://www.roblox.com/",
+      "input": {
+        "title": "Roblox",
+        "channel": "roblox.com"
+      },
+      "expected": [
+        "video games"
+      ],
+      "set": "v2",
+      "note": "bare brand name of a game platform; sparse must not mean neutral by default",
+      "captured": {
+        "title": "Roblox",
+        "channel": "Roblox",
+        "context": "Account sign-in page. Roblox is the ultimate virtual universe that lets you create, share experiences with friends, and be anything you can imagine. Join millions of people and discover an infinite va",
+        "at": 1785323817091
+      }
+    },
+    {
+      "url": "https://www.chase.com/personal/credit-cards",
+      "input": {
+        "title": "Credit Cards | Chase",
+        "channel": "chase.com",
+        "context": "Bank or financial institution page."
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "bank credit-card page declares JSON-LD Product but must not read as shopping (guards the institutional-before-product ordering)",
+      "captured": {
+        "title": "Credit Cards - Compare Credit Card Offers and Apply Online | Chase",
+        "context": "Explore all of Chase's credit card offers for personal use and business. Find the best rewards cards, travel cards, and more. Apply today and start earning rewards and cash back.",
+        "at": 1785323817730
+      }
+    },
+    {
+      "url": "https://www.bankofamerica.com/",
+      "input": {
+        "title": "Bank of America - Banking, Credit Cards, Loans and Merrill Investing",
+        "channel": "bankofamerica.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "bank homepage: 'credit cards'/'loans' in the title must not tip to shopping",
+      "captured": {
+        "title": "Bank of America - Banking, Credit Cards, Loans and Merrill Investing",
+        "channel": "Bank of America",
+        "context": "Account sign-in page. What would you like the power to do? At Bank of America, our purpose is to help make financial lives better through the power of every connection.",
+        "at": 1785323817483
+      }
+    },
+    {
+      "url": "https://www.wellsfargo.com/",
+      "input": {
+        "title": "Wells Fargo Bank | Financial Services & Online Banking",
+        "channel": "wellsfargo.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "US bank homepage; existing set is Canada-heavy",
+      "captured": {
+        "title": "Wells Fargo Bank | Financial Services & Online Banking",
+        "channel": "wellsfargo.com",
+        "context": "Account sign-in page. Bank or financial institution page. Committed to the financial health of our customers and communities. Explore bank accounts, loans, mortgages, investing, credit cards & banking",
+        "at": 1785323818621
+      }
+    },
+    {
+      "url": "https://www.rbcroyalbank.com/credit-cards/index.html",
+      "input": {
+        "title": "Credit Cards | RBC Royal Bank",
+        "channel": "rbcroyalbank.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "product-shaped bank page (not a sign-in page) — the existing RBC cases are all logins",
+      "captured": {
+        "title": "Apply for a Credit Card Online | RBC Royal Bank of Canada",
+        "context": "Bank or financial institution page. Discover the best credit card for your lifestyle in Canada. Choose from a variety of credit card types with cash back, rewards, low interest, business, travel and m",
+        "at": 1785323822996
+      }
+    },
+    {
+      "url": "https://www.paypal.com/signin",
+      "input": {
+        "title": "Log in to your PayPal account",
+        "channel": "paypal.com",
+        "context": "Account sign-in page."
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "payments sign-in; 'Log in to X' is the exact shape the sign-in policy protects",
+      "captured": {
+        "title": "paypal.com",
+        "at": 1785323818893
+      }
+    },
+    {
+      "url": "https://login.microsoftonline.com/",
+      "input": {
+        "title": "Sign in to your account",
+        "channel": "login.microsoftonline.com",
+        "context": "Account sign-in page."
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "bare SSO interstitial with no institution branding at all",
+      "captured": {
+        "title": "Sign in to your account",
+        "context": "Account sign-in page.",
+        "at": 1785323819862
+      }
+    },
+    {
+      "url": "https://www.irs.gov/payments",
+      "input": {
+        "title": "Payments | Internal Revenue Service",
+        "channel": "irs.gov"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "tax payment page; 'payments'/'checkout' vocabulary overlaps shopping seeds",
+      "captured": {
+        "title": "Payments | Internal Revenue Service",
+        "context": "Make payments, view your account or apply for a payment plan with the IRS. Help · News · Español · 中文 (简体) · 中文 (繁體) · 한국어 · Русский · Tiếng Việt",
+        "at": 1785323820363
+      }
+    },
+    {
+      "url": "https://www.ssa.gov/myaccount/",
+      "input": {
+        "title": "my Social Security | SSA",
+        "channel": "ssa.gov",
+        "context": "Account management page."
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "government account portal — 'my account' + 'social' is a documented misread risk",
+      "captured": {
+        "title": "my Social Security | SSA",
+        "context": "Access your Social Security information and manage your benefits online with a personal my Social Security account. To create your account, verify your identity with one of our partner sites:",
+        "at": 1785323820854
+      }
+    },
+    {
+      "url": "https://www.usa.gov/",
+      "input": {
+        "title": "USAGov | The Official Guide to Government Information and Services",
+        "channel": "usa.gov"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "government index page",
+      "captured": {
+        "title": "Making government services easier to find | USAGov",
+        "context": "Find government benefits, services, agencies, and information at USA.gov. Contact elected officials. Learn about passports, Social Security, taxes, and more.",
+        "at": 1785323821386
+      }
+    },
+    {
+      "url": "https://www.gov.uk/sign-in-universal-credit",
+      "input": {
+        "title": "Sign in to your Universal Credit account - GOV.UK",
+        "channel": "gov.uk"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "UK benefits sign-in; non-US/CA government coverage",
+      "captured": {
+        "title": "Sign in to your Universal Credit account - GOV.UK",
+        "channel": "GOV.UK",
+        "context": "Government services page. Sign in to your Universal Credit account - report a change, add a note to your journal, see your payments and do other tasks",
+        "at": 1785323821795
+      }
+    },
+    {
+      "url": "https://www.canada.ca/en/services/benefits/ei.html",
+      "input": {
+        "title": "Employment Insurance benefits and leave - Canada.ca",
+        "channel": "canada.ca"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "government benefits info page (not a login) — different shape from the existing canada.ca sign-in case",
+      "captured": {
+        "title": "Employment Insurance benefits - Canada.ca",
+        "channel": "Employment and Social Development Canada",
+        "context": "Apply for Employment Insurance benefits. Find out the eligibility requirements for workers, self-employed people and Canadians living abroad.",
+        "at": 1785323829261
+      }
+    },
+    {
+      "url": "https://www.dmv.ca.gov/portal/appointments/",
+      "input": {
+        "title": "Appointments - California DMV",
+        "channel": "dmv.ca.gov"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "state government errand/booking page",
+      "captured": {
+        "title": "Appointments - Service selection",
+        "channel": "California DMV",
+        "context": "Schedule appointments State of California · REAL ID · Online Services · Translate · MyDMV · Menu · Veh",
+        "at": 1785323825103
+      }
+    },
+    {
+      "url": "https://studentaid.gov/",
+      "input": {
+        "title": "Federal Student Aid",
+        "channel": "studentaid.gov"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "student loan portal: government + finance + sign-in all at once",
+      "noCapture": "unreachable from the capture sandbox (DNS/HTTP2); retry from a normal network"
+    },
+    {
+      "url": "https://acorn.utoronto.ca/",
+      "input": {
+        "title": "ACORN",
+        "channel": "acorn.utoronto.ca",
+        "context": "Account sign-in page."
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "university student portal with an opaque one-word name — sparse AND institutional",
+      "captured": {
+        "title": "weblogin idpz | University of Toronto",
+        "context": "Account sign-in page.",
+        "at": 1785323823635
+      }
+    },
+    {
+      "url": "https://canvas.instructure.com/login/canvas",
+      "input": {
+        "title": "Log In to Canvas",
+        "channel": "canvas.instructure.com",
+        "context": "Account sign-in page."
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "LMS login used by thousands of schools; no institution name in the title",
+      "captured": {
+        "title": "Log in to Canvas",
+        "context": "Account sign-in page. Welcome to Canvas Browse Courses",
+        "at": 1785323825009
+      }
+    },
+    {
+      "url": "https://www.mycigna.com/",
+      "input": {
+        "title": "myCigna - Member Login",
+        "channel": "mycigna.com",
+        "context": "Account sign-in page."
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "health insurance member portal login",
+      "captured": {
+        "title": "myCigna - Get Access to Your Personal Health Information",
+        "at": 1785323825787
+      }
+    },
+    {
+      "url": "https://healthy.kaiserpermanente.org/",
+      "input": {
+        "title": "Kaiser Permanente",
+        "channel": "healthy.kaiserpermanente.org"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "health system portal landing; bare brand name, medical context",
+      "captured": {
+        "title": "Custom Care & Coverage Just For You | Kaiser Permanente",
+        "channel": "Kaiser Permanente",
+        "context": "Staying healthy is easier with the right support. Visit kp.org to learn how we customize care and coverage just for you.",
+        "at": 1785323828247
+      }
+    },
+    {
+      "url": "https://www.mayoclinic.org/patient-visitor-guide",
+      "input": {
+        "title": "Patient and Visitor Guide - Mayo Clinic",
+        "channel": "mayoclinic.org"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "hospital patient-facing info page",
+      "noCapture": "site bot-walls headless Chromium; a real browser sees the normal page"
+    },
+    {
+      "url": "https://www.nhs.uk/nhs-services/gp-services/",
+      "input": {
+        "title": "GP services - NHS",
+        "channel": "nhs.uk"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "national health service page; non-North-American medical coverage",
+      "noCapture": "URL 404s — needs a fresh URL before this case can be grounded"
+    },
+    {
+      "url": "https://www.fidelity.com/",
+      "input": {
+        "title": "Fidelity Investments - Retirement Plans, Investing, Brokerage, Wealth Management",
+        "channel": "fidelity.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "brokerage landing: correct top-1 is finance (unblocked), so the real assertion is 'not shopping/social'",
+      "noCapture": "unreachable from the capture sandbox (DNS/HTTP2); retry from a normal network"
+    },
+    {
+      "url": "https://www.uscis.gov/",
+      "input": {
+        "title": "USCIS",
+        "channel": "uscis.gov"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "acronym-only government title — maximally sparse institutional signal",
+      "captured": {
+        "title": "Home | USCIS",
+        "channel": "USCIS",
+        "context": "Making America Safe Again Skip to main content · Here's how you know · Español · × · Sign In · Create Acco",
+        "at": 1785323828263
+      }
+    },
+    {
+      "url": "https://www.att.com/acctmgmt/billandpay",
+      "input": {
+        "title": "Bill & Pay - AT&T",
+        "channel": "att.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "telecom billing portal; 'pay' vocabulary overlaps checkout seeds",
+      "captured": {
+        "title": "Login Screen",
+        "context": "Sign in",
+        "at": 1785323831235
+      }
+    },
+    {
+      "url": "https://secure.aircanada.com/",
+      "input": {
+        "title": "Manage my booking - Air Canada",
+        "channel": "secure.aircanada.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "travel account/booking management — errand, not shopping",
+      "noCapture": "unreachable from the capture sandbox (DNS/HTTP2); retry from a normal network"
+    },
+    {
+      "url": "https://www.tesla.com/modely",
+      "input": {
+        "title": "Model Y | Tesla",
+        "channel": "tesla.com",
+        "context": "Online store product page."
+      },
+      "expected": [
+        "online shopping"
+      ],
+      "set": "v2",
+      "note": "car configurator you can literally order from: storefront product page despite spec-heavy engineering copy",
+      "noCapture": "site bot-walls headless Chromium; a real browser sees the normal page"
+    },
+    {
+      "url": "https://www.toyota.com/rav4/",
+      "input": {
+        "title": "2026 Toyota RAV4 | Specs, Price, MPG & Reviews",
+        "channel": "toyota.com"
+      },
+      "expected": [
+        "online shopping"
+      ],
+      "set": "v2",
+      "note": "manufacturer spec page; 'specs/MPG/reviews' copy risks pulling to science",
+      "captured": {
+        "title": "2026 Toyota RAV4 | Toyota.com",
+        "context": "Explore the all-new, 2026 Toyota RAV4, now hybrid only, built for every kind of driver, on every kind of day.",
+        "at": 1785323830796
+      }
+    },
+    {
+      "url": "https://www.lg.com/us/tvs",
+      "input": {
+        "title": "TVs: Explore OLED, QNED & 4K Smart TVs | LG USA",
+        "channel": "lg.com"
+      },
+      "expected": [
+        "online shopping"
+      ],
+      "set": "v2",
+      "note": "electronics category page; 'TVs' must not pull toward movies and tv shows",
+      "captured": {
+        "title": "All TVs - Shop our Best Smart TVs, OLED, QNED and NanoCell TVs | LG USA",
+        "channel": "LG USA",
+        "context": "Online store product page. Shop the latest OLED, Smart, and 4K UHD TVs at LG. Explore stunning picture quality, advanced AI features & exclusive deals. Shop at LG.com!",
+        "at": 1785323832677
+      }
+    },
+    {
+      "url": "https://www.lenovo.com/us/en/laptops/",
+      "input": {
+        "title": "Laptops | Lenovo US",
+        "channel": "lenovo.com"
+      },
+      "expected": [
+        "online shopping"
+      ],
+      "set": "v2",
+      "note": "laptop storefront; hardware specs risk pulling toward programming",
+      "captured": {
+        "title": "Shop Laptops Computers & Notebooks | Lenovo US",
+        "context": "Shop high-performance laptops and notebooks with AI-based performance for every need. Browse the latest laptop computers by screen sizes, series, price, and use cases. ✔ Free shipping",
+        "at": 1785323832620
+      }
+    },
+    {
+      "url": "https://www.dyson.com/vacuum-cleaners",
+      "input": {
+        "title": "Vacuum Cleaners | Dyson",
+        "channel": "dyson.com"
+      },
+      "expected": [
+        "online shopping"
+      ],
+      "set": "v2",
+      "note": "engineering-heavy appliance marketing copy on a plain storefront",
+      "captured": {
+        "title": "Vacuum Cleaners | Dyson® Official Website",
+        "context": "Exclusive colorways and additional tools only when you buy from Dyson.com. Dyson vacuum cleaners. Powerful cordless vacuum cleaners, handheld vacuum cleaners, upright vacuum cleaners and canister vacu",
+        "at": 1785323834383
+      }
+    },
+    {
+      "url": "https://www.ikea.com/us/en/cat/desks-computer-desks-20649/",
+      "input": {
+        "title": "Desks & Computer Desks - IKEA",
+        "channel": "ikea.com"
+      },
+      "expected": [
+        "online shopping"
+      ],
+      "set": "v2",
+      "note": "furniture category page; contrast with the existing productive 'Ikea assembly instructions' case",
+      "captured": {
+        "title": "Desks & Computer Desks - IKEA",
+        "channel": "IKEA",
+        "context": "Online store product page. Whether customizing your at-home workspace or adding workstations to your business office, you’ll find everything you need in IKEA’s computer desk collection.",
+        "at": 1785323833790
+      }
+    },
+    {
+      "url": "https://www.logitech.com/en-us/products/mice/mx-master-3s-bluetooth-mouse.html",
+      "input": {
+        "title": "MX Master 3S Wireless Performance Mouse",
+        "channel": "logitech.com",
+        "context": "Online store product page."
+      },
+      "expected": [
+        "online shopping"
+      ],
+      "set": "v2",
+      "note": "dev-adjacent peripheral: copy is full of workflow/productivity language but it is a buy page",
+      "noCapture": "URL 404s — needs a fresh URL before this case can be grounded"
+    },
+    {
+      "url": "https://www.nvidia.com/en-us/geforce/graphics-cards/50-series/",
+      "input": {
+        "title": "GeForce RTX 50 Series Graphics Cards | NVIDIA",
+        "channel": "nvidia.com"
+      },
+      "expected": [
+        "online shopping",
+        "video games"
+      ],
+      "set": "v2",
+      "note": "GPU product page whose copy is all gaming benchmarks — either top-1 is defensible, both block",
+      "captured": {
+        "title": "GeForce RTX 50 Series Graphics Cards | NVIDIA",
+        "channel": "NVIDIA",
+        "context": "Powered by NVIDIA Blackwell, GeForce RTX 50 Series GPUs bring game-changing capabilities to gamers and creators. Equipped with a massive level of AI horsepower.",
+        "at": 1785323834716
+      }
+    },
+    {
+      "url": "https://www.raspberrypi.com/products/raspberry-pi-5/",
+      "input": {
+        "title": "Raspberry Pi 5",
+        "channel": "raspberrypi.com",
+        "context": "Online store product page."
+      },
+      "expected": [
+        "online shopping",
+        "programming and software development"
+      ],
+      "set": "v2",
+      "note": "UNSURE: hardware buy page vs maker/dev reference — genuinely both, flagged for review",
+      "captured": {
+        "title": "Buy a Raspberry Pi 5 – Raspberry Pi",
+        "channel": "Raspberry Pi",
+        "context": "The everything computer. Optimised. Raspberry Pi · For industry · For home · Hardware · Software · Documentation · N",
+        "at": 1785323835945
+      }
+    },
+    {
+      "url": "https://www.notion.com/pricing",
+      "input": {
+        "title": "Pricing | Notion",
+        "channel": "notion.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "SaaS pricing page a developer evaluates at work — note notion.COM is NOT in DEFAULT_WHITELIST (only notion.so), so this really is classified",
+      "captured": {
+        "title": "Notion Pricing Plans: Free, Plus, Business, & Enterprise.",
+        "channel": "Notion",
+        "context": "Learn more about our different pricing plans. We support everyone, from free personal accounts to enterprise businesses.",
+        "at": 1785323836589
+      }
+    },
+    {
+      "url": "https://aws.amazon.com/pricing/",
+      "input": {
+        "title": "AWS Pricing",
+        "channel": "aws.amazon.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "cloud cost page on amazon.com — hostname must not drag it to shopping",
+      "captured": {
+        "title": "AWS Product and Service Pricing | Amazon Web Services",
+        "channel": "Amazon Web Services, Inc.",
+        "context": "Learn how AWS pay-as-you approach to pricing works, and calculate your solution. With AWS you pay only for the individual services you need, for as long as you use them, and without requiring long-ter",
+        "at": 1785323836616
+      }
+    },
+    {
+      "url": "https://vercel.com/pricing",
+      "input": {
+        "title": "Pricing – Vercel",
+        "channel": "vercel.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "developer-tool pricing: plan/price vocabulary with no consumer-purchase intent",
+      "captured": {
+        "title": "Vercel Pricing: Hobby, Pro, and Enterprise plans",
+        "context": "From early-stage startups to growing enterprises, Vercel has you covered. Find a plan to power your projects.",
+        "at": 1785323836902
+      }
+    },
+    {
+      "url": "https://www.datadoghq.com/pricing/",
+      "input": {
+        "title": "Pricing | Datadog",
+        "channel": "datadoghq.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "infra-monitoring pricing page evaluated during work",
+      "captured": {
+        "title": "Pricing | Datadog",
+        "context": "Flexible, transparent pricing designed to scale with your business Product · View pricing · Metrics · Network Monitoring · Container Monitoring · K",
+        "at": 1785323837982
+      }
+    },
+    {
+      "url": "https://kubernetes.io/docs/concepts/workloads/controllers/deployment/",
+      "input": {
+        "title": "Deployments | Kubernetes",
+        "channel": "kubernetes.io"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "reference docs — expected 'productive' on purpose: landing in the neutral documentation centroid is correct behavior, not a miss",
+      "captured": {
+        "title": "Deployments | Kubernetes",
+        "channel": "Kubernetes",
+        "context": "A Deployment manages a set of Pods to run an application workload, usually one that doesn't maintain state.",
+        "at": 1785323838498
+      }
+    },
+    {
+      "url": "https://redis.io/docs/latest/develop/data-types/streams/",
+      "input": {
+        "title": "Redis Streams | Docs",
+        "channel": "redis.io"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "database docs page; same neutral-docs rationale",
+      "captured": {
+        "title": "Redis Streams | Docs",
+        "channel": "Docs",
+        "context": "Introduction to Redis streams AI agent builder · Redis install · Data types · Tools · Community · Docs · Login",
+        "at": 1785323840085
+      }
+    },
+    {
+      "url": "https://react.dev/learn/thinking-in-react",
+      "input": {
+        "title": "Thinking in React – React",
+        "channel": "react.dev"
+      },
+      "expected": [
+        "programming and software development"
+      ],
+      "set": "v2",
+      "note": "framework tutorial prose (not an API table) should land squarely in programming",
+      "captured": {
+        "title": "Thinking in React – React",
+        "context": "The library for web and native user interfaces React · v19.2 · Learn · Reference · Community · Blog · Quick Start · Tutorial: T",
+        "at": 1785323838533
+      }
+    },
+    {
+      "url": "https://web.dev/articles/lcp",
+      "input": {
+        "title": "Largest Contentful Paint (LCP) | Articles | web.dev",
+        "channel": "web.dev"
+      },
+      "expected": [
+        "programming and software development"
+      ],
+      "set": "v2",
+      "note": "web-performance article; acronym-heavy title",
+      "captured": {
+        "title": "Largest Contentful Paint (LCP)  |  Articles  |  web.dev",
+        "channel": "web.dev",
+        "context": "This post introduces the Largest Contentful Paint (LCP) metric and explains how to measure it",
+        "at": 1785323839850
+      }
+    },
+    {
+      "url": "https://martinfowler.com/articles/microservices.html",
+      "input": {
+        "title": "Microservices",
+        "channel": "martinfowler.com"
+      },
+      "expected": [
+        "programming and software development"
+      ],
+      "set": "v2",
+      "note": "one-word architecture essay title — sparse but unambiguously technical",
+      "captured": {
+        "title": "Microservices",
+        "channel": "martinfowler.com",
+        "context": "Defining the microservices architectural style by describing their nine common characteristics",
+        "at": 1785323840276
+      }
+    },
+    {
+      "url": "https://roadmap.sh/frontend",
+      "input": {
+        "title": "Frontend Developer Roadmap",
+        "channel": "roadmap.sh"
+      },
+      "expected": [
+        "programming and software development"
+      ],
+      "set": "v2",
+      "note": "learning-path page; could plausibly land in career/learning neutral, which would also be fine behaviorally",
+      "captured": {
+        "title": "Frontend Developer Roadmap: What is Frontend Development?",
+        "channel": "roadmap.sh",
+        "context": "Step by step guide to becoming a modern frontend developer in 2026 AI Tutor · Roadmaps · Lesson Packs · Newsletters · Upgrade · Login · Sign Up",
+        "at": 1785323840113
+      }
+    },
+    {
+      "url": "https://www.freecodecamp.org/learn",
+      "input": {
+        "title": "Learn to Code — For Free",
+        "channel": "freecodecamp.org"
+      },
+      "expected": [
+        "programming and software development",
+        "science and education"
+      ],
+      "set": "v2",
+      "note": "coding curriculum sits legitimately between programming and education",
+      "captured": {
+        "title": "Learn to Code — For Free — Coding Courses for Busy People",
+        "context": "Learn to Code — For Free Skip to content · Donate · Curriculum · Catalog · Sign in",
+        "at": 1785323841322
+      }
+    },
+    {
+      "url": "https://pytorch.org/tutorials/beginner/basics/intro.html",
+      "input": {
+        "title": "Learn the Basics — PyTorch Tutorials",
+        "channel": "pytorch.org"
+      },
+      "expected": [
+        "programming and software development",
+        "science and education"
+      ],
+      "set": "v2",
+      "note": "ML tutorial: framework docs and coursework at the same time",
+      "captured": {
+        "title": "Learn the Basics — PyTorch Tutorials 2.13.0+cu130 documentation",
+        "context": "Learn the Basics# v2.13.0+cu130 · Intro · Learn the Basics · What is torch.nn really? · NLP from S",
+        "at": 1785323842801
+      }
+    },
+    {
+      "url": "https://ocw.mit.edu/courses/8-01sc-classical-mechanics-fall-2016/",
+      "input": {
+        "title": "Classical Mechanics | Physics | MIT OpenCourseWare",
+        "channel": "ocw.mit.edu"
+      },
+      "expected": [
+        "science and education"
+      ],
+      "set": "v2",
+      "note": "non-CS university course page (existing set's MIT case is an algorithms course)",
+      "captured": {
+        "title": "Classical Mechanics | Physics | MIT OpenCourseWare",
+        "channel": "MIT OpenCourseWare",
+        "context": "University or school page. This first course in the physics curriculum introduces classical mechanics. Historically, a set of core concepts—space, time, mass, force, momentum, torque, and angular mome",
+        "at": 1785323841530
+      }
+    },
+    {
+      "url": "https://plato.stanford.edu/entries/functionalism/",
+      "input": {
+        "title": "Functionalism (Stanford Encyclopedia of Philosophy)",
+        "channel": "plato.stanford.edu"
+      },
+      "expected": [
+        "science and education"
+      ],
+      "set": "v2",
+      "note": "humanities scholarship — the education label must cover more than STEM",
+      "captured": {
+        "title": "Functionalism (Stanford Encyclopedia of Philosophy)",
+        "at": 1785323842792
+      }
+    },
+    {
+      "url": "https://www.nasa.gov/mission/artemis-2/",
+      "input": {
+        "title": "Artemis II - NASA",
+        "channel": "nasa.gov"
+      },
+      "expected": [
+        "science and education"
+      ],
+      "set": "v2",
+      "note": "space mission page on a .gov: institutional framing must not swamp the science signal",
+      "noCapture": "URL 404s — needs a fresh URL before this case can be grounded"
+    },
+    {
+      "url": "https://pubmed.ncbi.nlm.nih.gov/",
+      "input": {
+        "title": "PubMed",
+        "channel": "pubmed.ncbi.nlm.nih.gov"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "bare-brand research database; either science or neutral-reference is correct, so scored only on not-blocking",
+      "captured": {
+        "title": "PubMed",
+        "channel": "PubMed",
+        "context": "PubMed® comprises more than 40 million citations for biomedical literature from MEDLINE, life science journals, and online books. Citations may include links to full text content from PubMed Central a",
+        "at": 1785323843150
+      }
+    },
+    {
+      "url": "https://github.com/godotengine/godot",
+      "input": {
+        "title": "GitHub - godotengine/godot: Godot Engine – Multi-platform 2D and 3D game engine",
+        "channel": "github.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "title screams video games; must be allowed end-to-end via DEFAULT_WHITELIST github.com",
+      "captured": {
+        "title": "GitHub - godotengine/godot: Godot Engine – Multi-platform 2D and 3D game engine · GitHub",
+        "channel": "GitHub",
+        "context": "Godot Engine – Multi-platform 2D and 3D game engine - godotengine/godot Sign in · Why GitHub · Documentation · Blog · Changelog · Marketplace · View all",
+        "at": 1785323845455
+      }
+    },
+    {
+      "url": "https://github.com/ppy/osu",
+      "input": {
+        "title": "GitHub - ppy/osu: rhythm is just a *click* away!",
+        "channel": "github.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "open-source rhythm game repo — reads as games/music, resolved by whitelist",
+      "captured": {
+        "title": "GitHub - ppy/osu: rhythm is just a *click* away! · GitHub",
+        "channel": "GitHub",
+        "context": "rhythm is just a *click* away! Contribute to ppy/osu development by creating an account on GitHub.",
+        "at": 1785323845505
+      }
+    },
+    {
+      "url": "https://github.com/topics/casino",
+      "input": {
+        "title": "casino · GitHub Topics",
+        "channel": "github.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "gambling keyword as a repo topic on a whitelisted host",
+      "noCapture": "URL 404s — needs a fresh URL before this case can be grounded"
+    },
+    {
+      "url": "https://stackoverflow.com/questions/tagged/minecraft",
+      "input": {
+        "title": "Newest 'minecraft' Questions - Stack Overflow",
+        "channel": "stackoverflow.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "game name in a Q&A tag page title; whitelist must win",
+      "noCapture": "site bot-walls headless Chromium; a real browser sees the normal page"
+    },
+    {
+      "url": "https://gitlab.com/gitlab-org/gitlab",
+      "input": {
+        "title": "GitLab.org / GitLab · GitLab",
+        "channel": "gitlab.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "repeated-brand title with almost no semantic content; whitelisted host",
+      "captured": {
+        "title": "GitLab.org / GitLab · GitLab",
+        "channel": "GitLab",
+        "context": "GitLab is the open-source DevSecOps platform that provides a complete software development lifecycle toolchain including source control, CI/CD, security scanning, and project management in a single ap",
+        "at": 1785323847129
+      }
+    },
+    {
+      "url": "https://miro.com/templates/event-planning/",
+      "input": {
+        "title": "Event Planning Template | Miro",
+        "channel": "miro.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "party/event vocabulary on a whitelisted work tool",
+      "captured": {
+        "title": "FREE Event Planning Template | Miro 2026",
+        "context": "Run successful events with our Event Planning Template. Seamlessly evaluate an event’s different functions both before and after the function.",
+        "at": 1785323847650
+      }
+    },
+    {
+      "url": "https://www.figma.com/templates/",
+      "input": {
+        "title": "Templates | Figma",
+        "channel": "figma.com"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "sparse title on a whitelisted design tool",
+      "captured": {
+        "title": "Explore 300+ free design and white board templates | Figma",
+        "channel": "Figma",
+        "context": "Figma is free collaboration design and white boarding tool. Explore 300+ free templates for any role or use case.",
+        "at": 1785323847055
+      }
+    },
+    {
+      "url": "https://www.notion.so/templates",
+      "input": {
+        "title": "Notion Templates",
+        "channel": "notion.so"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "notion.SO is whitelisted (notion.com deliberately is not — see the pricing case above)",
+      "captured": {
+        "title": "Choose from 30,000+ Notion templates | Notion Marketplace",
+        "channel": "Notion",
+        "context": "Browse 30,000+ free and customizable templates for every part of your work and life in our Marketplace.",
+        "at": 1785323848154
+      }
+    },
+    {
+      "url": "https://www.ign.com/",
+      "input": {
+        "title": "IGN - Video Games, Trailers, Reviews, News, Wikis",
+        "channel": "ign.com"
+      },
+      "expected": [
+        "video games"
+      ],
+      "set": "v2",
+      "note": "gaming news hub; 'news' in the title must not steer to news and politics",
+      "captured": {
+        "title": "Video Game News, Reviews, and Walkthroughs - IGN",
+        "channel": "IGN",
+        "context": "IGN is your #1 destination for all video game news, expert reviews, and walkthroughs.",
+        "at": 1785323849068
+      }
+    },
+    {
+      "url": "https://store.steampowered.com/",
+      "input": {
+        "title": "Welcome to Steam",
+        "channel": "store.steampowered.com"
+      },
+      "expected": [
+        "video games",
+        "online shopping"
+      ],
+      "set": "v2",
+      "note": "game storefront — both labels block, either top-1 is fine",
+      "captured": {
+        "title": "Welcome to Steam",
+        "context": "Steam is the ultimate destination for playing, discussing, and creating games.",
+        "at": 1785323849145
+      }
+    },
+    {
+      "url": "https://www.epicgames.com/store/en-US/",
+      "input": {
+        "title": "Epic Games Store | Download & Play PC Games",
+        "channel": "epicgames.com"
+      },
+      "expected": [
+        "video games",
+        "online shopping"
+      ],
+      "set": "v2",
+      "note": "second game storefront with explicit store vocabulary",
+      "captured": {
+        "title": "Epic Games Store | Download & Play PC Games, Mods, DLC & More – Epic Games",
+        "channel": "Epic Games Store",
+        "context": "Welcome to Epic Games Store! Download and play PC Games of every genre. We have mods, DLC and Free Games too! Games for everyone.",
+        "at": 1785323851202
+      }
+    },
+    {
+      "url": "https://www.nexusmods.com/skyrimspecialedition",
+      "input": {
+        "title": "Skyrim Special Edition Nexus - Mods and Community",
+        "channel": "nexusmods.com"
+      },
+      "expected": [
+        "video games"
+      ],
+      "set": "v2",
+      "note": "modding site: 'mods and community' could tip to social, but the page is squarely gaming",
+      "captured": {
+        "title": "Skyrim Special Edition Mods - Nexus Mods",
+        "channel": "Nexus Mods",
+        "context": "Discover mods for Skyrim Special Edition on Nexus Mods. Skip to content · Skyrim Special Edition · Clear game filter · Home",
+        "at": 1785323850214
+      }
+    },
+    {
+      "url": "https://knowyourmeme.com/",
+      "input": {
+        "title": "Internet Meme Database | Know Your Meme",
+        "channel": "knowyourmeme.com"
+      },
+      "expected": [
+        "memes and entertainment"
+      ],
+      "set": "v2",
+      "note": "'database' framing must not pull toward neutral reference",
+      "captured": {
+        "title": "Internet Meme Database | Know Your Meme",
+        "channel": "Know Your Meme",
+        "context": "Know Your Meme is a website dedicated to documenting Internet phenomena: viral videos, image macros, catchphrases, web celebs and more.",
+        "at": 1785323851055
+      }
+    },
+    {
+      "url": "https://imgur.com/gallery/hot",
+      "input": {
+        "title": "Most Viral Images | Imgur",
+        "channel": "imgur.com"
+      },
+      "expected": [
+        "memes and entertainment",
+        "social media and networking"
+      ],
+      "set": "v2",
+      "note": "viral image feed; memes/social both block",
+      "captured": {
+        "title": "Imgur: The magic of the Internet",
+        "channel": "Imgur",
+        "context": "Imgur is the easiest way to discover and enjoy the magic of the Internet.",
+        "at": 1785323851113
+      }
+    },
+    {
+      "url": "https://www.buzzfeed.com/quizzes",
+      "input": {
+        "title": "Quizzes - BuzzFeed",
+        "channel": "buzzfeed.com"
+      },
+      "expected": [
+        "memes and entertainment"
+      ],
+      "set": "v2",
+      "note": "'quizzes' is a documented education-adjacent trap word on a pure time-sink page",
+      "captured": {
+        "title": "BuzzFeed Quizzes",
+        "channel": "BuzzFeed",
+        "context": "We've got all the quizzes you love to binge! Come on in and hunker down for the long haul.",
+        "at": 1785323851961
+      }
+    },
+    {
+      "url": "https://www.tiktok.com/@khaby.lame",
+      "input": {
+        "title": "Khaby Lame (@khaby.lame) Official | TikTok",
+        "channel": "tiktok.com"
+      },
+      "expected": [
+        "social media and networking",
+        "memes and entertainment"
+      ],
+      "set": "v2",
+      "note": "creator profile page rather than the feed root",
+      "noCapture": "unreachable from the capture sandbox (DNS/HTTP2); retry from a normal network"
+    },
+    {
+      "url": "https://x.com/explore",
+      "input": {
+        "title": "Explore / X",
+        "channel": "x.com"
+      },
+      "expected": [
+        "social media and networking"
+      ],
+      "set": "v2",
+      "note": "X explore tab; two-word title, distinct from the existing Home/Notifications cases",
+      "captured": {
+        "title": "X - The Everything App / X",
+        "channel": "X (formerly Twitter)",
+        "context": "Account sign-in page. From breaking news and entertainment to sports and politics, get the full story with all the live commentary.",
+        "at": 1785323852825
+      }
+    },
+    {
+      "url": "https://www.reddit.com/r/all/",
+      "input": {
+        "title": "r/all",
+        "channel": "reddit.com"
+      },
+      "expected": [
+        "social media and networking",
+        "memes and entertainment"
+      ],
+      "set": "v2",
+      "note": "five-character title — sparsest possible must-block",
+      "captured": {
+        "title": "Reddit - The heart of the internet",
+        "channel": "Reddit",
+        "context": "Reddit is where millions of people gather for conversations about the things they care about, in over 100,000 subreddit communities.",
+        "at": 1785323852539
+      }
+    },
+    {
+      "url": "https://www.linkedin.com/feed/",
+      "input": {
+        "title": "Feed | LinkedIn",
+        "channel": "linkedin.com",
+        "context": "Video or social media feed page."
+      },
+      "expected": [
+        "social media and networking"
+      ],
+      "set": "v2",
+      "note": "deliberate contrast with the existing productive 'LinkedIn: Senior Software Engineer jobs' case — the feed blocks, job search does not",
+      "captured": {
+        "title": "LinkedIn Login, Sign in | LinkedIn",
+        "channel": "LinkedIn",
+        "context": "Account sign-in page. Login to LinkedIn to keep in touch with people you know, share ideas, and build your career.",
+        "at": 1785323854600
+      }
+    },
+    {
+      "url": "https://bsky.app/",
+      "input": {
+        "title": "Bluesky Social",
+        "channel": "bsky.app"
+      },
+      "expected": [
+        "social media and networking"
+      ],
+      "set": "v2",
+      "note": "newer network the model may not know by name; 'Social' is in the title",
+      "captured": {
+        "title": "Discover — Bluesky",
+        "channel": "Bluesky Social",
+        "context": "Social media as it should be. Find your community among millions of users, unleash your creativity, and have some fun again.",
+        "at": 1785323854726
+      }
+    },
+    {
+      "url": "https://www.temu.com/",
+      "input": {
+        "title": "Temu | Shop Like a Billionaire",
+        "channel": "temu.com"
+      },
+      "expected": [
+        "online shopping"
+      ],
+      "set": "v2",
+      "note": "marketplace homepage with slogan-style title",
+      "captured": {
+        "title": "Temu Canada | Explore the Latest Clothing, Beauty, Home, Jewelry & More",
+        "channel": "temu",
+        "context": "Make Temu your one-stop destination for the latest fashion products, cosmetics & more. Free shipping on items shipped from Temu. Free returns within 90 days. Shop on Temu and start saving.",
+        "at": 1785323854361
+      }
+    },
+    {
+      "url": "https://www.zara.com/us/",
+      "input": {
+        "title": "ZARA United States | New Collection Online",
+        "channel": "zara.com"
+      },
+      "expected": [
+        "online shopping"
+      ],
+      "set": "v2",
+      "note": "fashion storefront; 'collection' with no explicit buy words",
+      "noCapture": "site bot-walls headless Chromium; a real browser sees the normal page"
+    },
+    {
+      "url": "https://www.bestbuy.com/site/misc/deal-of-the-day",
+      "input": {
+        "title": "Deal of the Day - Best Buy",
+        "channel": "bestbuy.com"
+      },
+      "expected": [
+        "online shopping"
+      ],
+      "set": "v2",
+      "note": "deals page on an electronics retailer",
+      "noCapture": "URL 404s — needs a fresh URL before this case can be grounded"
+    },
+    {
+      "url": "https://www.amazon.com/gp/bestsellers",
+      "input": {
+        "title": "Amazon Best Sellers",
+        "channel": "amazon.com"
+      },
+      "expected": [
+        "online shopping"
+      ],
+      "set": "v2",
+      "note": "three-word retail title; pairs with the AWS-on-amazon.com productive case",
+      "captured": {
+        "title": "Amazon.com Best Sellers: The most popular items on Amazon",
+        "context": "Discover the best  in Best Sellers.  Find the top 100 most popular items in Amazon  Best Sellers.",
+        "at": 1785323856588
+      }
+    },
+    {
+      "url": "https://www.pornhub.com/categories",
+      "input": {
+        "title": "Porn Video Categories | Pornhub",
+        "channel": "pornhub.com"
+      },
+      "expected": [
+        "adult content"
+      ],
+      "set": "v2",
+      "note": "adult category listing (existing set only covers the homepage); adult slice is thin",
+      "captured": {
+        "title": "Pornhub Categories: Find Your Favorite Free Hardcore Porn Videos",
+        "context": "Pornhub has the best hardcore porn videos. Discover the newest XXX to stream in your favorite sex category. See the hottest amateurs and pornstars in action.",
+        "at": 1785323856471
+      }
+    },
+    {
+      "url": "https://www.xvideos.com/",
+      "input": {
+        "title": "XVIDEOS.COM",
+        "channel": "xvideos.com"
+      },
+      "expected": [
+        "adult content"
+      ],
+      "set": "v2",
+      "note": "domain-as-title with no explicit words — adult must be recognized from the brand alone",
+      "captured": {
+        "title": "Free Porn Videos - XVIDEOS.COM",
+        "context": "XVIDEOS Free Porn Videos Login · Join for FREE · Premium · Best Videos · Porn in your language · AI · Ama",
+        "at": 1785323857059
+      }
+    },
+    {
+      "url": "https://www.redtube.com/",
+      "input": {
+        "title": "RedTube",
+        "channel": "redtube.com"
+      },
+      "expected": [
+        "adult content"
+      ],
+      "set": "v2",
+      "note": "bare adult brand name; 'Tube' suffix risks reading as video/entertainment",
+      "captured": {
+        "title": "Free Porn Sex Videos - Redtube - XXX Movies - Home of Videos Porno",
+        "context": "Redtube brings you NEW porn videos every day for free. Enjoy our XXX movies in high quality HD resolution on any device. Get fully immersed with the latest virtual reality sex videos from top adult st",
+        "at": 1785323858526
+      }
+    },
+    {
+      "url": "https://chaturbate.com/",
+      "input": {
+        "title": "Chaturbate - Free Adult Webcams",
+        "channel": "chaturbate.com"
+      },
+      "expected": [
+        "adult content"
+      ],
+      "set": "v2",
+      "note": "live adult streaming; distinct from the existing 'webcam sites ranked' listicle",
+      "captured": {
+        "title": "Chaturbate - Free Adult Webcams, Live Sex, Free Sex Chat, Exhibitionist & Pornstar Free Cams",
+        "context": "Watch Live Cams Now! No Registration Required - 100% Free Uncensored Adult Chat. Start chatting with amateurs, exhibitionists, pornstars w/ HD Video & Audio.",
+        "at": 1785323859533
+      }
+    },
+    {
+      "url": "https://www.brazzers.com/",
+      "input": {
+        "title": "Brazzers",
+        "channel": "brazzers.com"
+      },
+      "expected": [
+        "adult content"
+      ],
+      "set": "v2",
+      "note": "adult studio brand name only — pure proper-noun recall test",
+      "captured": {
+        "title": "Brazzers.com | Hot and Sexy Exclusive Porn Videos",
+        "context": "Brazzers, sometimes reffered to as brazers or brazzars, is home to the most amazing porno videos with the sexiest models you've ever seen. Take a brazzers tour and enjoy.",
+        "at": 1785323860773
+      }
+    },
+    {
+      "url": "https://fansly.com/",
+      "input": {
+        "title": "Fansly",
+        "channel": "fansly.com"
+      },
+      "expected": [
+        "adult content",
+        "social media and networking"
+      ],
+      "set": "v2",
+      "note": "creator-subscription platform: adult or social both block, mirroring the OnlyFans case",
+      "captured": {
+        "title": "Fansly - Start Interacting With Your Fans",
+        "channel": "Fansly",
+        "context": "Interact with your fans today and start selling content. Sign up today and make a free account.",
+        "at": 1785323860523
+      }
+    },
+    {
+      "url": "https://www.fanduel.com/",
+      "input": {
+        "title": "FanDuel | Online Sportsbook, Casino & Daily Fantasy",
+        "channel": "fanduel.com"
+      },
+      "expected": [
+        "gambling and betting",
+        "sports"
+      ],
+      "set": "v2",
+      "note": "sportsbook; sports is an acceptable top-1 but only gambling blocks by default",
+      "captured": {
+        "title": "FanDuel Sportsbook & Casino Canada - Legal Online Betting in Ontario | FanDuel",
+        "channel": "FanDuel",
+        "context": "New FanDuel customers in Ontario get a No Sweat First Bet up to $1,000 on sportsbook with their first\ndeposit. FanDuel offers daily fantasy contests for cash prizes & legal wagering on sports betting",
+        "at": 1785323861398
+      }
+    },
+    {
+      "url": "https://www.betmgm.com/",
+      "input": {
+        "title": "BetMGM | Online Casino & Sportsbook",
+        "channel": "betmgm.com"
+      },
+      "expected": [
+        "gambling and betting"
+      ],
+      "set": "v2",
+      "note": "casino-first operator homepage",
+      "captured": {
+        "title": "betmgm.com",
+        "at": 1785323861859
+      }
+    },
+    {
+      "url": "https://www.888casino.com/",
+      "input": {
+        "title": "888casino: Online Casino Games",
+        "channel": "888casino.com"
+      },
+      "expected": [
+        "gambling and betting"
+      ],
+      "set": "v2",
+      "note": "'Games' in the title must not tip to video games",
+      "captured": {
+        "title": "888 Casino | Online Casino Ontario",
+        "context": "Account sign-in page.",
+        "at": 1785323863373
+      }
+    },
+    {
+      "url": "https://www.ggpoker.com/",
+      "input": {
+        "title": "GGPoker | The World's Biggest Poker Room",
+        "channel": "ggpoker.com"
+      },
+      "expected": [
+        "gambling and betting"
+      ],
+      "set": "v2",
+      "note": "online poker room (existing set has PokerStars only)",
+      "captured": {
+        "title": "Play Online Poker at The World's Biggest Poker Room | GGPoker",
+        "channel": "GGPokerCA",
+        "context": "GGPoker is the World's Biggest Poker Room. Join now for Daily Freebies and a 100% Welcome Bonus. Millions in prizes! Take your seat anytime from anywhere.",
+        "at": 1785323864936
+      }
+    },
+    {
+      "url": "https://www.oddschecker.com/",
+      "input": {
+        "title": "Oddschecker: Compare Betting Odds",
+        "channel": "oddschecker.com"
+      },
+      "expected": [
+        "gambling and betting",
+        "sports"
+      ],
+      "set": "v2",
+      "note": "odds comparison; 'compare' overlaps buying-guide seeds",
+      "captured": {
+        "title": "Oddschecker | Betting Odds from 25+ UK Betting Sites",
+        "channel": "Oddschecker.com",
+        "context": "Compare odds and offers from 25+ leading UK bookmakers. Build your football accumulators & compare daily racing odds. Get the best expert tips and insight",
+        "at": 1785323865565
+      }
+    },
+    {
+      "url": "https://www.olg.ca/",
+      "input": {
+        "title": "OLG | Ontario Lottery and Gaming",
+        "channel": "olg.ca"
+      },
+      "expected": [
+        "gambling and betting"
+      ],
+      "set": "v2",
+      "note": "state-run lottery: institutional .ca framing must NOT rescue a genuine gambling site — direct stress test of the institutional fix",
+      "captured": {
+        "title": "OLG | Ontario's Online LOTTERY, CASINO & SPORTS 2026",
+        "channel": "OLG",
+        "context": "Account sign-in page. Discover, enjoy, and experience the fun with our Lotteries, INSTANT-win tickets, and online casino games! Play online casino games and lottery games on OLG.ca!",
+        "at": 1785323866294
+      }
+    },
+    {
+      "url": "https://www.bloomberg.com/markets",
+      "input": {
+        "title": "Markets - Bloomberg",
+        "channel": "bloomberg.com"
+      },
+      "expected": [
+        "finance and investing",
+        "news and politics"
+      ],
+      "set": "v2",
+      "note": "market news sits legitimately between finance and news; neither blocks",
+      "noCapture": "site bot-walls headless Chromium; a real browser sees the normal page"
+    },
+    {
+      "url": "https://www.cnbc.com/",
+      "input": {
+        "title": "Stock Markets, Business News, Financials, Earnings - CNBC",
+        "channel": "cnbc.com"
+      },
+      "expected": [
+        "finance and investing",
+        "news and politics"
+      ],
+      "set": "v2",
+      "note": "business news homepage naming both categories explicitly",
+      "captured": {
+        "title": "Stock Markets, Business News, Financials, Earnings - CNBC",
+        "channel": "CNBC",
+        "context": "CNBC is the world leader in business news and real-time financial market coverage. Find fast, actionable information.",
+        "at": 1785323867719
+      }
+    },
+    {
+      "url": "https://www.actionnetwork.com/",
+      "input": {
+        "title": "Sports Betting Odds, Picks & Predictions | Action Network",
+        "channel": "actionnetwork.com"
+      },
+      "expected": [
+        "gambling and betting",
+        "sports"
+      ],
+      "set": "v2",
+      "note": "sports↔gambling boundary: only one of the two acceptable labels blocks, so this is worth watching",
+      "captured": {
+        "title": "Action Network: Sports Betting Odds, News, Insights, & Analysis",
+        "channel": "Action Network",
+        "context": "Action Network is the most trusted source for sports betting insights & analytics, improving your betting and prediction markets experience through data, tools, news & live odds across NFL, MLB and mo",
+        "at": 1785323868035
+      }
+    },
+    {
+      "url": "https://www.reddit.com/r/movies/",
+      "input": {
+        "title": "r/movies",
+        "channel": "reddit.com"
+      },
+      "expected": [
+        "movies and tv shows",
+        "social media and networking"
+      ],
+      "set": "v2",
+      "note": "subreddit: topic label does not block, social does — genuinely ambiguous by design",
+      "captured": {
+        "title": "Movie News and Discussion",
+        "context": "r/movies Sign Up · Log In",
+        "at": 1785323868131
+      }
+    },
+    {
+      "url": "https://www.reddit.com/r/wallstreetbets/",
+      "input": {
+        "title": "r/wallstreetbets",
+        "channel": "reddit.com"
+      },
+      "expected": [
+        "finance and investing",
+        "social media and networking"
+      ],
+      "set": "v2",
+      "note": "same shape as r/movies but a finance topic; existing set has an enriched WSB case, this one is title-only",
+      "captured": {
+        "title": "wallstreetbets",
+        "context": "r/wallstreetbets Sign Up · Log In",
+        "at": 1785323869025
+      }
+    },
+    {
+      "url": "https://www.twitch.tv/directory/category/just-chatting",
+      "input": {
+        "title": "Just Chatting - Twitch",
+        "channel": "twitch.tv"
+      },
+      "expected": [
+        "memes and entertainment",
+        "video games",
+        "social media and networking"
+      ],
+      "set": "v2",
+      "note": "non-gaming category on a gaming platform; all three acceptable labels block",
+      "captured": {
+        "title": "Just Chatting - Twitch",
+        "channel": "Twitch",
+        "context": "Watch Just Chatting channels streaming live on Twitch. Sign up or login to join the community and follow your favorite Just Chatting streamers!",
+        "at": 1785323870466
+      }
+    },
+    {
+      "url": "https://www.nature.com/",
+      "input": {
+        "title": "Nature",
+        "channel": "nature.com"
+      },
+      "expected": [
+        "science and education",
+        "news and politics"
+      ],
+      "set": "v2",
+      "note": "one-word journal homepage that is also a news front page",
+      "captured": {
+        "title": "Nature",
+        "channel": "Nature",
+        "context": "First published in 1869, Nature is the world’s leading multidisciplinary science journal. Nature publishes the finest peer-reviewed research that drives ground-breaking discovery, and is read by thoug",
+        "at": 1785323870762
+      }
+    },
+    {
+      "url": "https://www.quantamagazine.org/",
+      "input": {
+        "title": "Quanta Magazine",
+        "channel": "quantamagazine.org"
+      },
+      "expected": [
+        "science and education",
+        "news and politics"
+      ],
+      "set": "v2",
+      "note": "science journalism; 'Magazine' risks pulling toward entertainment",
+      "captured": {
+        "title": "Science and Math News | Quanta Magazine",
+        "channel": "Quanta Magazine",
+        "context": "Account sign-in page. Illuminating mathematics, physics, biology and computer science research through public service journalism.",
+        "at": 1785323871019
+      }
+    },
+    {
+      "url": "https://discord.com/app",
+      "input": {
+        "title": "Discord",
+        "channel": "discord.com"
+      },
+      "expected": [
+        "social media and networking"
+      ],
+      "set": "v2",
+      "note": "UNSURE: many users run Discord as work chat, many as a gaming hangout. Flagged — consider dropping or moving to 'productive' if the project's policy is that chat apps are tools",
+      "captured": {
+        "title": "Discord",
+        "channel": "Discord",
+        "context": "Discord is great for playing games and chilling with friends, or even building a worldwide community. Customize your own space to talk, play, and hang out.",
+        "at": 1785323873282
+      }
+    },
+    {
+      "url": "https://www.pinterest.com/search/pins/?q=kitchen%20renovation",
+      "input": {
+        "title": "kitchen renovation ideas | Pinterest",
+        "channel": "pinterest.com"
+      },
+      "expected": [
+        "social media and networking",
+        "online shopping"
+      ],
+      "set": "v2",
+      "note": "home-project research on a social platform; both acceptable labels block, which is the honest default",
+      "captured": {
+        "title": "Pinterest",
+        "channel": "Pinterest",
+        "context": "Account sign-in page. Discover recipes, home ideas, style inspiration and other ideas to try. Skip to content · Explore",
+        "at": 1785323872655
+      }
+    },
+    {
+      "url": "https://www.udemy.com/topic/python/",
+      "input": {
+        "title": "Top Python Courses Online | Udemy",
+        "channel": "udemy.com"
+      },
+      "expected": [
+        "science and education",
+        "programming and software development"
+      ],
+      "set": "v2",
+      "note": "course marketplace: the page reads like a storefront (prices, ratings, buy buttons) but the content is education — shopping here would be a false positive, so shopping is deliberately NOT acceptable",
+      "captured": {
+        "title": "Top Python Courses Online - Updated [July 2026]",
+        "channel": "Udemy",
+        "context": "Level up your skills with a Python training course from Udemy. See why millions trust our real-world experts to help them become professional Python developers.",
+        "at": 1785323873679
+      }
+    },
+    {
+      "url": "https://apnews.com/hub/entertainment",
+      "input": {
+        "title": "Entertainment News | AP News",
+        "channel": "apnews.com"
+      },
+      "expected": [
+        "news and politics",
+        "movies and tv shows",
+        "memes and entertainment"
+      ],
+      "set": "v2",
+      "note": "UNSURE: wire-service entertainment section — 'memes and entertainment' blocks while the other two do not, so top-1 here decides block vs allow",
+      "captured": {
+        "title": "Entertainment News: Latest Celebrity, Music & TV News | AP News",
+        "channel": "AP News",
+        "context": "Discover breaking entertainment news from The Associated Press. AP News has the latest entertainment news including celebrity, music, TV & more.",
+        "at": 1785323875009
+      }
+    },
+    {
+      "url": "https://www.chess.com/",
+      "input": {
+        "title": "Chess.com - Play Chess Online",
+        "channel": "chess.com"
+      },
+      "expected": [
+        "video games",
+        "sports"
+      ],
+      "set": "v2",
+      "note": "UNSURE: online chess is a game (blocks) or a sport (does not). Listed as both; human should pick the policy",
+      "captured": {
+        "title": "Chess.com - Play Chess Online - Free Games",
+        "channel": "Chess.com",
+        "context": "Play chess online for free on Chess.com with over 250 million members from around the world. Have fun playing with friends or challenging the computer!",
+        "at": 1785323875068
+      }
+    },
+    {
+      "url": "https://www.lemonde.fr/",
+      "input": {
+        "title": "Le Monde.fr - Actualités et Infos en France et dans le monde",
+        "channel": "lemonde.fr"
+      },
+      "expected": [
+        "news and politics"
+      ],
+      "set": "v2",
+      "note": "French news homepage; the model is English-trained, so this tests cross-lingual transfer on a must-not-block category",
+      "captured": {
+        "title": "Le Monde in English – World news, culture and opinion",
+        "channel": "Le Monde.fr",
+        "context": "France's leading newspaper brings you the latest coverage from France, Europe, and all around the world, unique perspectives and in-depth analysis.",
+        "at": 1785323875152
+      }
+    },
+    {
+      "url": "https://www.mercadolibre.com.ar/",
+      "input": {
+        "title": "Mercado Libre Argentina - Envíos Gratis en el día",
+        "channel": "mercadolibre.com.ar"
+      },
+      "expected": [
+        "online shopping"
+      ],
+      "set": "v2",
+      "note": "Spanish marketplace: must block, so a cross-lingual miss here is a real recall loss",
+      "captured": {
+        "title": "Mercado Libre Argentina - Envíos Gratis en el día",
+        "context": "Comprá productos con Envío Gratis en el día en Mercado Libre Argentina. Encontrá miles de marcas y productos a precios increíbles.",
+        "at": 1785323875818
+      }
+    },
+    {
+      "url": "https://www.taobao.com/",
+      "input": {
+        "title": "淘宝网 - 淘！我喜欢",
+        "channel": "taobao.com"
+      },
+      "expected": [
+        "online shopping"
+      ],
+      "set": "v2",
+      "note": "CJK title with no Latin characters at all — hardest cross-lingual must-block case",
+      "captured": {
+        "title": "淘宝",
+        "context": "淘宝网 - 亚洲较大的网上交易平台，提供各类服饰、美容、家居、数码、话费/点卡充值… 数亿优质商品，同时提供担保交易(先收货后付款)等安全交易保障服务，并由商家提供退货承诺、破损补寄等消费者保障服务，让你安心享受网上购物乐趣！",
+        "at": 1785323877264
+      }
+    },
+    {
+      "url": "https://weibo.com/",
+      "input": {
+        "title": "微博",
+        "channel": "weibo.com"
+      },
+      "expected": [
+        "social media and networking"
+      ],
+      "set": "v2",
+      "note": "two-character CJK social title; sparse AND non-English",
+      "noCapture": "unreachable from the capture sandbox (DNS/HTTP2); retry from a normal network"
+    },
+    {
+      "url": "https://www3.nhk.or.jp/news/",
+      "input": {
+        "title": "NHKニュース - NHK NEWS WEB",
+        "channel": "www3.nhk.or.jp"
+      },
+      "expected": [
+        "news and politics"
+      ],
+      "set": "v2",
+      "note": "mixed Japanese/Latin title",
+      "noCapture": "unreachable from the capture sandbox (DNS/HTTP2); retry from a normal network"
+    },
+    {
+      "url": "https://www.jeuxvideo.com/",
+      "input": {
+        "title": "Jeuxvideo.com : Actu, Tests, Vidéos et Astuces des Jeux Vidéo",
+        "channel": "jeuxvideo.com"
+      },
+      "expected": [
+        "video games"
+      ],
+      "set": "v2",
+      "note": "French gaming site with accented characters; must block",
+      "captured": {
+        "title": "jeuxvideo.com toute l'actualité du jeu vidéo et du hardware",
+        "channel": "Jeuxvideo.com",
+        "context": "Retrouvez toute l'actualité du jeu video sur PC et consoles. Faites le plein de tests de jeux vidéo et de soluce. Découvrez aussi tous nos tests et guides d'achat hardware, nos bon plans et toutes nos",
+        "at": 1785323877794
+      }
+    },
+    {
+      "url": "https://www.impots.gouv.fr/accueil",
+      "input": {
+        "title": "impots.gouv.fr",
+        "channel": "impots.gouv.fr"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "French tax authority — non-English institutional page, crosses the sign-in/government policy with the language gap",
+      "captured": {
+        "title": "Accueil impots.gouv.fr | impots.gouv.fr",
+        "channel": "impots.gouv.fr",
+        "context": "Menu principal · Contact · impots.gouv.fr · Contact et prise de RDV · Accueil ·",
+        "at": 1785323877634
+      }
+    },
+    {
+      "url": "https://www.tum.de/studium",
+      "input": {
+        "title": "Studium - TUM",
+        "channel": "tum.de"
+      },
+      "expected": "productive",
+      "set": "v2",
+      "note": "German university admissions page; sparse non-English institutional title",
+      "captured": {
+        "title": "Informationen zum Studium an der TUM - TUM",
+        "context": "University or school page. Erfahren Sie mehr über das Studium an der Technischen Universität München. Aktuelles Zur Übersicht · Alle Meldungen · Terminübersicht · Presidential Lunche",
+        "at": 1785323880927
+      }
+    }
   ]
 }

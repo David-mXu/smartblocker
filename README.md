@@ -78,20 +78,34 @@ npm run build        # -> dist/chrome (also Edge) and dist/firefox
 ## Automated checks
 
 ```sh
-node scripts/benchmark.mjs embed:Xenova/bge-small-en-v1.5   # model eval (232 labeled cases)
+npm run eval                                                # regression gate — fails on any regression
+node scripts/benchmark.mjs embed:Xenova/bge-small-en-v1.5   # model bake-off (compare candidates)
 node scripts/e2e-test.mjs                                   # full extension e2e in a real Chromium
 node feedback-worker/test/local-test.mjs                    # feedback worker (stubbed D1)
 ```
 
+`npm run eval` is the one that answers *"did that change make the model
+better?"* It runs the shipped config over 395 eval cases, scores the real
+block/allow decision (whitelist and blocklist included, not just the
+classifier's guess), and diffs every case against a committed baseline —
+printing exactly which pages got fixed and which regressed, and exiting
+non-zero on a regression. Accept an improvement with `--update-baseline`; the
+git history of `scripts/eval-baseline.json` is the score history.
+
+Most eval cases carry a real URL, and `npm run eval -- --capture` re-scrapes
+those pages with a headless browser using the *same* metadata extractor the
+extension injects — so the eval measures the real signal pipeline instead of
+hand-written guesses about it.
+
 The shipped classifier is an **embedding-prototype** model
 (`Xenova/bge-small-en-v1.5`, ~34MB): the page text is embedded once and
 matched against per-category prototype embeddings, so adding categories is
-free and inference is ~3ms in Node / ~10ms live. On the 232-case eval it
-scores 89.1% top-1 with a 3.5% false-positive rate on productive pages (both
-remaining FPs are on default-whitelisted domains) — versus 65.2% / 7.1% at
-~111ms for the zero-shot NLI model it replaced (which remains available as a
-config fallback). It also knows its proper nouns: "Elden Ring Boss Fight" →
-video games at 0.89.
+free and inference is ~3ms in Node / ~10ms live. It scores **86.2% top-1 with
+a 1.3% false-positive rate on productive pages and 91.0% end-to-end decision
+accuracy** across all 395 cases — versus 65.2% / 7.1% at ~111ms for the
+zero-shot NLI model it replaced (which remains available as a config
+fallback). It also knows its proper nouns: "Elden Ring Boss Fight" → video
+games at 0.89.
 
 All tuning knobs (backend, model ids, category labels, blocked categories,
 thresholds) live in `src/shared/config.ts`; prototype seed texts live in

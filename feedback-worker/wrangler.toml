@@ -1,8 +1,18 @@
-# FlowGuard feedback ingestion worker (opt-in; see ../PRIVACY.md).
+# FlowGuard feedback ingestion + export worker (opt-in; see ../PRIVACY.md).
 # Deploy:  npx wrangler d1 create flowguard-feedback   (paste ids below)
 #          npx wrangler d1 execute flowguard-feedback --file=./schema.sql
+#          npx wrangler secret put EXPORT_TOKEN        (any long random string)
 #          npx wrangler deploy
 # Then set FEEDBACK_ENDPOINT in ../src/shared/config.ts to the workers.dev URL.
+#
+# EXPORT_TOKEN guards GET /v1/export, which returns users' shared page titles in
+# bulk. It is a SECRET, never a [vars] entry — putting it here would commit it.
+# With no EXPORT_TOKEN set the export route fails closed (503); ingest still
+# works, so an un-configured deploy collects but cannot be read.
+#
+# Harvest the data with:
+#   node ../scripts/import-feedback.mjs --from-worker \
+#        --endpoint=https://<...>.workers.dev --token=$EXPORT_TOKEN
 name = "flowguard-feedback"
 main = "src/index.js"
 compatibility_date = "2026-06-01"

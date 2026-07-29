@@ -8,7 +8,8 @@
     "build": "npm run build:chrome && npm run build:firefox",
     "build:chrome": "vite build -c vite.config.background.ts --mode chrome && vite build -c vite.config.offscreen.ts --mode chrome && vite build -c vite.config.popup.ts --mode chrome && vite build -c vite.config.options.ts --mode chrome && node scripts/copy-assets.mjs chrome",
     "build:firefox": "vite build -c vite.config.background.ts --mode firefox && vite build -c vite.config.popup.ts --mode firefox && vite build -c vite.config.options.ts --mode firefox && node scripts/copy-assets.mjs firefox",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "eval": "node scripts/eval.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "3.8.1"
