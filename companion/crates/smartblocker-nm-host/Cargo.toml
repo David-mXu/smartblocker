@@ -1,0 +1,13 @@
+[package]
+name = "smartblocker-nm-host"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Native-messaging stdio relay: browser <-> SmartBlocker companion daemon"
+
+[dependencies]
+smartblocker-core = { path = "../smartblocker-core" }
+serde_json = "1.0.150"
+
+[dev-dependencies]
+tempfile = "3"

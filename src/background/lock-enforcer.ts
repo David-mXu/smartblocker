@@ -31,7 +31,7 @@ async function onBoundary(): Promise<void> {
 export function initLockEnforcer(): void {
   api.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name !== ALARM_NAME) return;
-    void onBoundary().catch((e) => console.warn('[FlowGuard] lock boundary error:', e));
+    void onBoundary().catch((e) => console.warn('[SmartBlocker] lock boundary error:', e));
   });
 
   // A lockState write from the popup/options wakes the SW via this listener —
@@ -42,12 +42,12 @@ export function initLockEnforcer(): void {
     void (async () => {
       await syncAlarm();
       if ((await getLockStatus()).forceBlocking) await sweepOpenTabs();
-    })().catch((e) => console.warn('[FlowGuard] lock change handling error:', e));
+    })().catch((e) => console.warn('[SmartBlocker] lock change handling error:', e));
   });
 
   // SW (re)start: cover "a schedule window began while the browser was closed".
   void (async () => {
     await syncAlarm();
     if ((await getLockStatus()).forceBlocking) await sweepOpenTabs();
-  })().catch((e) => console.warn('[FlowGuard] lock init error:', e));
+  })().catch((e) => console.warn('[SmartBlocker] lock init error:', e));
 }

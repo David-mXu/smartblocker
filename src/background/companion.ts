@@ -1,4 +1,4 @@
-// Native Messaging bridge to the FlowGuard desktop companion (Phase 4).
+// Native Messaging bridge to the SmartBlocker desktop companion (Phase 4).
 // The companion is the HARD enforcer of the lock system: both sides keep a
 // copy of the lock state and converge by merging (see companion-protocol.ts —
 // each side re-broadcasts only when a merge CHANGED its state, so the sync
@@ -110,7 +110,7 @@ function onPortMessage(raw: unknown): void {
     // re-broadcasts via our storage.onChanged listener; the companion's merge
     // of its own echo is a no-op, so the exchange converges.
     void mergeRemoteLockState(msg.lockState).catch((e) =>
-      console.warn('[FlowGuard] companion lock merge failed:', e),
+      console.warn('[SmartBlocker] companion lock merge failed:', e),
     );
   } else if (msg.type === 'companionStatus') {
     const status = msg.status;
@@ -123,7 +123,7 @@ function onPortMessage(raw: unknown): void {
       state: msg.running === false ? 'disconnected' : 'connected',
     });
     void mergeRemoteLockState((status as CompanionStatus).lockState).catch((e) =>
-      console.warn('[FlowGuard] companion lock merge failed:', e),
+      console.warn('[SmartBlocker] companion lock merge failed:', e),
     );
   }
 }
@@ -144,7 +144,7 @@ function onPortDisconnect(p: chrome.runtime.Port): void {
   if (/not found|no such native application/i.test(err)) {
     if (!loggedNotInstalled) {
       loggedNotInstalled = true;
-      console.info('[FlowGuard] desktop companion not installed; hard enforcement unavailable');
+      console.info('[SmartBlocker] desktop companion not installed; hard enforcement unavailable');
     }
     patchSnapshot({ state: 'not-installed' });
     void api.alarms.clear(KEEPALIVE_ALARM);
@@ -215,5 +215,5 @@ export function initCompanionBridge(): void {
     await getCompanionSnapshot();
     await api.alarms.create(RETRY_ALARM, { periodInMinutes: 24 * 60 });
     connect();
-  })().catch((e) => console.warn('[FlowGuard] companion bridge init failed:', e));
+  })().catch((e) => console.warn('[SmartBlocker] companion bridge init failed:', e));
 }

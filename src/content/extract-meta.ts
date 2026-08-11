@@ -161,7 +161,7 @@ export function extractMeta(): { channel?: string; context?: string } {
     }
 
     // ── Generic page (any other site) ────────────────────────────────────────
-    // FlowGuard now classifies all sites; give the model whatever signal the
+    // SmartBlocker now classifies all sites; give the model whatever signal the
     // page exposes via standard metadata. All fields stay optional.
 
     // Page-kind hint from og:type + JSON-LD @type. Pages self-declare what

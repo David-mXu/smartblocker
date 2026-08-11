@@ -450,7 +450,7 @@ function renderCompanion(snapshot: CompanionSnapshot): void {
 
   if (state === 'not-installed') {
     companionStatusEl.className = 'companion-muted';
-    companionStatusEl.textContent = 'Get FlowGuard Companion — coming with the Pro release';
+    companionStatusEl.textContent = 'Get SmartBlocker Companion — coming with the Pro release';
     return;
   }
   if (state === 'connecting') {
@@ -654,7 +654,7 @@ feedbackExportBtn.addEventListener('click', async () => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `flowguard-feedback-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = `smartblocker-feedback-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   URL.revokeObjectURL(url);
 });

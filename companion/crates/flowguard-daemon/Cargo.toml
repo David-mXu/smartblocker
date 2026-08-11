@@ -1,9 +1,0 @@
-[package]
-name = "flowguard-daemon"
-version = "0.1.0"
-edition = "2021"
-publish = false
-description = "Headless FlowGuard companion daemon (Linux + e2e; Windows runs the Tauri shell)"
-
-[dependencies]
-flowguard-core = { path = "../flowguard-core" }

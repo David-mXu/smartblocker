@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "FlowGuard",
+  "name": "Smart Blocker",
   "version": "0.5.0",
   "description": "Local-AI distraction blocker — classifies what you watch, blocks only your bad habits",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA29DggTXPG/R7jzx3E6VV/dcbX+P6OAnZ9w6UP0rPad6c4qObCUyzEQS5qibzqr6BHFbotdcMdQddvNeNekt7CkyCjUsfbsM/VGhSKTuuoQHS5Zy1BvEKY3zUQ31unax1NUKOR3YqipHqErWUGqhhfYTKH5ppOp7oaS0WkHCRYL+oY/TaNknuqEmyGLzxYtiB6IpkSUWEoqh25SWwHp/TpTj9GBCJsPSjwvLsxNJDiEhtQBUA9zExjK8If8rsvXEJ7wyFAVyQHA9mvmM21/ZIjjJ22FKWIzfqkUN4KsGlIqmH8gPCaqT33QYOtI2IvmpTP5bmq6vlLJSgDRb0NHm/HwIDAQAB",
@@ -11,7 +11,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "FlowGuard"
+    "default_title": "SmartBlocker"
   },
   "options_ui": {
     "page": "options.html",

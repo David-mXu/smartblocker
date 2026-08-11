@@ -124,7 +124,7 @@ try {
   );
   let overlayVisible = false;
   try {
-    await tab.waitForSelector('#flowguard-overlay', { timeout: 20_000 });
+    await tab.waitForSelector('#smartblocker-overlay', { timeout: 20_000 });
     overlayVisible = true;
   } catch {}
   console.log(`${overlayVisible ? 'PASS' : 'FAIL'} gaming title gets block overlay`);
@@ -134,7 +134,7 @@ try {
     'https://www.youtube.com/watch?v=y&t=' + encodeURIComponent('React Router Tutorial'),
   );
   await tab.waitForTimeout(8_000); // give a wrong block time to appear
-  const wronglyBlocked = await tab.locator('#flowguard-overlay').count();
+  const wronglyBlocked = await tab.locator('#smartblocker-overlay').count();
   console.log(`${wronglyBlocked === 0 ? 'PASS' : 'FAIL'} programming title is NOT blocked`);
   if (wronglyBlocked > 0) process.exitCode = 1;
 
@@ -145,7 +145,7 @@ try {
   );
   let freshBlocked = false;
   try {
-    await tab.waitForSelector('#flowguard-overlay', { timeout: 30_000 });
+    await tab.waitForSelector('#smartblocker-overlay', { timeout: 30_000 });
     freshBlocked = true;
   } catch {}
   console.log(`${freshBlocked ? 'PASS' : 'FAIL'} uncached gaming title gets block overlay`);
@@ -154,7 +154,7 @@ try {
   // 4b. Deterministic blocklist: a URL/keyword match should block instantly,
   // skipping the ML classifier entirely (inferMs 0), and the override button
   // must still work on a blocklist-triggered block (override always wins).
-  const BLOCKLIST_KW = 'flowguard-blocklist-test';
+  const BLOCKLIST_KW = 'smartblocker-blocklist-test';
   await sw.evaluate(async (kw) => {
     const { settings = {} } = await chrome.storage.local.get('settings');
     await chrome.storage.local.set({ settings: { ...settings, blocklist: [kw] } });
@@ -171,7 +171,7 @@ try {
   await tab.goto(blocklistUrl);
   let blocklistBlocked = false;
   try {
-    await tab.waitForSelector('#flowguard-overlay', { timeout: 5_000 }); // near-instant: no inference
+    await tab.waitForSelector('#smartblocker-overlay', { timeout: 5_000 }); // near-instant: no inference
     blocklistBlocked = true;
   } catch {}
   console.log(`${blocklistBlocked ? 'PASS' : 'FAIL'} blocklist keyword match blocks instantly`);
@@ -187,11 +187,11 @@ try {
   );
   if (!skippedClassifier) process.exitCode = 1;
 
-  await tab.locator('#flowguard-overlay button', { hasText: 'actually productive' }).click();
+  await tab.locator('#smartblocker-overlay button', { hasText: 'actually productive' }).click();
   await tab.goto('about:blank');
   await tab.goto(blocklistUrl);
   await tab.waitForTimeout(3_000);
-  const stillBlockedAfterOverride = await tab.locator('#flowguard-overlay').count();
+  const stillBlockedAfterOverride = await tab.locator('#smartblocker-overlay').count();
   console.log(
     `${stillBlockedAfterOverride === 0 ? 'PASS' : 'FAIL'} override lets a blocklist-matched title through`,
   );
@@ -252,7 +252,7 @@ try {
   await tab.goto('https://www.youtube.com/watch?v=fz&t=' + encodeURIComponent(frozenTitle));
   let frozenBlocked = false;
   try {
-    await tab.waitForSelector('#flowguard-overlay', { timeout: 30_000 });
+    await tab.waitForSelector('#smartblocker-overlay', { timeout: 30_000 });
     frozenBlocked = true;
   } catch {}
   console.log(
@@ -261,7 +261,7 @@ try {
   if (!frozenBlocked) process.exitCode = 1;
 
   if (frozenBlocked) {
-    const overlayBtns = tab.locator('#flowguard-overlay button');
+    const overlayBtns = tab.locator('#smartblocker-overlay button');
     const overrideCount = await overlayBtns.filter({ hasText: 'actually productive' }).count();
     const dismissCount = await overlayBtns.filter({ hasText: 'Dismiss' }).count();
     const stayCount = await overlayBtns.filter({ hasText: 'Stay focused' }).count();
@@ -278,7 +278,7 @@ try {
   await tab.goto(blocklistUrl);
   let overriddenReblocked = false;
   try {
-    await tab.waitForSelector('#flowguard-overlay', { timeout: 10_000 });
+    await tab.waitForSelector('#smartblocker-overlay', { timeout: 10_000 });
     overriddenReblocked = true;
   } catch {}
   console.log(

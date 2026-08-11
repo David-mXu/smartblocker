@@ -143,7 +143,7 @@ export function deriveLockStatus(state: LockState, now: number): LockStatus {
  *  desktop companion and the extension each keep a copy and converge by
  *  merging, so neither side can shorten a lock by syncing). Mirrored by
  *  `merge.rs` in the companion; change both together, covered by the shared
- *  fixtures in companion/crates/flowguard-core/tests/fixtures/lock-cases.json. */
+ *  fixtures in companion/crates/smartblocker-core/tests/fixtures/lock-cases.json. */
 export function mergeLockStates(a: LockState, b: LockState): LockState {
   const maxNullable = (x: number | null, y: number | null): number | null =>
     x === null ? y : y === null ? x : Math.max(x, y);

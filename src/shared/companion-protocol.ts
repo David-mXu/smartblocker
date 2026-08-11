@@ -1,6 +1,6 @@
 // Extension <-> desktop companion protocol, spoken over Native Messaging
-// (browser <-> flowguard-nm-host) and relayed verbatim to the companion
-// daemon. Mirrored by companion/crates/flowguard-core/src/protocol.rs —
+// (browser <-> smartblocker-nm-host) and relayed verbatim to the companion
+// daemon. Mirrored by companion/crates/smartblocker-core/src/protocol.rs —
 // change both together. Keep this file erasable-syntax-only (types + plain
 // consts) so Node scripts can import it under type stripping.
 //
@@ -16,7 +16,7 @@ import type { LockState } from './lock-math';
 
 /** Native messaging host name — must match the NM host manifest `name` and
  *  the registry entries / manifest files written by the companion. */
-export const NM_HOST_NAME = 'dev.davidxu.flowguard';
+export const NM_HOST_NAME = 'dev.davidxu.smartblocker';
 
 export const PROTOCOL_VERSION = 1;
 

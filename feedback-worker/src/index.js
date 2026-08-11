@@ -1,4 +1,4 @@
-// FlowGuard feedback ingestion worker. Receives opt-in misclassification
+// SmartBlocker feedback ingestion worker. Receives opt-in misclassification
 // batches from the extension (src/background/feedback-uploader.ts) and stores
 // them in D1. Records contain page title + hostname + verdicts only — the
 // extension never sends full URLs or browsing history (see ../PRIVACY.md).

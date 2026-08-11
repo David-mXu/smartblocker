@@ -1,8 +1,8 @@
-# FlowGuard
+# SmartBlocker
 
 Smart distraction blocker: a fully-local AI model classifies page titles and
 blocks off-topic content without blocking whole sites.
-**FlowGuard watches every `http(s)` site except the user's whitelist** (domain +
+**SmartBlocker watches every `http(s)` site except the user's whitelist** (domain +
 subdomain match, seeded with a safe default list in `config.ts`
 `DEFAULT_WHITELIST`; user-editable on the options page). It also supports an
 **opt-in deterministic blocklist** (`config.ts`/`settings.ts` `blocklist`,
@@ -76,7 +76,7 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   even compile without webkit2gtk (Windows-only build, see companion/README).
 - `node scripts/e2e-companion-test.mjs` — full companion loop in a real
   Chromium: builds the bins, registers a real NM manifest in `.e2e-profile/
-  NativeMessagingHosts/`, runs a scratch daemon (`FLOWGUARD_SOCKET` env picks
+  NativeMessagingHosts/`, runs a scratch daemon (`SMARTBLOCKER_SOCKET` env picks
   the socket; inherited by the browser-spawned relay), asserts lock sync both
   directions + fake app/browser kills. Run the plain e2e first (warm model).
 
@@ -123,7 +123,7 @@ Commit and push when appropriate.
     (empty = disabled) are set; batches unsent records + random resettable
     `installId` to the worker, marks them uploaded.
   - `companion.ts` — Native-Messaging bridge to the desktop companion:
-    `connectNative('dev.davidxu.flowguard')`, hello + lockStateSync on
+    `connectNative('dev.davidxu.smartblocker')`, hello + lockStateSync on
     connect, 20s heartbeats, incoming state → `mergeRemoteLockState` (the
     storage write wakes `lock-enforcer.ts` — zero enforcement code here).
     Host-not-found = silent free-tier no-op (retry on SW start + daily
@@ -168,7 +168,7 @@ Commit and push when appropriate.
   lock/schedule time math — no browser APIs, Node-testable; also
   `mergeLockStates` + `sanitizeLockState`, MIRRORED in the companion's
   `merge.rs`/`lock_math.rs` — change both together, parity enforced by
-  `companion/crates/flowguard-core/tests/fixtures/lock-cases.json` which both
+  `companion/crates/smartblocker-core/tests/fixtures/lock-cases.json` which both
   test suites consume), `lock.ts` (the `lockState` store + the ONLY legal
   lock transitions: timer/frozen extend-only, password arm/unlock, schedule
   editing refused while locked; `mergeRemoteLockState` is the companion's
@@ -189,15 +189,15 @@ Commit and push when appropriate.
   that is why `prototypes.ts` carries `with { type: 'json' }` on its seeds
   import. Owns the block-decision ladder and all metric math.
 - `companion/` — the Phase 4 desktop companion (cargo workspace, NOT part of
-  the extension build; see `companion/README.md`). `flowguard-core` = ALL
+  the extension build; see `companion/README.md`). `smartblocker-core` = ALL
   logic (protocol/framing/lock math mirror/merge/store/enforcer/procwatch/
-  ipc/daemon/registration/policy/license), `flowguard-nm-host` = the
-  browser-spawned stdio↔IPC relay, `flowguard-daemon` = headless Linux/e2e
-  face, `flowguard-companion` = Tauri shell (Windows; excluded from
+  ipc/daemon/registration/policy/license), `smartblocker-nm-host` = the
+  browser-spawned stdio↔IPC relay, `smartblocker-daemon` = headless Linux/e2e
+  face, `smartblocker-companion` = Tauri shell (Windows; excluded from
   default-members). Extension IDs are pinned: chrome/edge
   `dhbhbhhcjkfdkfbloeaeedndfjfadajh` (from the committed manifest `"key"`;
-  private key `flowguard-dev-key.pem` at repo root, gitignored — DO NOT
-  lose it), firefox `flowguard-poc@davidxu.dev`.
+  private key `smartblocker-dev-key.pem` at repo root, gitignored — DO NOT
+  lose it), firefox `smartblocker-poc@davidxu.dev`.
 - Build passes (one Vite config each, since `inlineDynamicImports` forbids
   multi-input): `vite.config.background.ts`, `vite.config.offscreen.ts`
   (chrome only), `vite.config.popup.ts`, `vite.config.options.ts`.

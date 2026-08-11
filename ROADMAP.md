@@ -1,6 +1,6 @@
-# FlowGuard Roadmap
+# SmartBlocker Roadmap
 
-FlowGuard is a smart distraction blocker. A zero-shot text-classification model
+SmartBlocker is a smart distraction blocker. A zero-shot text-classification model
 runs **100% locally in the browser** (Transformers.js + ONNX WASM) and classifies
 each page *title* — so "React Router Tutorial" passes while "I spent 100 days in
 Hardcore Minecraft" gets blocked. It now watches **every `http(s)` site except a
@@ -186,7 +186,7 @@ isolation (Chrome exempts extensions) if threading is ever revisited.
 
 ## Phase 2.9 — Lock system (Cold-Turkey-style commitment) ✅ (2026-07-03, v0.5.0)
 
-The first half of the Phase 4 vision, extension-side: once you lock FlowGuard,
+The first half of the Phase 4 vision, extension-side: once you lock SmartBlocker,
 willpower failures can't unlock it. Four mechanisms, all composable
 (`src/shared/lock-math.ts` for the pure time math, `src/shared/lock.ts` for
 storage + the only legal transitions, `src/background/lock-enforcer.ts` for
@@ -299,8 +299,8 @@ extension = the Phase 2.9 soft lock; the companion is the paid hard enforcer.
 **Shipped** (`companion/` cargo workspace + extension bridge):
 
 - **Native Messaging bridge**: `src/background/companion.ts` ⇄
-  `flowguard-nm-host` (stdio relay, one per browser port) ⇄ local IPC ⇄ the
-  companion daemon (`flowguard_core::daemon` — headless `flowguard-daemon`
+  `smartblocker-nm-host` (stdio relay, one per browser port) ⇄ local IPC ⇄ the
+  companion daemon (`smartblocker_core::daemon` — headless `smartblocker-daemon`
   bin on Linux/e2e, embedded in the Tauri app on Windows). Protocol v1
   (`companion-protocol.ts` ↔ `protocol.rs`): hello / lockStateSync /
   heartbeat(20s) / companionStatus.
@@ -314,10 +314,10 @@ extension = the Phase 2.9 soft lock; the companion is the paid hard enforcer.
   clock, kills only from PERSISTED state): watchdog (supported browser w/o a
   responsive extension → notify → 60s grace → browser closed), incompatible
   browsers (Brave/Opera/Vivaldi/…) closed after 10s notice, app blocklist
-  closed instantly. FlowGuard's own processes unkillable; healthy browsers
+  closed instantly. SmartBlocker's own processes unkillable; healthy browsers
   never touched (30s extension keepalive alarm + 60s grace absorb MV3 SW
   reaping).
-- **Tauri 2 tray app** (`crates/flowguard-companion`): status, start locks
+- **Tauri 2 tray app** (`crates/smartblocker-companion`): status, start locks
   (via IPC as a hello-less client so the UI can't mask a dead extension),
   add-only-while-locked app blocklist, Install/Repair (HKCU registry keys on
   Windows, manifest files on Linux), autostart, quit refused while locked.

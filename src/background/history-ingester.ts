@@ -29,7 +29,7 @@ export async function scanHistory(): Promise<void> {
   };
 
   try {
-    // FlowGuard now watches all sites, so scan all history (empty query) and
+    // SmartBlocker now watches all sites, so scan all history (empty query) and
     // filter to classifiable, non-whitelisted pages — same gates as the live
     // blocker. Most-recent first; capped at HISTORY_CAP.
     const { whitelist, blocklist } = await getSettings();
@@ -68,14 +68,14 @@ export async function scanHistory(): Promise<void> {
       // Chunked writes double as the MV3 service-worker keep-alive: any
       // extension-API call resets the idle timer (Chrome 110+).
       await writeState(state);
-      console.log(`[FlowGuard] history scan ${state.done}/${state.total}`);
+      console.log(`[SmartBlocker] history scan ${state.done}/${state.total}`);
     }
 
     state.status = 'done';
   } catch (e) {
     state.status = 'error';
     state.error = String(e);
-    console.error('[FlowGuard] history scan failed:', e);
+    console.error('[SmartBlocker] history scan failed:', e);
   } finally {
     state.elapsedMs = Date.now() - t0;
     await writeState(state);

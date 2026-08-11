@@ -28,7 +28,7 @@ export const MODEL_ID = 'Xenova/nli-deberta-v3-xsmall';
 export const HYPOTHESIS_TEMPLATE = 'This web page is about {}.';
 
 // Default whitelist: sites that are never classified or blocked out of the box.
-// FlowGuard now watches ALL http(s) sites; these essentials (search, mail, docs,
+// SmartBlocker now watches ALL http(s) sites; these essentials (search, mail, docs,
 // dev/work tools, localhost) are exempted so common productive pages are never
 // false-positive blocked. Matched by domain + subdomains (see isWhitelisted in
 // titles.ts) — "google.com" also exempts mail.google.com, docs.google.com, etc.
@@ -98,7 +98,7 @@ export const BLOCK_THRESHOLD = 0.5;
 
 // Opt-in feedback sharing (settings.shareFeedback, default OFF). Empty string
 // disables uploads entirely; set to the deployed feedback-worker/ URL, e.g.
-// 'https://flowguard-feedback.<account>.workers.dev'. See PRIVACY.md.
+// 'https://smartblocker-feedback.<account>.workers.dev'. See PRIVACY.md.
 export const FEEDBACK_ENDPOINT: string = '';
 
 export const HISTORY_CAP = 200; // raiseable to 1000; ~1-4 min scan at 200

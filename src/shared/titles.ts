@@ -1,10 +1,10 @@
 // URL/title filtering shared by the live blocker and the history scanner.
 
 /**
- * Pages FlowGuard will classify: real web pages over http(s) only. Excludes
+ * Pages SmartBlocker will classify: real web pages over http(s) only. Excludes
  * browser-internal pages (chrome://, edge://, about:), local files (file://),
  * the extension's own pages (chrome-extension://), and anything unparseable.
- * Replaces the old YouTube/Reddit-only CONTENT_URL gate — FlowGuard now watches
+ * Replaces the old YouTube/Reddit-only CONTENT_URL gate — SmartBlocker now watches
  * every site except the user's whitelist (see isWhitelisted).
  */
 export function isClassifiableUrl(url: string | undefined): boolean {

@@ -14,7 +14,7 @@ import { showBlockScreen } from './blockscreen';
  *  deterministic blocklist short-circuit (which skips classify() entirely). */
 type BlockDecisionInput = Pick<ClassifyOutcome, 'label' | 'score' | 'cached' | 'loadMs' | 'inferMs'>;
 
-// FlowGuard watches EVERY http(s) site (whitelist exemption applied later, in
+// SmartBlocker watches EVERY http(s) site (whitelist exemption applied later, in
 // onTitle). Many sites are SPAs: most "navigations" never reload the page, and
 // the document title only lands well after the navigation event. Strategy:
 //  - onCommitted (full loads) and onHistoryStateUpdated (SPA / in-tab route
@@ -46,7 +46,7 @@ async function logSample(sample: LatencySample) {
   while (latencySamples.length > LATENCY_LOG_MAX) latencySamples.shift();
   await api.storage.local.set({ latencySamples });
   console.log(
-    `[FlowGuard] ${sample.blocked ? 'BLOCKED' : 'allowed'} "${sample.title}" -> ` +
+    `[SmartBlocker] ${sample.blocked ? 'BLOCKED' : 'allowed'} "${sample.title}" -> ` +
       `${sample.label} (${(sample.score * 100).toFixed(0)}%) | ` +
       `pageDelay ${sample.pageDelayMs}ms, load ${Math.round(sample.loadMs)}ms, ` +
       `infer ${Math.round(sample.inferMs)}ms, inject ${Math.round(sample.injectMs)}ms, ` +
@@ -127,7 +127,7 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
         args: [result.label, result.score, title, Date.now() - tTitle, lock.settingsLocked],
       });
     } catch (e) {
-      console.warn('[FlowGuard] block screen injection failed:', e);
+      console.warn('[SmartBlocker] block screen injection failed:', e);
     }
     injectMs = Date.now() - tInject;
   }
@@ -170,7 +170,7 @@ export function initBlocker() {
   api.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (changeInfo.title && tab.url && isClassifiableUrl(tab.url)) {
       void onTitle(tabId, changeInfo.title, tab.url).catch((e) =>
-        console.error('[FlowGuard] classification failed:', e),
+        console.error('[SmartBlocker] classification failed:', e),
       );
     }
   });

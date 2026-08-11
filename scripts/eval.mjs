@@ -1,4 +1,4 @@
-// FlowGuard evaluation regression gate.
+// SmartBlocker evaluation regression gate.
 //
 // Answers the question benchmark.mjs could not: "did that change make the model
 // better?" Runs the SHIPPED config end-to-end over scripts/eval-dataset.json,

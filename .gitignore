@@ -5,9 +5,13 @@ dist/
 .DS_Store
 # Private key that fixes the Chrome extension ID (manifest "key" is derived
 # from it). Never commit; back it up — losing it changes the dev install ID.
-flowguard-dev-key.pem
+smartblocker-dev-key.pem
 companion/target/
 # Review queue emitted by scripts/import-feedback.mjs. Transient by design:
 # candidates get moved by hand into eval-dataset.json or prototype-seeds.json,
 # and the file is deleted. Committing it would blur the train/test split.
 scripts/feedback-candidates.json
+
+# Claude Code: keep project-shared settings.json, drop personal + scratch
+.claude/settings.local.json
+.claude/worktrees/

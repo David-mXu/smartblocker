@@ -8,7 +8,7 @@
 // better evaluation datasets and models", and this is what keeps that promise.
 //
 // Usage:
-//   node scripts/import-feedback.mjs ~/Downloads/flowguard-feedback-2026-07-29.json
+//   node scripts/import-feedback.mjs ~/Downloads/smartblocker-feedback-2026-07-29.json
 //   node scripts/import-feedback.mjs --from-worker --endpoint=https://... --token=$EXPORT_TOKEN
 //   [--min-agreement=2]  only keep corrections reported by N+ distinct installs
 //

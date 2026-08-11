@@ -1,6 +1,6 @@
-# FlowGuard feedback ingestion + export worker (opt-in; see ../PRIVACY.md).
-# Deploy:  npx wrangler d1 create flowguard-feedback   (paste ids below)
-#          npx wrangler d1 execute flowguard-feedback --file=./schema.sql
+# SmartBlocker feedback ingestion + export worker (opt-in; see ../PRIVACY.md).
+# Deploy:  npx wrangler d1 create smartblocker-feedback   (paste ids below)
+#          npx wrangler d1 execute smartblocker-feedback --file=./schema.sql
 #          npx wrangler secret put EXPORT_TOKEN        (any long random string)
 #          npx wrangler deploy
 # Then set FEEDBACK_ENDPOINT in ../src/shared/config.ts to the workers.dev URL.
@@ -13,11 +13,11 @@
 # Harvest the data with:
 #   node ../scripts/import-feedback.mjs --from-worker \
 #        --endpoint=https://<...>.workers.dev --token=$EXPORT_TOKEN
-name = "flowguard-feedback"
+name = "smartblocker-feedback"
 main = "src/index.js"
 compatibility_date = "2026-06-01"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "flowguard-feedback"
+database_name = "smartblocker-feedback"
 database_id = "REPLACE_WITH_D1_DATABASE_ID"

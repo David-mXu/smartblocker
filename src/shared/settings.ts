@@ -31,7 +31,7 @@ export interface Settings {
   blocklist: string[];
   /**
    * Opt-in: share anonymized misclassification feedback (see PRIVACY.md) to
-   * improve the model. OFF by default — FlowGuard is telemetry-free unless
+   * improve the model. OFF by default — SmartBlocker is telemetry-free unless
    * the user explicitly enables this on the options page.
    */
   shareFeedback: boolean;
@@ -110,7 +110,7 @@ export async function setSettings(patch: Partial<Settings>): Promise<Settings> {
   const lock = await getLockStatus();
   if (lock.settingsLocked) {
     throw new Error(
-      'FlowGuard settings are locked' +
+      'SmartBlocker settings are locked' +
         (lock.until
           ? ` until ${new Date(lock.until).toLocaleString()}`
           : ' (password required)'),

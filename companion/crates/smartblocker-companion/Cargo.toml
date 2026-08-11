@@ -1,0 +1,21 @@
+# The Windows-facing Tauri shell. NOT in workspace default-members: its
+# build script needs webkit2gtk/libsoup pkg-config deps on Linux, so plain
+# `cargo build`/`cargo test` (the WSL/e2e gate) never touch it. Build on
+# Windows: `cargo tauri build` (or `cargo build -p smartblocker-companion`).
+[package]
+name = "smartblocker-companion"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "SmartBlocker desktop companion — tray app + hard lock enforcer"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+smartblocker-core = { path = "../smartblocker-core" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tauri = { version = "2.11.5", features = ["tray-icon"] }
+tauri-plugin-autostart = "2.5.1"
+tauri-plugin-notification = "2.3.3"

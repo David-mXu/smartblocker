@@ -12,7 +12,7 @@ import { initFeedbackUploader } from './feedback-uploader';
 import { initLockEnforcer } from './lock-enforcer';
 import { scanHistory } from './history-ingester';
 
-console.log('[FlowGuard] background started');
+console.log('[SmartBlocker] background started');
 
 const ACTIVE_MODEL_ID = CLASSIFIER_BACKEND === 'embed' ? EMBED_MODEL_ID : MODEL_ID;
 
@@ -71,7 +71,7 @@ api.runtime.onMessage.addListener(
           extVersion: api.runtime.getManifest().version,
           ts: Date.now(),
         });
-      })().catch((e) => console.error('[FlowGuard] override handling failed:', e));
+      })().catch((e) => console.error('[SmartBlocker] override handling failed:', e));
     }
     if (msg?.type === 'REPORT_FN') {
       // Popup's "this page should have been blocked" — classify (usually a

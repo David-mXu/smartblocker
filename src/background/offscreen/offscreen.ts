@@ -44,11 +44,11 @@ let instance: Promise<ZeroShotPipeline> | null = null;
 // a hard throw during model load (mirrored from classifier.ts).
 async function probeBrowserCache(): Promise<void> {
   try {
-    await caches.open('flowguard-probe');
+    await caches.open('smartblocker-probe');
     env.useBrowserCache = true;
   } catch {
     env.useBrowserCache = false;
-    console.warn('[FlowGuard/offscreen] Cache API unavailable — model re-downloads each session');
+    console.warn('[SmartBlocker/offscreen] Cache API unavailable — model re-downloads each session');
   }
 }
 
@@ -60,7 +60,7 @@ const logProgress = (p: { status: string; file?: string; progress?: number }) =>
     // ignore — no options page open
   }
   if (p.status === 'progress' && p.progress != null) {
-    console.log(`[FlowGuard/offscreen] downloading ${p.file}: ${p.progress.toFixed(0)}%`);
+    console.log(`[SmartBlocker/offscreen] downloading ${p.file}: ${p.progress.toFixed(0)}%`);
   }
 };
 
@@ -166,7 +166,7 @@ api.runtime.onMessage.addListener(
         sendResponse(result);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        console.error(`[FlowGuard/offscreen] ${message.type} error:`, msg);
+        console.error(`[SmartBlocker/offscreen] ${message.type} error:`, msg);
         sendResponse({ error: msg });
       }
     })();
@@ -176,4 +176,4 @@ api.runtime.onMessage.addListener(
   },
 );
 
-console.log('[FlowGuard/offscreen] document ready, classifier will load on first message');
+console.log('[SmartBlocker/offscreen] document ready, classifier will load on first message');

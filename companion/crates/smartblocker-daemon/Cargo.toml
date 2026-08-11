@@ -1,0 +1,9 @@
+[package]
+name = "smartblocker-daemon"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Headless SmartBlocker companion daemon (Linux + e2e; Windows runs the Tauri shell)"
+
+[dependencies]
+smartblocker-core = { path = "../smartblocker-core" }

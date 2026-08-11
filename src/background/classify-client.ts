@@ -80,7 +80,7 @@ export async function classifyViaOffscreen(
 
   // The offscreen document sends back either an InferResult or { error: string }.
   if (response && typeof response === 'object' && 'error' in response) {
-    throw new Error(`[FlowGuard/offscreen] ${(response as { error: string }).error}`);
+    throw new Error(`[SmartBlocker/offscreen] ${(response as { error: string }).error}`);
   }
 
   return response as InferResult;
@@ -97,7 +97,7 @@ export async function embedViaOffscreen(texts: string[]): Promise<EmbedResult> {
   const response = await api.runtime.sendMessage({ type: 'EMBED' as const, texts });
 
   if (response && typeof response === 'object' && 'error' in response) {
-    throw new Error(`[FlowGuard/offscreen] ${(response as { error: string }).error}`);
+    throw new Error(`[SmartBlocker/offscreen] ${(response as { error: string }).error}`);
   }
 
   return response as EmbedResult;

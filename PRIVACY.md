@@ -1,14 +1,14 @@
-# FlowGuard Privacy
+# SmartBlocker Privacy
 
-**FlowGuard is local-first.** Page classification runs entirely on your device
+**SmartBlocker is local-first.** Page classification runs entirely on your device
 (a small model via Transformers.js/ONNX WASM). Your browsing — URLs, titles,
 history, whitelist, blocklist, settings — never leaves your machine.
-FlowGuard has no analytics, no tracking, and phones home for exactly nothing,
+SmartBlocker has no analytics, no tracking, and phones home for exactly nothing,
 with one explicit, off-by-default exception below.
 
 ## Corrections (feedback records)
 
-When you correct FlowGuard — the block screen's *"This is actually productive —
+When you correct SmartBlocker — the block screen's *"This is actually productive —
 let me through"* or the popup's *"Should've been blocked"* — it stores a
 correction record **on your device** (`storage.local`, capped at 500):
 
@@ -25,11 +25,11 @@ at any time from the options page.
 
 ## Opt-in sharing (default: OFF)
 
-The options page has a *"Share my corrections to improve FlowGuard"* toggle.
+The options page has a *"Share my corrections to improve SmartBlocker"* toggle.
 It is **off by default** and nothing is ever uploaded while it is off.
 
 If you turn it on, the extension uploads your correction records (exactly the
-fields listed above) once a day to a FlowGuard-operated endpoint
+fields listed above) once a day to a SmartBlocker-operated endpoint
 (`feedback-worker/` in this repo — you can read every line it runs). The batch
 also includes:
 
@@ -41,12 +41,12 @@ also includes:
 What is **never** collected, on or off: full URLs, browsing history, pages you
 visited without correcting, your whitelist/blocklist, IP-based profiles, or
 anything identifying. Shared records are used solely to build better
-evaluation datasets and models for FlowGuard.
+evaluation datasets and models for SmartBlocker.
 
 Prefer not to flip the toggle but still want to help? Use **Export as JSON**
 and attach the file to a GitHub issue.
 
-## Desktop companion (FlowGuard Companion)
+## Desktop companion (SmartBlocker Companion)
 
 The optional desktop companion (`companion/`) has **zero network code**. It
 talks only to your browsers over OS-local Native Messaging pipes and stores

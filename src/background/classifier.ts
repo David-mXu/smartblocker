@@ -37,11 +37,11 @@ ortWasm.proxy = false;
 // tries to use it (failure mode is a hard throw during model load).
 async function probeBrowserCache(): Promise<void> {
   try {
-    await caches.open('flowguard-probe');
+    await caches.open('smartblocker-probe');
     env.useBrowserCache = true;
   } catch {
     env.useBrowserCache = false;
-    console.warn('[FlowGuard] Cache API unavailable — model re-downloads each session');
+    console.warn('[SmartBlocker] Cache API unavailable — model re-downloads each session');
   }
 }
 
@@ -53,7 +53,7 @@ const logProgress = (p: { status: string; file?: string; progress?: number }) =>
     // ignore — no options page open
   }
   if (p.status === 'progress' && p.progress != null) {
-    console.log(`[FlowGuard] downloading ${p.file}: ${p.progress.toFixed(0)}%`);
+    console.log(`[SmartBlocker] downloading ${p.file}: ${p.progress.toFixed(0)}%`);
   }
 };
 
@@ -167,7 +167,7 @@ async function getCentroids(labels: string[]): Promise<CentroidCache & { buildMs
   try {
     const built = await centroidsInFlight;
     console.log(
-      `[FlowGuard] built ${built.names.length} centroids (${version}) in ` +
+      `[SmartBlocker] built ${built.names.length} centroids (${version}) in ` +
         `${Math.round(performance.now() - t0)}ms`,
     );
     return { ...built, buildMs: performance.now() - t0 };

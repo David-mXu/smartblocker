@@ -1017,49 +1017,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flowguard-companion"
-version = "0.1.0"
-dependencies = [
- "flowguard-core",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-notification",
-]
-
-[[package]]
-name = "flowguard-core"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "directories",
- "interprocess",
- "serde",
- "serde_json",
- "sysinfo",
- "tempfile",
- "winreg 0.56.0",
-]
-
-[[package]]
-name = "flowguard-daemon"
-version = "0.1.0"
-dependencies = [
- "flowguard-core",
-]
-
-[[package]]
-name = "flowguard-nm-host"
-version = "0.1.0"
-dependencies = [
- "flowguard-core",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3226,6 +3183,49 @@ name = "smallvec"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
+
+[[package]]
+name = "smartblocker-companion"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "smartblocker-core",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-notification",
+]
+
+[[package]]
+name = "smartblocker-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "directories",
+ "interprocess",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tempfile",
+ "winreg 0.56.0",
+]
+
+[[package]]
+name = "smartblocker-daemon"
+version = "0.1.0"
+dependencies = [
+ "smartblocker-core",
+]
+
+[[package]]
+name = "smartblocker-nm-host"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "smartblocker-core",
+ "tempfile",
+]
 
 [[package]]
 name = "socket2"

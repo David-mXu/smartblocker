@@ -6,7 +6,7 @@
 //
 // Chromium reads NM host manifests from <user-data-dir>/NativeMessagingHosts
 // on Linux, and the browser's env is inherited by the spawned nm-host, which
-// is how FLOWGUARD_SOCKET points the relay at the scratch daemon. Reuses
+// is how SMARTBLOCKER_SOCKET points the relay at the scratch daemon. Reuses
 // .e2e-profile/ (run scripts/e2e-test.mjs first for a warm model cache).
 import { chromium } from 'playwright';
 import { spawn, execFileSync } from 'node:child_process';
@@ -18,7 +18,7 @@ const EXT_PATH = resolve('dist/chrome');
 const PROFILE = resolve('.e2e-profile');
 const COMPANION = resolve('companion');
 const EXTENSION_ID = 'dhbhbhhcjkfdkfbloeaeedndfjfadajh'; // fixed by manifest "key"
-const SOCKET = `flowguard-e2e-${process.pid}`;
+const SOCKET = `smartblocker-e2e-${process.pid}`;
 const MODEL_TIMEOUT_MS = 5 * 60_000;
 
 let failures = 0;
@@ -39,16 +39,16 @@ async function poll(fn, timeoutMs, label) {
 
 // 1. Build the companion binaries (cargo respects default-members: no Tauri).
 console.log('… cargo build (nm-host + daemon)');
-execFileSync('cargo', ['build', '-p', 'flowguard-nm-host', '-p', 'flowguard-daemon'], {
+execFileSync('cargo', ['build', '-p', 'smartblocker-nm-host', '-p', 'smartblocker-daemon'], {
   cwd: COMPANION,
   stdio: 'inherit',
   env: { ...process.env, PATH: `${process.env.HOME}/.cargo/bin:${process.env.PATH}` },
 });
-const NM_HOST_BIN = join(COMPANION, 'target/debug/flowguard-nm-host');
-const DAEMON_BIN = join(COMPANION, 'target/debug/flowguard-daemon');
+const NM_HOST_BIN = join(COMPANION, 'target/debug/smartblocker-nm-host');
+const DAEMON_BIN = join(COMPANION, 'target/debug/smartblocker-daemon');
 
 // 2. Scratch daemon data dir: fakegame in the app blocklist from the start.
-const DATA_DIR = mkdtempSync(join(tmpdir(), 'flowguard-e2e-'));
+const DATA_DIR = mkdtempSync(join(tmpdir(), 'smartblocker-e2e-'));
 writeFileSync(
   join(DATA_DIR, 'config.json'),
   JSON.stringify({ appBlocklist: ['fakegame'], extraIncompatibleBrowsers: [] }, null, 2),
@@ -57,11 +57,11 @@ writeFileSync(
 // 3. NM manifest into the Chromium profile.
 mkdirSync(join(PROFILE, 'NativeMessagingHosts'), { recursive: true });
 writeFileSync(
-  join(PROFILE, 'NativeMessagingHosts/dev.davidxu.flowguard.json'),
+  join(PROFILE, 'NativeMessagingHosts/dev.davidxu.smartblocker.json'),
   JSON.stringify(
     {
-      name: 'dev.davidxu.flowguard',
-      description: 'FlowGuard companion bridge (e2e)',
+      name: 'dev.davidxu.smartblocker',
+      description: 'SmartBlocker companion bridge (e2e)',
       path: NM_HOST_BIN,
       type: 'stdio',
       allowed_origins: [`chrome-extension://${EXTENSION_ID}/`],
@@ -104,14 +104,14 @@ const readEvents = () => {
   }
 };
 
-// 4. Chromium with the extension; FLOWGUARD_SOCKET reaches nm-host via env.
+// 4. Chromium with the extension; SMARTBLOCKER_SOCKET reaches nm-host via env.
 async function launchWithServiceWorker() {
   for (let attempt = 1; attempt <= 3; attempt++) {
     const ctx = await chromium.launchPersistentContext(PROFILE, {
       channel: 'chromium',
       headless: true,
       args: [`--disable-extensions-except=${EXT_PATH}`, `--load-extension=${EXT_PATH}`],
-      env: { ...process.env, FLOWGUARD_SOCKET: SOCKET },
+      env: { ...process.env, SMARTBLOCKER_SOCKET: SOCKET },
     });
     let worker = ctx.serviceWorkers()[0];
     if (!worker) {
@@ -221,7 +221,7 @@ try {
   const tab = await context.newPage();
   await tab.goto('https://www.youtube.com/watch?v=x&t=' + encodeURIComponent('speedrunning Dark Souls'));
   const blocked = await tab
-    .waitForSelector('#flowguard-overlay', { timeout: MODEL_TIMEOUT_MS })
+    .waitForSelector('#smartblocker-overlay', { timeout: MODEL_TIMEOUT_MS })
     .then(() => true)
     .catch(() => false);
   check(blocked, 'distraction blocked while the companion-held lock is active');
@@ -235,5 +235,5 @@ try {
   }
   rmSync(DATA_DIR, { recursive: true, force: true });
   // Leave no NM manifest behind: the plain e2e asserts the NOT-installed UI.
-  rmSync(join(PROFILE, 'NativeMessagingHosts/dev.davidxu.flowguard.json'), { force: true });
+  rmSync(join(PROFILE, 'NativeMessagingHosts/dev.davidxu.smartblocker.json'), { force: true });
 }

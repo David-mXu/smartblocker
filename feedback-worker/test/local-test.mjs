@@ -56,7 +56,7 @@ async function expect(name, req, wantStatus, check) {
   console.log(`${pass ? 'PASS' : 'FAIL'} ${name} -> ${res.status} ${JSON.stringify(body)}`);
 }
 
-const URL_BASE = 'https://flowguard-feedback.example.workers.dev';
+const URL_BASE = 'https://smartblocker-feedback.example.workers.dev';
 const post = (body) =>
   new Request(`${URL_BASE}/v1/feedback`, {
     method: 'POST',

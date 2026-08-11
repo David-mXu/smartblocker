@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>FlowGuard Settings</title>
+    <title>SmartBlocker Settings</title>
     <style>
       *,
       *::before,
@@ -351,10 +351,10 @@
     </style>
   </head>
   <body>
-    <h1>FlowGuard Settings</h1>
+    <h1>SmartBlocker Settings</h1>
 
     <div id="banner">
-      <p>Welcome to FlowGuard — pick what distracts you, then click "Finish setup" to activate blocking.</p>
+      <p>Welcome to SmartBlocker — pick what distracts you, then click "Finish setup" to activate blocking.</p>
     </div>
 
     <h2>Blocking</h2>
@@ -363,7 +363,7 @@
         <input type="checkbox" id="enabled-toggle" />
         <span class="slider"></span>
       </label>
-      <span class="toggle-label">Enable FlowGuard</span>
+      <span class="toggle-label">Enable SmartBlocker</span>
     </div>
 
     <h2>Categories to block</h2>
@@ -387,7 +387,7 @@
 
     <h2>Whitelisted sites (never blocked)</h2>
     <p style="margin:0 0 8px;color:#555;font-size:13px;">
-      FlowGuard watches every site except these. One domain per line — a domain also
+      SmartBlocker watches every site except these. One domain per line — a domain also
       covers its subdomains (e.g. <code>google.com</code> covers <code>mail.google.com</code>).
     </p>
     <textarea id="whitelist" spellcheck="false" placeholder="github.com&#10;mail.google.com&#10;localhost"></textarea>
@@ -422,7 +422,7 @@
     </div>
     <h2 style="font-size:14px;border-bottom:none;margin-bottom:4px">Scheduled blocks</h2>
     <p style="margin:0 0 8px;color:#555;font-size:13px;">
-      Recurring locked windows — during them blocking is forced on (even if FlowGuard is
+      Recurring locked windows — during them blocking is forced on (even if SmartBlocker is
       toggled off) and settings are frozen. End time earlier than start = overnight window.
     </p>
     <div id="schedule-list"></div>
@@ -435,7 +435,7 @@
     <h2>Desktop companion</h2>
     <p style="margin:0 0 8px;color:#555;font-size:13px;">
       The desktop companion turns locks into hard enforcement: it closes blocklisted apps
-      and restarts the browser if FlowGuard is disabled during a locked session.
+      and restarts the browser if SmartBlocker is disabled during a locked session.
     </p>
     <div id="companion-status" class="companion-muted">Checking…</div>
     <ul id="companion-enforcement" style="display:none"></ul>
@@ -453,7 +453,7 @@
 
     <h2>Feedback</h2>
     <p style="margin:0 0 8px;color:#555;font-size:13px;">
-      When you correct FlowGuard (the block screen's "this is actually productive", or the
+      When you correct SmartBlocker (the block screen's "this is actually productive", or the
       popup's "should've been blocked"), the correction is stored on this device and the
       classifier learns from it. <span id="feedback-count">0</span> correction(s) recorded.
     </p>
@@ -467,7 +467,7 @@
         <span class="slider"></span>
       </label>
       <span class="toggle-label" style="font-weight:400">
-        Share my corrections to improve FlowGuard (off by default)
+        Share my corrections to improve SmartBlocker (off by default)
       </span>
     </div>
     <p style="margin:0 0 8px;color:#555;font-size:13px;">

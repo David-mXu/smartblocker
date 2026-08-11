@@ -1,0 +1,200 @@
+{
+  "_note": "Golden cross-language fixtures for the lock-state contract, consumed by BOTH scripts/lock-math-test.mjs (src/shared/lock-math.ts) and the smartblocker-core cargo tests (lock_math.rs / merge.rs). Every case here must pass identically in TypeScript and Rust — that is the parity guarantee between the extension and the desktop companion. Cases are deliberately timezone-free (timer/frozen/password only); schedule *window* math depends on local time and is covered by each language's own unit tests. The merge runner additionally asserts commutativity (merge(b,a) == expect) and idempotence (merge(expect,expect) == expect) for every case. `reasons` array order is fixed: timer, password, frozen, schedule.",
+  "mergeLockStates": [
+    {
+      "name": "empty states merge to empty",
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [] },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [] },
+      "expect": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "timer takes the max",
+      "a": { "timerUntil": 2000, "passwordHash": null, "frozenUntil": null, "schedules": [] },
+      "b": { "timerUntil": 3000, "passwordHash": null, "frozenUntil": null, "schedules": [] },
+      "expect": { "timerUntil": 3000, "passwordHash": null, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "null timer loses to a set timer",
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [] },
+      "b": { "timerUntil": 1500, "passwordHash": null, "frozenUntil": null, "schedules": [] },
+      "expect": { "timerUntil": 1500, "passwordHash": null, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "frozen takes the max",
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": 5000, "schedules": [] },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": 4000, "schedules": [] },
+      "expect": { "timerUntil": null, "passwordHash": null, "frozenUntil": 5000, "schedules": [], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "password armed on either side survives the merge",
+      "a": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "frozenUntil": null, "schedules": [] },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [] },
+      "expect": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "conflicting passwords pick the lexicographically smaller hash",
+      "a": { "timerUntil": null, "passwordHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "frozenUntil": null, "schedules": [] },
+      "b": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "frozenUntil": null, "schedules": [] },
+      "expect": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "newer schedule list wins (last-writer-wins)",
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "old", "days": [1], "startMinutes": 540, "endMinutes": 1020 }], "schedulesUpdatedAt": 100 },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "new", "days": [2], "startMinutes": 600, "endMinutes": 660 }], "schedulesUpdatedAt": 200 },
+      "expect": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "new", "days": [2], "startMinutes": 600, "endMinutes": 660 }], "schedulesUpdatedAt": 200 }
+    },
+    {
+      "name": "newer EMPTY schedule list still wins (deletion is not resurrected)",
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "old", "days": [1], "startMinutes": 540, "endMinutes": 1020 }], "schedulesUpdatedAt": 100 },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 200 },
+      "expect": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 200 }
+    },
+    {
+      "name": "equal timestamps union schedules sorted by id",
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "b", "days": [2], "startMinutes": 600, "endMinutes": 660 }] },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "a", "days": [1], "startMinutes": 540, "endMinutes": 1020 }] },
+      "expect": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "a", "days": [1], "startMinutes": 540, "endMinutes": 1020 }, { "id": "b", "days": [2], "startMinutes": 600, "endMinutes": 660 }], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "same id at equal timestamps keeps the canonically smaller rule",
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "x", "days": [3], "startMinutes": 700, "endMinutes": 800 }] },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "x", "days": [1], "startMinutes": 540, "endMinutes": 1020 }] },
+      "expect": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "x", "days": [1], "startMinutes": 540, "endMinutes": 1020 }], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "all fields merge independently",
+      "a": { "timerUntil": 9000, "passwordHash": null, "frozenUntil": 4000, "schedules": [], "schedulesUpdatedAt": 50 },
+      "b": { "timerUntil": 2000, "passwordHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "frozenUntil": 8000, "schedules": [{ "id": "s", "days": [5], "startMinutes": 60, "endMinutes": 120 }], "schedulesUpdatedAt": 60 },
+      "expect": { "timerUntil": 9000, "passwordHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "frozenUntil": 8000, "schedules": [{ "id": "s", "days": [5], "startMinutes": 60, "endMinutes": 120 }], "schedulesUpdatedAt": 60 }
+    }
+  ],
+  "deriveLockStatus": [
+    {
+      "name": "empty state is unlocked",
+      "state": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [] },
+      "now": 1000000,
+      "expect": { "settingsLocked": false, "forceBlocking": false, "reasons": [], "until": null }
+    },
+    {
+      "name": "active timer locks settings only",
+      "state": { "timerUntil": 1060000, "passwordHash": null, "frozenUntil": null, "schedules": [] },
+      "now": 1000000,
+      "expect": { "settingsLocked": true, "forceBlocking": false, "reasons": ["timer"], "until": 1060000 }
+    },
+    {
+      "name": "expired timer derives to inactive",
+      "state": { "timerUntil": 999999, "passwordHash": null, "frozenUntil": null, "schedules": [] },
+      "now": 1000000,
+      "expect": { "settingsLocked": false, "forceBlocking": false, "reasons": [], "until": null }
+    },
+    {
+      "name": "timer expiring exactly now is inactive (strict >)",
+      "state": { "timerUntil": 1000000, "passwordHash": null, "frozenUntil": null, "schedules": [] },
+      "now": 1000000,
+      "expect": { "settingsLocked": false, "forceBlocking": false, "reasons": [], "until": null }
+    },
+    {
+      "name": "password lock is indefinite",
+      "state": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "frozenUntil": null, "schedules": [] },
+      "now": 1000000,
+      "expect": { "settingsLocked": true, "forceBlocking": false, "reasons": ["password"], "until": null }
+    },
+    {
+      "name": "frozen turkey forces blocking",
+      "state": { "timerUntil": null, "passwordHash": null, "frozenUntil": 1060000, "schedules": [] },
+      "now": 1000000,
+      "expect": { "settingsLocked": true, "forceBlocking": true, "reasons": ["frozen"], "until": 1060000 }
+    },
+    {
+      "name": "until is the max of active timed ends",
+      "state": { "timerUntil": 1060000, "passwordHash": null, "frozenUntil": 1120000, "schedules": [] },
+      "now": 1000000,
+      "expect": { "settingsLocked": true, "forceBlocking": true, "reasons": ["timer", "frozen"], "until": 1120000 }
+    },
+    {
+      "name": "armed password makes until indefinite even with a timer",
+      "state": { "timerUntil": 1060000, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "frozenUntil": null, "schedules": [] },
+      "now": 1000000,
+      "expect": { "settingsLocked": true, "forceBlocking": false, "reasons": ["timer", "password"], "until": null }
+    }
+  ],
+  "nextBoundary": [
+    {
+      "name": "future timer is the boundary",
+      "state": { "timerUntil": 1060000, "passwordHash": null, "frozenUntil": null, "schedules": [] },
+      "now": 1000000,
+      "expect": 1060000
+    },
+    {
+      "name": "expired timer yields nothing",
+      "state": { "timerUntil": 999999, "passwordHash": null, "frozenUntil": null, "schedules": [] },
+      "now": 1000000,
+      "expect": null
+    },
+    {
+      "name": "earliest of timer and frozen wins",
+      "state": { "timerUntil": 1060000, "passwordHash": null, "frozenUntil": 1030000, "schedules": [] },
+      "now": 1000000,
+      "expect": 1030000
+    },
+    {
+      "name": "password alone has no boundary",
+      "state": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "frozenUntil": null, "schedules": [] },
+      "now": 1000000,
+      "expect": null
+    }
+  ],
+  "sanitizeLockState": [
+    {
+      "name": "empty object becomes the empty state",
+      "raw": {},
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "absurd timer is clamped to now + maxLockMs",
+      "raw": { "timerUntil": 9000000000000000 },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "timerUntil": 2593000000, "passwordHash": null, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "non-numeric and non-positive untils are dropped",
+      "raw": { "timerUntil": "soon", "frozenUntil": -5 },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "password must be 64 lowercase hex chars",
+      "raw": { "passwordHash": "hunter2" },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "well-formed fields pass through, invalid rules are dropped",
+      "raw": {
+        "timerUntil": 1500000,
+        "passwordHash": "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+        "frozenUntil": 2000000,
+        "schedules": [
+          { "id": "ok", "days": [1, 5], "startMinutes": 540, "endMinutes": 1020 },
+          { "id": "bad-day", "days": [9], "startMinutes": 540, "endMinutes": 1020 },
+          { "id": "bad-empty", "days": [1], "startMinutes": 600, "endMinutes": 600 }
+        ],
+        "schedulesUpdatedAt": 900000
+      },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": {
+        "timerUntil": 1500000,
+        "passwordHash": "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+        "frozenUntil": 2000000,
+        "schedules": [{ "id": "ok", "days": [1, 5], "startMinutes": 540, "endMinutes": 1020 }],
+        "schedulesUpdatedAt": 900000
+      }
+    }
+  ]
+}

@@ -10,11 +10,11 @@ export function showBlockScreen(
   locked: boolean,
 ): void {
   // Idempotent: remove any prior overlay first.
-  document.getElementById('flowguard-overlay')?.remove();
+  document.getElementById('smartblocker-overlay')?.remove();
 
   // --- Root overlay ---
   const overlay = document.createElement('div');
-  overlay.id = 'flowguard-overlay';
+  overlay.id = 'smartblocker-overlay';
   overlay.style.cssText =
     'position:fixed;inset:0;z-index:2147483647;' +
     'background:rgba(15,15,20,.96);' +
@@ -40,7 +40,7 @@ export function showBlockScreen(
   const headline = document.createElement('div');
   headline.style.cssText =
     'font-size:22px;font-weight:700;line-height:1.3;color:#fff';
-  headline.textContent = 'FlowGuard blocked this page';
+  headline.textContent = 'Smart Blocker blocked this page';
 
   // --- Category pill ---
   const pill = document.createElement('div');
@@ -79,7 +79,7 @@ export function showBlockScreen(
   const lockNote = document.createElement('div');
   lockNote.style.cssText =
     'font-size:13px;color:rgba(255,255,255,.45);letter-spacing:.02em';
-  lockNote.textContent = '\u{1F512} FlowGuard is locked — bypass is disabled';
+  lockNote.textContent = '\u{1F512} Smart Blocker is locked — bypass is disabled';
 
   // PRIMARY: send override correction, then dismiss.
   const btnOverride = document.createElement('button');

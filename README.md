@@ -1,4 +1,4 @@
-# FlowGuard
+# SmartBlocker
 
 A smart distraction blocker that runs a text-classification model
 **100% locally in your browser** (Transformers.js + ONNX WASM). Instead of

@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "FlowGuard",
+  "name": "Smart Blocker",
   "version": "0.5.0",
   "description": "Local-AI distraction blocker — classifies what you watch, blocks only your bad habits",
   "background": {
@@ -8,13 +8,13 @@
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "flowguard-poc@davidxu.dev",
+      "id": "smartblocker-poc@davidxu.dev",
       "strict_min_version": "121.0"
     }
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "FlowGuard"
+    "default_title": "SmartBlocker"
   },
   "options_ui": {
     "page": "options.html",

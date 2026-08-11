@@ -74,7 +74,7 @@ export async function startFrozenTurkey(durationMs: number): Promise<LockStatus>
 }
 
 export async function hashPassword(pw: string): Promise<string> {
-  const data = new TextEncoder().encode('flowguard-lock:' + pw);
+  const data = new TextEncoder().encode('smartblocker-lock:' + pw);
   const digest = await crypto.subtle.digest('SHA-256', data);
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
@@ -103,7 +103,7 @@ export async function attemptPasswordUnlock(password: string): Promise<boolean> 
  *  deleting a rule mid-window would cancel it. (Tighten-only diffing is v2.) */
 export async function setSchedules(rules: ScheduleRule[]): Promise<void> {
   if ((await getLockStatus()).settingsLocked) {
-    throw new Error('Schedules cannot be changed while FlowGuard is locked.');
+    throw new Error('Schedules cannot be changed while SmartBlocker is locked.');
   }
   for (const r of rules) {
     const problem = validateScheduleRule(r);

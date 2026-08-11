@@ -1,7 +1,7 @@
 // Opt-in feedback uploader. Once a day, IF (and only if) the user enabled
 // settings.shareFeedback AND a FEEDBACK_ENDPOINT is configured, POST the
 // not-yet-uploaded feedback records to the ingestion worker (feedback-worker/)
-// and mark them uploaded. Everything else about FlowGuard stays telemetry-free;
+// and mark them uploaded. Everything else about SmartBlocker stays telemetry-free;
 // see PRIVACY.md for exactly what a record contains (notably: hostname only,
 // never full URLs, never browsing history).
 import { api } from '../shared/api';
@@ -44,11 +44,11 @@ async function uploadPending(): Promise<void> {
   });
   if (!res.ok) {
     // Leave records unmarked; the next daily alarm retries automatically.
-    console.warn(`[FlowGuard] feedback upload failed: HTTP ${res.status}`);
+    console.warn(`[SmartBlocker] feedback upload failed: HTTP ${res.status}`);
     return;
   }
   await markUploaded(pending.map((r) => r.ts));
-  console.log(`[FlowGuard] shared ${pending.length} feedback record(s)`);
+  console.log(`[SmartBlocker] shared ${pending.length} feedback record(s)`);
 }
 
 /** MV3: called synchronously from index.ts startup. */
@@ -57,6 +57,6 @@ export function initFeedbackUploader(): void {
   void api.alarms.create(ALARM_NAME, { periodInMinutes: PERIOD_MINUTES, delayInMinutes: 5 });
   api.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name !== ALARM_NAME) return;
-    void uploadPending().catch((e) => console.warn('[FlowGuard] feedback upload error:', e));
+    void uploadPending().catch((e) => console.warn('[SmartBlocker] feedback upload error:', e));
   });
 }

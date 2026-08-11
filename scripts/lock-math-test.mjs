@@ -177,11 +177,11 @@ test('out-of-range minutes are rejected', () => {
 });
 
 // --- cross-language golden fixtures (shared with the Rust companion) ---
-// The same file drives flowguard-core's cargo tests; a case failing here or
+// The same file drives smartblocker-core's cargo tests; a case failing here or
 // there means the TS and Rust lock implementations have drifted apart.
 const fixtures = JSON.parse(
   readFileSync(
-    new URL('../companion/crates/flowguard-core/tests/fixtures/lock-cases.json', import.meta.url),
+    new URL('../companion/crates/smartblocker-core/tests/fixtures/lock-cases.json', import.meta.url),
     'utf8',
   ),
 );

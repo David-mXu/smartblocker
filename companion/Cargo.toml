@@ -6,13 +6,13 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/flowguard-core",
-    "crates/flowguard-nm-host",
-    "crates/flowguard-daemon",
-    "crates/flowguard-companion",
+    "crates/smartblocker-core",
+    "crates/smartblocker-nm-host",
+    "crates/smartblocker-daemon",
+    "crates/smartblocker-companion",
 ]
 default-members = [
-    "crates/flowguard-core",
-    "crates/flowguard-nm-host",
-    "crates/flowguard-daemon",
+    "crates/smartblocker-core",
+    "crates/smartblocker-nm-host",
+    "crates/smartblocker-daemon",
 ]
