@@ -19,3 +19,7 @@ scripts/feedback-candidates.json
 # Claude Code: keep project-shared settings.json, drop personal + scratch
 .claude/settings.local.json
 .claude/worktrees/
+
+# wrangler local state (local d1 sqlite, dev servers)
+.wrangler/
+**/.wrangler/

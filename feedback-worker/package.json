@@ -5,5 +5,8 @@
   "description": "SmartBlocker feedback ingestion worker (Cloudflare Worker + D1). See wrangler.toml for deploy.",
   "scripts": {
     "test": "node test/local-test.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.158.0"
   }
 }

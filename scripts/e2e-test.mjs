@@ -3,7 +3,7 @@
 // Usage: node scripts/e2e-test.mjs
 // Profile (and the cached model) persists in .e2e-profile/ across runs.
 import { chromium } from 'playwright';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const EXT_PATH = resolve('dist/chrome');
@@ -99,11 +99,15 @@ try {
   console.log(`${cached ? 'PASS' : 'FAIL'} model cache present:`, cacheNames);
   if (!cached) process.exitCode = 1;
 
-  // 3b. #32 P3: options page exposes the self-service erasure card. In this
-  // dev build FEEDBACK_ENDPOINT is '', so the installId never exists and the
-  // delete button is disabled with the "not configured" note — exactly the
-  // honest state. Renders via GET_SHARED_FEEDBACK_INFO through the SW.
+  // 3b. #32 P3: options page exposes the self-service erasure card, in the
+  // honest state for whatever this build's FEEDBACK_ENDPOINT is. Nothing was
+  // ever shared from the e2e profile either way, so "no installId" always
+  // holds; the button is enabled (and the "not configured" note absent)
+  // exactly when an endpoint is configured.
   {
+    const configured = /FEEDBACK_ENDPOINT:\s*string\s*=\s*'(https[^']*)'/.test(
+      readFileSync(new URL('../src/shared/config.ts', import.meta.url), 'utf8'),
+    );
     const opts = await context.newPage();
     await opts.goto(`chrome-extension://${extensionId}/options.html`);
     await opts.waitForSelector('text=Your shared feedback data', { timeout: 15_000 });
@@ -113,9 +117,11 @@ try {
       .count();
     const deleteBtn = opts.locator('button:has-text("Delete shared data")');
     const btnDisabled = await deleteBtn.isDisabled().catch(() => false);
-    const infoOk = noId > 0 && notConfigured > 0 && btnDisabled;
+    const infoOk =
+      noId > 0 &&
+      (configured ? notConfigured === 0 && !btnDisabled : notConfigured > 0 && btnDisabled);
     console.log(
-      `${infoOk ? 'PASS' : 'FAIL'} options self-service erasure card renders honest no-endpoint state (installId-none: ${noId}, note: ${notConfigured}, btn-disabled: ${btnDisabled})`,
+      `${infoOk ? 'PASS' : 'FAIL'} options self-service erasure card renders honest ${configured ? 'configured' : 'no-endpoint'} state (installId-none: ${noId}, note: ${notConfigured}, btn-disabled: ${btnDisabled})`,
     );
     if (!infoOk) process.exitCode = 1;
     await opts.close();

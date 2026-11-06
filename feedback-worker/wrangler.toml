@@ -1,6 +1,13 @@
 # SmartBlocker feedback ingestion + export worker (opt-in; see ../PRIVACY.md).
-# Deploy:  npx wrangler d1 create smartblocker-feedback   (paste ids below)
-#          npx wrangler d1 execute smartblocker-feedback --file=./schema.sql
+# Deployed 2026-11-06: https://smartblocker-feedback.xudavid12613.workers.dev
+# (D1 c96a7664-6835-4591-98d9-675ebb232d8c, region ENAM; daily 04:00 UTC cron).
+# Re-deploy after editing src/index.js with:  npx wrangler deploy
+# Fresh deploy from scratch:
+#          npx wrangler d1 create smartblocker-feedback   (paste id below)
+#          npx wrangler d1 execute smartblocker-feedback --remote --file=./schema.sql
+#          #            ^^^ --remote is REQUIRED: wrangler 4 defaults d1
+#          #            execute to a LOCAL sqlite file and the worker then
+#          #            throws D1_ERROR "no such table" in production.
 #          npx wrangler secret put EXPORT_TOKEN        (any long random string)
 #          npx wrangler deploy
 # Then set FEEDBACK_ENDPOINT in ../src/shared/config.ts to the workers.dev URL.
@@ -38,4 +45,4 @@ crons = ["0 4 * * *"] # daily 04:00 UTC: purge expired feedback + stale rate-lim
 [[d1_databases]]
 binding = "DB"
 database_name = "smartblocker-feedback"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "c96a7664-6835-4591-98d9-675ebb232d8c"

@@ -108,9 +108,9 @@ export const BLOCKED_LABELS = new Set([
 export const BLOCK_THRESHOLD = 0.5;
 
 // Opt-in feedback sharing (settings.shareFeedback, default OFF). Empty string
-// disables uploads entirely; set to the deployed feedback-worker/ URL, e.g.
-// 'https://smartblocker-feedback.<account>.workers.dev'. See PRIVACY.md.
-export const FEEDBACK_ENDPOINT: string = '';
+// disables uploads entirely; this build points at the deployed
+// feedback-worker/ (see PRIVACY.md). Deployed 2026-11-06.
+export const FEEDBACK_ENDPOINT: string = 'https://smartblocker-feedback.xudavid12613.workers.dev';
 
 export const HISTORY_CAP = 200; // raiseable to 1000; ~1-4 min scan at 200
 export const TITLE_CACHE_MAX = 500;

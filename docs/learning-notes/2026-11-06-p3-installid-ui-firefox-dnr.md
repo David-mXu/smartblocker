@@ -153,6 +153,53 @@ code path, not the overlay fallback).
   for it (it would PASS the "fallback" check while failing the DNR ones —
   a loud, readable signal).
 
+## Part 3 — Feedback worker deploy (the last P3 item)
+
+Deployed 2026-11-06 to `https://smartblocker-feedback.xudavid12613.workers.dev`
+(D1 `c96a7664-6835-4591-98d9-675ebb232d8c`, region ENAM, daily 04:00 UTC
+purge cron). Steps, in the order that worked:
+
+1. `npm install -D wrangler` inside `feedback-worker/` — wrangler is a
+   project-local devDependency (no global install; the project's
+   `npx wrangler` pins the version).
+2. `npx wrangler login` — OAuth via the desktop browser (Edge in WSL:
+   localhost forwarding carries the `localhost:8976` callback without any
+   extra config). Credentials land in `~/.config/.wrangler/config/default.toml`.
+3. `npx wrangler d1 create smartblocker-feedback` → paste the returned
+   `database_id` into `wrangler.toml` (binding name stays `"DB"` — that's
+   what `src/index.js` reads, not wrangler's suggested `smartblocker_feedback`).
+4. **`npx wrangler d1 execute smartblocker-feedback --remote --file=./schema.sql`**
+   — the one real landmine: **wrangler 4 defaults `d1 execute` to a LOCAL
+   sqlite file on disk.** My first run "succeeded" (and my verification
+   SELECT read the same local file, also succeeding), while production
+   threw `D1_ERROR: no such table: feedback` (Cloudflare error 1101 on
+   every DB-touching route; found via `npx wrangler tail`). The wrangler.toml
+   header now documents `--remote` in bold so a re-deploy can't repeat this.
+5. `npx wrangler deploy`, then `npx wrangler secret put EXPORT_TOKEN`
+   (stdin pipe, value never in argv/logs; kept locally at
+   `~/.config/smartblocker/export-token`, mode 0600, outside the repo).
+   Deploy first: `secret put` is itself a deployment and needs the worker
+   to exist.
+6. Set `FEEDBACK_ENDPOINT` in `src/shared/config.ts`, rebuild both targets,
+   and flip e2e §3b from "assert the no-endpoint disabled state" to
+   "read FEEDBACK_ENDPOINT from config.ts and assert whichever state is
+   honest for this build". Full suite: 24 PASS, 0 FAIL.
+
+Live endpoint verification (curl against the real worker):
+
+- `GET /v1/export` without token → **401** (fail-closed)
+- with token → `{"rows":[],"nextCursor":0,"done":true}`
+- `POST /v1/feedback` probe record → `{"ok":true,"stored":1}`
+- export shows the row (with `received_at` stamped server-side)
+- `POST /v1/delete {installId}` → `{"ok":true,"deleted":1}`
+- export empty again → full ingest→export→delete round-trip confirmed
+
+Known residual (documented in wrangler.toml, dashboard-only): the
+belt-and-suspenders Cloudflare WAF rate-limit rule on `POST /v1/feedback`
+is a dashboard-managed rule (Security → WAF → Rate limiting), deliberately
+NOT in wrangler. The in-worker D1 fixed-window limits already enforce the
+per-install/per-IP caps; the edge rule is extra flood shedding.
+
 ## Alternatives considered
 
 - Keep BiDi and drive everything through the options tab opened by the
