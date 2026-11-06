@@ -11,7 +11,7 @@
 //! - overnight windows are expressed as `endMinutes < startMinutes`;
 //! - an armed password makes `until` indefinite (`null`) regardless of timers.
 
-use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -29,6 +29,27 @@ pub struct ScheduleRule {
     pub start_minutes: u16,
     /// 0..=1439. `end < start` = overnight window into the next day.
     pub end_minutes: u16,
+    /// Timezone the window times are pinned to: minutes EAST of UTC (e.g.
+    /// 330 = UTC+05:30), captured when the rule was written (the extension's
+    /// `lock.ts` setSchedules — the only legal schedule write path). `Some`:
+    /// the rule evaluates against this FIXED offset, so changing the device
+    /// timezone cannot sidestep a window (red-team #26). `None` (absent
+    /// JSON, via serde's Option default): legacy rule, evaluated in the
+    /// device's CURRENT timezone — the companion backfills on resave.
+    ///
+    /// KNOWN RESIDUAL — a fixed offset cannot encode DST: a rule pinned
+    /// while the zone is on standard time fires one hour off (relative to
+    /// civil time) after a daylight-saving change, forever. Deliberate: this
+    /// crate builds OFFLINE and no IANA tz database (chrono-tz/tzdb/jiff)
+    /// is vendored — `FixedOffset` is the only offline option. A one-hour
+    /// civil drift beats a one-line tz bypass; the window still fires at the
+    /// same absolute times daily. IANA name kept separately for display.
+    #[serde(default)]
+    pub tz_offset_minutes: Option<i32>,
+    /// IANA name of the pinned zone (e.g. "America/New_York"), display-only
+    /// — evaluation uses ONLY `tz_offset_minutes`.
+    #[serde(default)]
+    pub tz_name: Option<String>,
 }
 
 /// Persisted shape (`lock-state.json` here, storage.local `lockState` in the
@@ -44,12 +65,21 @@ pub struct LockState {
     pub timer_until: Option<i64>,
     /// Password lock: salted SHA-256 hex. `Some` = armed (indefinite).
     pub password_hash: Option<String>,
+    /// Arm/unlock stamp (epoch ms; absent JSON = 0, legacy). Arm stamps on
+    /// set, unlock stamps on clear — merge picks the greater stamp, so a
+    /// fresh "unlocked" tombstone beats an older armed hash and password
+    /// unlocks propagate instead of being re-armed by the peer's copy.
+    /// Clamped to `now` on sanitize (it orders the merge; a forged future
+    /// stamp would outrank every honest write).
+    pub password_ts: u64,
     /// Frozen Turkey session end (epoch ms) — also forces blocking on.
     pub frozen_until: Option<i64>,
     /// Recurring locked windows — active windows also force blocking on.
     pub schedules: Vec<ScheduleRule>,
     /// When `schedules` was last replaced (epoch ms; absent JSON = 0, but
-    /// ALWAYS serialized). Only consulted by `merge_lock_states`.
+    /// ALWAYS serialized). Only consulted by `merge_lock_states`. Clamped to
+    /// `now` on sanitize: a forged future stamp would hold the list hostage
+    /// under last-writer-wins.
     pub schedules_updated_at: u64,
 }
 
@@ -118,9 +148,30 @@ fn local_midnight<Tz: TimeZone>(tz: &Tz, now_ms: i64, day_offset: i64) -> Option
     None
 }
 
+/// A rule pinned to `tz_offset_minutes` evaluates in that fixed zone;
+/// `None`/out-of-machinable-range falls back to the caller's zone (legacy /
+/// device-current — sanitize drops out-of-RANGE pins before this ever sees
+/// them). Mirrors the pinned branch of `ruleDayStart` in lock-math.ts.
+fn pinned_offset(r: &ScheduleRule) -> Option<FixedOffset> {
+    r.tz_offset_minutes
+        .and_then(|m| m.checked_mul(60))
+        .and_then(FixedOffset::east_opt)
+}
+
 /// End (epoch ms) of the window under rule `r` containing `now_ms`, or None.
-/// A containing window can only have started today or (overnight) yesterday.
+/// A containing window can only have started today or (overnight) yesterday
+/// (today/yesterday in the rule's OWN tz frame when pinned: a pinned rule
+/// ignores `tz`, so a device-zone change can't sidestep it, red-team #26).
 fn rule_window_end<Tz: TimeZone>(r: &ScheduleRule, now_ms: i64, tz: &Tz) -> Option<i64> {
+    // Heterogeneous dispatch: pinned rules use their own FixedOffset (no
+    // DST — see the field's doc comment), legacy rules use the caller's zone.
+    match pinned_offset(r) {
+        Some(off) => rule_window_end_tz(r, now_ms, &off),
+        None => rule_window_end_tz(r, now_ms, tz),
+    }
+}
+
+fn rule_window_end_tz<Tz: TimeZone>(r: &ScheduleRule, now_ms: i64, tz: &Tz) -> Option<i64> {
     let dur = window_duration_ms(r);
     if dur <= 0 {
         return None;
@@ -130,7 +181,7 @@ fn rule_window_end<Tz: TimeZone>(r: &ScheduleRule, now_ms: i64, tz: &Tz) -> Opti
             continue;
         };
         // Weekday of the resolved midnight instant — mirrors
-        // `new Date(dayStart).getDay()`.
+        // `new Date(dayStart).getDay()` / the UTC-frame read in ruleDayStart.
         if !r
             .days
             .contains(&(day_start.weekday().num_days_from_sunday() as u8))
@@ -172,32 +223,44 @@ pub fn next_boundary_in<Tz: TimeZone>(state: &LockState, now: i64, tz: &Tz) -> O
     candidates.extend(active(state.timer_until, now));
     candidates.extend(active(state.frozen_until, now));
     for r in &state.schedules {
-        let dur = window_duration_ms(r);
-        if dur <= 0 {
-            continue;
-        }
-        // From yesterday (an in-progress overnight window still has its end
-        // ahead) through a full week ahead — covers week wraparound.
-        for offset in -1..=7 {
-            let Some(day_start) = local_midnight(tz, now, offset) else {
-                continue;
-            };
-            if !r
-                .days
-                .contains(&(day_start.weekday().num_days_from_sunday() as u8))
-            {
-                continue;
-            }
-            let start = day_start.timestamp_millis() + i64::from(r.start_minutes) * 60_000;
-            if start > now {
-                candidates.push(start);
-            }
-            if start + dur > now {
-                candidates.push(start + dur);
-            }
+        // Per-rule zone dispatch — mirrors rule_window_end: a pinned rule's
+        // boundaries are computed in its OWN fixed offset, legacy rules in
+        // the caller's zone, so a mixed list works after a device tz change.
+        match pinned_offset(r) {
+            Some(off) => rule_boundaries_tz(r, now, &off, &mut candidates),
+            None => rule_boundaries_tz(r, now, tz, &mut candidates),
         }
     }
     candidates.into_iter().min()
+}
+
+/// Push a rule's candidate boundary instants (mirrors the per-rule loop of
+/// `nextBoundary` in lock-math.ts): from yesterday through a week ahead.
+fn rule_boundaries_tz<Tz: TimeZone>(r: &ScheduleRule, now: i64, tz: &Tz, out: &mut Vec<i64>) {
+    let dur = window_duration_ms(r);
+    if dur <= 0 {
+        return;
+    }
+    // From yesterday (an in-progress overnight window still has its end
+    // ahead) through a full week ahead — covers week wraparound.
+    for offset in -1..=7 {
+        let Some(day_start) = local_midnight(tz, now, offset) else {
+            continue;
+        };
+        if !r
+            .days
+            .contains(&(day_start.weekday().num_days_from_sunday() as u8))
+        {
+            continue;
+        }
+        let start = day_start.timestamp_millis() + i64::from(r.start_minutes) * 60_000;
+        if start > now {
+            out.push(start);
+        }
+        if start + dur > now {
+            out.push(start + dur);
+        }
+    }
 }
 
 pub fn derive_lock_status_in<Tz: TimeZone>(state: &LockState, now: i64, tz: &Tz) -> LockStatus {
@@ -249,6 +312,9 @@ pub fn current_window_end(rules: &[ScheduleRule], now_ms: i64) -> Option<i64> {
 /// Returns a human-readable problem, or None when the rule is valid.
 /// Integrality/negativity is enforced by the field types (serde rejects
 /// non-integers before wire input ever reaches this); ranges match the TS.
+/// The tz-pin bounds are the real-world extrema (UTC−12:00 … UTC+14:00),
+/// mirrored by `validateScheduleRule` in lock-math.ts — both sanitize paths
+/// drop rules failing ANY of these checks.
 pub fn validate_schedule_rule(r: &ScheduleRule) -> Option<&'static str> {
     if r.days.is_empty() {
         return Some("Pick at least one day.");
@@ -262,17 +328,36 @@ pub fn validate_schedule_rule(r: &ScheduleRule) -> Option<&'static str> {
     if r.start_minutes == r.end_minutes {
         return Some("Start and end times must differ.");
     }
+    if let Some(m) = r.tz_offset_minutes {
+        if !(-720..=840).contains(&m) {
+            return Some("Timezone offset must be between UTC−12:00 and UTC+14:00.");
+        }
+    }
+    if r.tz_name.as_deref().is_some_and(|n| n.len() > 64) {
+        return Some("Timezone name must be a short string.");
+    }
     None
 }
 
 /// Coerce untrusted input (the extension talks over Native Messaging) into a
 /// well-formed LockState: wrong types dropped, invalid rules dropped, end
 /// timestamps clamped to `now + max_lock_ms` so a bad peer cannot lock
-/// forever. Unlike the TS (which passes rule objects through by reference),
-/// re-deserializing strips unknown extra properties from rules — the wire
-/// shape is `ScheduleRule` either way.
+/// forever. The two metadata stamps (`passwordTs`, `schedulesUpdatedAt`) are
+/// clamped to `now` — they order last-writer-wins merges, so a forged FUTURE
+/// stamp must never be admitted: it would outrank every honest write until
+/// that date arrived. Unlike the TS (which passes rule objects through by
+/// reference), re-deserializing strips unknown extra properties from rules —
+/// the wire shape is `ScheduleRule` either way.
 pub fn sanitize_lock_state(raw: &Value, now: i64, max_lock_ms: i64) -> LockState {
     let cap = now + max_lock_ms;
+    // Merge-ordering metadata: never admit a stamp from the future.
+    let stamp = |key: &str| -> u64 {
+        raw.get(key)
+            .and_then(Value::as_f64)
+            .filter(|&n| n > 0.0)
+            .map(|n| n.min(now as f64) as u64)
+            .unwrap_or(0)
+    };
     let until = |key: &str| -> Option<i64> {
         let n = raw.get(key)?.as_f64()?;
         // JSON numbers are always finite; TS additionally checks isFinite.
@@ -299,14 +384,10 @@ pub fn sanitize_lock_state(raw: &Value, now: i64, max_lock_ms: i64) -> LockState
             .and_then(Value::as_str)
             .filter(|s| s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
             .map(str::to_owned),
+        password_ts: stamp("passwordTs"),
         frozen_until: until("frozenUntil"),
         schedules,
-        schedules_updated_at: raw
-            .get("schedulesUpdatedAt")
-            .and_then(Value::as_f64)
-            .filter(|&n| n > 0.0)
-            .map(|n| n.min(cap as f64) as u64)
-            .unwrap_or(0),
+        schedules_updated_at: stamp("schedulesUpdatedAt"),
     }
 }
 
@@ -322,6 +403,17 @@ mod tests {
             days: days.to_vec(),
             start_minutes: start,
             end_minutes: end,
+            tz_offset_minutes: None,
+            tz_name: None,
+        }
+    }
+
+    /// Same rule pinned to a fixed offset (minutes EAST of UTC).
+    fn pinned(id: &str, days: &[u8], start: u16, end: u16, off: i32) -> ScheduleRule {
+        ScheduleRule {
+            tz_offset_minutes: Some(off),
+            tz_name: Some("Test/Zone".into()),
+            ..rule(id, days, start, end)
         }
     }
 
@@ -446,6 +538,64 @@ mod tests {
     }
 
     #[test]
+    fn pinned_rule_evaluates_in_its_own_offset_not_the_machines() {
+        // Red-team #26: a rule pinned at creation must not move when the
+        // device timezone changes. Simulate by evaluating against a host
+        // zone (UTC) that differs from the rule's pinned offset (IST,
+        // UTC+05:30 — itself a no-DST zone, so no residual applies to it).
+        let utc = FixedOffset::east_opt(0).unwrap();
+        let ist_rule = pinned("wd-ist", &[1, 2, 3, 4, 5], 9 * 60, 17 * 60, 330);
+        let rules = std::slice::from_ref(&ist_rule);
+        // Wed 12:00 UTC = 17:30 in UTC+05:30: outside the pinned window...
+        let now = at(&utc, 8, 12, 0);
+        assert!(!is_in_schedule_window_in(rules, now, &utc));
+        // ...but a legacy (unpinned) copy of the same rule IS active — it
+        // follows the machine's current zone, the pre-#26 behavior.
+        assert!(is_in_schedule_window_in(&[workdays()], now, &utc));
+        // Wed 11:00 UTC = 16:30 IST: inside the pinned window, ending at
+        // 17:00 IST = 11:30 UTC (the pinned zone's civil time).
+        let inside = at(&utc, 8, 11, 0);
+        assert!(is_in_schedule_window_in(rules, inside, &utc));
+        assert_eq!(
+            current_window_end_in(rules, inside, &utc),
+            Some(at(&utc, 8, 11, 30))
+        );
+        // A pinned rule ignores the host zone entirely: same answer when the
+        // machine zone happens to match the pin.
+        let ist = FixedOffset::east_opt(5 * 3600 + 1800).unwrap();
+        assert!(is_in_schedule_window_in(rules, inside, &ist));
+    }
+
+    #[test]
+    fn fixed_offset_pin_documents_the_dst_residual() {
+        // The SAME civil schedule authored on winter (-300 min) vs summer
+        // (-240 min) time: a fixed offset cannot follow the DST change, so
+        // the two pins fire exactly one hour apart — forever. This test pins
+        // the residual down deliberately; see the field docs.
+        let utc = FixedOffset::east_opt(0).unwrap();
+        let winter = pinned("et-win", &[1, 2, 3, 4, 5], 9 * 60, 10 * 60, -300);
+        let summer = pinned("et-sum", &[1, 2, 3, 4, 5], 9 * 60, 10 * 60, -240);
+        // Wed 13:30 UTC: the summer pin's 09:00 window is 30 minutes in
+        // (13:00 UTC); the winter pin's window opens at 14:00 UTC.
+        let now = at(&utc, 8, 13, 30);
+        assert!(!is_in_schedule_window_in(&[winter], now, &utc));
+        assert!(is_in_schedule_window_in(&[summer], now, &utc));
+    }
+
+    #[test]
+    fn next_boundary_uses_the_rules_own_offset() {
+        let utc = FixedOffset::east_opt(0).unwrap();
+        let ist_rule = pinned("wd-ist", &[1, 2, 3, 4, 5], 9 * 60, 17 * 60, 330);
+        let state = schedules_state(vec![ist_rule]);
+        // Wed 12:00 UTC = 17:30 IST (today's window over): next boundary is
+        // Thursday 09:00 IST = 03:30 UTC, not anything in the host zone.
+        assert_eq!(
+            next_boundary_in(&state, at(&utc, 8, 12, 0), &utc),
+            Some(at(&utc, 9, 3, 30))
+        );
+    }
+
+    #[test]
     fn schedule_window_forces_blocking_with_window_end() {
         for tz in &zones() {
             let state = schedules_state(vec![workdays()]);
@@ -476,17 +626,60 @@ mod tests {
         assert!(validate_schedule_rule(&rule("x", &[7], 540, 1020)).is_some());
         assert!(validate_schedule_rule(&rule("x", &[1], 600, 600)).is_some());
         assert!(validate_schedule_rule(&rule("x", &[1], 540, 1440)).is_some());
+        // tz pins: real-world extrema accepted, beyond rejected (mirrors TS).
+        assert_eq!(
+            validate_schedule_rule(&pinned("x", &[1], 540, 1020, -720)),
+            None
+        );
+        assert_eq!(
+            validate_schedule_rule(&pinned("x", &[1], 540, 1020, 840)),
+            None
+        );
+        assert!(validate_schedule_rule(&pinned("x", &[1], 540, 1020, -721)).is_some());
+        assert!(validate_schedule_rule(&pinned("x", &[1], 540, 1020, 841)).is_some());
+        // tz name is display-only but bounded.
+        let mut long_name = pinned("x", &[1], 540, 1020, 0);
+        long_name.tz_name = Some("z".repeat(65));
+        assert!(validate_schedule_rule(&long_name).is_some());
+    }
+
+    #[test]
+    fn schedule_rule_tz_fields_default_absent_and_roundtrip() {
+        // Legacy JSON (no tz fields at all) deserializes unpinned, then
+        // serializes with explicit nulls — the TS side passes rule objects
+        // through by reference either way.
+        let parsed: ScheduleRule = serde_json::from_value(json!({
+            "id": "r", "days": [1], "startMinutes": 540, "endMinutes": 1020
+        }))
+        .unwrap();
+        assert_eq!(parsed.tz_offset_minutes, None);
+        assert_eq!(parsed.tz_name, None);
+        assert_eq!(
+            serde_json::to_value(&parsed).unwrap(),
+            json!({
+                "id": "r", "days": [1], "startMinutes": 540, "endMinutes": 1020,
+                "tzOffsetMinutes": null, "tzName": null
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(pinned("r", &[1], 540, 1020, 330)).unwrap(),
+            json!({
+                "id": "r", "days": [1], "startMinutes": 540, "endMinutes": 1020,
+                "tzOffsetMinutes": 330, "tzName": "Test/Zone"
+            })
+        );
     }
 
     #[test]
     fn lock_state_serializes_explicit_nulls_and_updated_at() {
-        // The TS side writes explicit nulls; schedulesUpdatedAt is always
-        // present on output even though absent input defaults to 0.
+        // The TS side writes explicit nulls; the stamps are always present on
+        // output even though absent input defaults to 0.
         assert_eq!(
             serde_json::to_value(LockState::default()).unwrap(),
             json!({
                 "timerUntil": null,
                 "passwordHash": null,
+                "passwordTs": 0,
                 "frozenUntil": null,
                 "schedules": [],
                 "schedulesUpdatedAt": 0
@@ -520,6 +713,31 @@ mod tests {
                 "reasons": ["timer", "password", "frozen", "schedule"],
                 "until": null
             })
+        );
+    }
+
+    #[test]
+    fn sanitize_drops_rules_with_out_of_range_tz_pins() {
+        // Out-of-range pins and non-integer offsets are untrusted garbage:
+        // the rule is dropped, mirroring the TS validate-before-keep filter.
+        let state = sanitize_lock_state(
+            &json!({
+                "schedules": [
+                    { "id": "ok", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": -300, "tzName": "America/New_York" },
+                    { "id": "too-far", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 9999 },
+                    { "id": "float", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 330.5 },
+                    { "id": "bad-name", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzName": 42 }
+                ]
+            }),
+            1_000_000,
+            2_592_000_000,
+        );
+        assert_eq!(state.schedules.len(), 1);
+        assert_eq!(state.schedules[0].id, "ok");
+        assert_eq!(state.schedules[0].tz_offset_minutes, Some(-300));
+        assert_eq!(
+            state.schedules[0].tz_name.as_deref(),
+            Some("America/New_York")
         );
     }
 

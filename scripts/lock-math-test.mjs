@@ -159,6 +159,45 @@ test('until is the max of all active timed ends', () => {
   assert.equal(s.until, NOW + 120_000);
 });
 
+// --- tz-pinned windows (red-team #26) ---
+// Pinned rules evaluate against their OWN fixed offset — host-zone-indepen-
+// dent, so these hold on any dev machine. The pinned cases below mirror the
+// shared fixtures; the legacy case pins down the pre-#26 behavior absent
+// fields must keep. DST residual: fixed offsets cannot follow DST changes —
+// a rule pinned in winter fires an hour off after the change (documented in
+// lock-math.ts; encoded as a shared fixture).
+const JAN5 = (h, m) => Date.UTC(2026, 0, 5, h, m); // a Monday
+const istPin = {
+  id: 'tz-pin',
+  days: [0, 1, 2, 3, 4, 5, 6],
+  startMinutes: 540,
+  endMinutes: 1020,
+  tzOffsetMinutes: 330,
+  tzName: 'Asia/Kolkata',
+};
+
+test('pinned rule: 16:00 IST (10:30 UTC) is inside the pinned window', () => {
+  const d = new Date(JAN5(10, 30));
+  assert.equal(isInScheduleWindow([istPin], d), true);
+  assert.equal(currentWindowEnd([istPin], d), JAN5(11, 30)); // 17:00 IST
+});
+test('pinned rule: 17:30 IST is outside — the device UTC clock cannot sidestep the pin', () => {
+  assert.equal(isInScheduleWindow([istPin], new Date(JAN5(12, 0))), false);
+});
+test('legacy rule (no tz fields) keeps pre-#26 device-local behavior', () => {
+  const legacy = { id: 'legacy', days: [1, 2, 3, 4, 5], startMinutes: 9 * 60, endMinutes: 17 * 60 };
+  assert.equal('tzOffsetMinutes' in legacy, false);
+  assert.equal(isInScheduleWindow([legacy], at(2026, 7, 8, 12, 0)), true);
+  assert.equal(isInScheduleWindow([legacy], at(2026, 7, 8, 8, 59)), false);
+});
+test('validateScheduleRule: tz pin bounds are UTC−12:00 … UTC+14:00', () => {
+  assert.equal(validateScheduleRule({ ...istPin, tzOffsetMinutes: -720 }), null);
+  assert.equal(validateScheduleRule({ ...istPin, tzOffsetMinutes: 840 }), null);
+  assert.notEqual(validateScheduleRule({ ...istPin, tzOffsetMinutes: 841 }), null);
+  assert.notEqual(validateScheduleRule({ ...istPin, tzOffsetMinutes: 330.5 }), null);
+  assert.notEqual(validateScheduleRule({ ...istPin, tzName: 42 }), null);
+});
+
 // --- validateScheduleRule ---
 test('valid rule passes', () => {
   assert.equal(validateScheduleRule(workdays), null);
@@ -188,11 +227,12 @@ const fixtures = JSON.parse(
 
 for (const c of fixtures.mergeLockStates) {
   test(`fixture merge: ${c.name}`, () => {
-    assert.deepEqual(mergeLockStates(c.a, c.b), c.expect);
+    const now = c.now ?? 0;
+    assert.deepEqual(mergeLockStates(c.a, c.b, now), c.expect);
     // The merge is a convergence step between two independent stores — it
     // must be commutative and idempotent or the sides never settle.
-    assert.deepEqual(mergeLockStates(c.b, c.a), c.expect);
-    assert.deepEqual(mergeLockStates(c.expect, c.expect), c.expect);
+    assert.deepEqual(mergeLockStates(c.b, c.a, now), c.expect);
+    assert.deepEqual(mergeLockStates(c.expect, c.expect, now), c.expect);
   });
 }
 for (const c of fixtures.deriveLockStatus) {

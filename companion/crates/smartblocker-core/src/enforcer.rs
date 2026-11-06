@@ -4,17 +4,23 @@
 //! semantics testable.
 //!
 //! Invariants:
-//! - Kill actions exist ONLY while `lock_status.force_blocking` is true, and
-//!   that status is derived by the caller from its own PERSISTED lock state —
-//!   never from a live peer message alone.
+//! - Kill actions exist in EVERY armed phase — `lock_status.settings_locked`
+//!   (timer, password, frozen, schedule window) — not just `force_blocking`
+//!   (red-team #25, user-approved: an armed lock carries the same OS-level
+//!   protection). `Phase::Idle` (no lock source) kills NOTHING. The status
+//!   is derived by the caller from its own PERSISTED lock state — never
+//!   from a live peer message alone.
 //! - All timing decisions use the monotonic clock (`now_mono_ms`); the wall
 //!   clock can be tampered with and is only ever quoted in logs.
-//! - SmartBlocker's own processes (self pid, anything named `smartblocker*`) are
-//!   never killed, even if the user blocklists them.
+//! - Kill-immunity binds to the RECORDED PID SET (own pid + pids verified at
+//!   scan time to run our own executables from our install dir), never to a
+//!   name: any other process whose exe stem matches a protected stem is a
+//!   hostile decoy and is killed like a blocklisted app. Mere substring
+//!   matches (`smartblocker-steam`) get no exemption either.
 
 use std::collections::{HashMap, HashSet};
 
-use crate::browsers::{classify, BrowserClass};
+use crate::browsers::{classify_process, BrowserClass};
 use crate::lock_math::LockStatus;
 use crate::procwatch::ProcInfo;
 use crate::protocol::CompanionBrowser;
@@ -32,10 +38,12 @@ pub const INCOMPATIBLE_GRACE_MS: u64 = 10_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
-    /// No lock source active.
+    /// No lock source active — kills NOTHING.
     Idle,
-    /// Settings locked (timer/password) but no forced blocking — the
-    /// companion persists and reports, and must not kill anything.
+    /// Settings locked (timer/password) but no forced blocking. Since
+    /// red-team #25 (user-approved) this is an armed-but-not-forced
+    /// ENFORCING mode: blocklisted apps, incompatible browsers, decoys, and
+    /// unpaired dev-flag launches are closed exactly as in `Enforcing`.
     Armed,
     /// Forced blocking (frozen turkey / schedule window): enforcing.
     Enforcing,
@@ -56,6 +64,9 @@ pub enum KillReason {
     IncompatibleBrowser,
     /// User-blocklisted application.
     BlockedApp,
+    /// Process masquerading under a protected stem without being in the
+    /// recorded PID set — a decoy probing for kill-immunity.
+    DecoyImpersonation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,8 +125,73 @@ pub fn phase_of(status: &LockStatus) -> Phase {
     }
 }
 
+/// Exact exe stems of SmartBlocker's own binaries. A stem match is NOT what
+/// grants immunity — it only marks a process as a CANDIDATE: genuine
+/// companion processes get recorded (see below), and every other stem match
+/// is treated as a decoy probe. Substring matching remains a gaping hole:
+/// renaming `steam.exe` to `smartblocker-steam.exe` must NOT exempt it.
+const PROTECTED_STEMS: &[&str] = &[
+    "smartblocker-daemon",
+    "smartblocker-companion",
+    "smartblocker-nm-host",
+];
+
+/// The recorded PID set: the only pids (besides `own_pid`) granted
+/// kill-immunity. Captured at daemon start (own pid, supervisor pid when the
+/// watchdog spawned us) and REBUILT from every enforcing-phase process scan
+/// by `procwatch::SysinfoSource` — dead pids and pid-reuse wash out each
+/// refresh instead of silently extending immunity. Process-global by
+/// necessity: `tick`'s input signature is owned by the daemon caller.
+static RECORDED_PIDS: std::sync::LazyLock<std::sync::Mutex<HashSet<u32>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashSet::new()));
+
+/// Record one pid as genuinely ours (own pid, watchdog/supervisor pid).
+pub fn record_protected_pid(pid: u32) {
+    RECORDED_PIDS.lock().unwrap().insert(pid);
+}
+
+/// Replace the recorded set with a freshly verified snapshot (called from
+/// `SysinfoSource::snapshot` with the same list the tick is about to see).
+pub fn install_protected_pids(set: HashSet<u32>) {
+    *RECORDED_PIDS.lock().unwrap() = set;
+}
+
+/// Is `pid` in the recorded set?
+pub fn is_protected_pid(pid: u32) -> bool {
+    RECORDED_PIDS.lock().unwrap().contains(&pid)
+}
+
+/// Pure core of the refresh: `{own_pid}` plus every protected-stem process
+/// whose exe lives in `own_dir` (lower-cased) — our daemon, watchdog
+/// supervisor and nm-host relays all ship side by side, so the install dir
+/// is the identity a renamed `/bin/sleep` can't fake. Procs whose exe path
+/// is unreadable can't prove identity and are NOT adopted.
+pub fn rebuilt_protected_pids(procs: &[ProcInfo], own_pid: u32, own_dir: &str) -> HashSet<u32> {
+    let mut set = HashSet::from([own_pid]);
+    for p in procs {
+        if !PROTECTED_STEMS.contains(&p.name.as_str()) {
+            continue;
+        }
+        let dir = p.exe.as_deref().and_then(|exe| {
+            exe.rsplit_once(std::path::is_separator)
+                .map(|(dir, _leaf)| dir)
+        });
+        if dir == Some(own_dir) {
+            set.insert(p.pid);
+        }
+    }
+    set
+}
+
 fn protected(p: &ProcInfo, own_pid: u32) -> bool {
-    p.pid == own_pid || p.name.contains("smartblocker")
+    p.pid == own_pid || is_protected_pid(p.pid)
+}
+
+/// A decoy: wears a protected stem but is not in the recorded PID set.
+/// Genuine companion processes land in the set at capture/refresh time, so
+/// anything left over with our name is a probe for kill-immunity.
+fn decoy(p: &ProcInfo, own_pid: u32) -> bool {
+    PROTECTED_STEMS.contains(&p.name.as_str()) && !protected(p, own_pid)
 }
 
 fn browser_label(kind: CompanionBrowser) -> &'static str {
@@ -127,10 +203,11 @@ fn browser_label(kind: CompanionBrowser) -> &'static str {
 }
 
 pub fn tick(state: &EnforcerState, inp: &TickInputs) -> (EnforcerState, Vec<Action>) {
-    if phase_of(inp.lock_status) != Phase::Enforcing {
-        // Leaving enforcement clears every grace timer and notify latch: the
-        // next lock starts a fresh session (a kill must never fire off a
-        // countdown that began under a previous lock).
+    if phase_of(inp.lock_status) == Phase::Idle {
+        // NO lock source: nothing is armed, kill nothing — and clear every
+        // grace timer and notify latch so the next lock starts a fresh
+        // session (a kill must never fire off a countdown that began under
+        // a previous lock).
         return (EnforcerState::default(), Vec::new());
     }
 
@@ -144,7 +221,7 @@ pub fn tick(state: &EnforcerState, inp: &TickInputs) -> (EnforcerState, Vec<Acti
         if protected(p, inp.own_pid) {
             continue;
         }
-        match classify(&p.name, &inp.config.extra_incompatible_browsers) {
+        match classify_process(&p.name, &p.cmd, &inp.config.extra_incompatible_browsers) {
             BrowserClass::Supported(kind) => by_browser.entry(kind).or_default().push(p),
             BrowserClass::Incompatible => {
                 incompatible_now.entry(p.name.clone()).or_default().push(p)
@@ -234,16 +311,49 @@ pub fn tick(state: &EnforcerState, inp: &TickInputs) -> (EnforcerState, Vec<Acti
         );
     }
 
-    // -- blocklisted apps close immediately ---------------------------------
+    // -- hostile decoys die immediately ------------------------------------
+    // A process wearing one of OUR stems without being in the recorded PID
+    // set is probing for kill-immunity. Same mechanics as a blocklisted app
+    // (immediate kill, notification latched once per session), with its own
+    // reason + events so the masquerade attempt stays visible in the log.
     next.notified_apps = state.notified_apps.clone();
     for p in inp.processes {
-        if protected(p, inp.own_pid) {
+        if !decoy(p, inp.own_pid) {
+            continue;
+        }
+        if next.notified_apps.insert(p.name.clone()) {
+            actions.push(Action::Notify {
+                title: "SmartBlocker".into(),
+                body: format!(
+                    "{} (pid {}) is pretending to be SmartBlocker; closing it.",
+                    p.name, p.pid
+                ),
+            });
+            actions.push(Action::LogEvent {
+                kind: "decoy-immune",
+                detail: format!("{} pid {} (wall {})", p.name, p.pid, inp.now_wall_ms),
+            });
+        }
+        actions.push(Action::Kill {
+            pid: p.pid,
+            name: p.name.clone(),
+            reason: KillReason::DecoyImpersonation,
+        });
+        actions.push(Action::LogEvent {
+            kind: "decoy-killed",
+            detail: format!("{} pid {} (wall {})", p.name, p.pid, inp.now_wall_ms),
+        });
+    }
+
+    // -- blocklisted apps close immediately ---------------------------------
+    for p in inp.processes {
+        if protected(p, inp.own_pid) || decoy(p, inp.own_pid) {
             continue;
         }
         // Browsers are handled above; the app blocklist must not offer a
         // second, grace-free path to killing a browser.
         if !matches!(
-            classify(&p.name, &inp.config.extra_incompatible_browsers),
+            classify_process(&p.name, &p.cmd, &inp.config.extra_incompatible_browsers),
             BrowserClass::Unrelated
         ) {
             continue;
@@ -281,6 +391,17 @@ mod tests {
         ProcInfo {
             pid,
             name: name.into(),
+            cmd: Vec::new(),
+            exe: None,
+        }
+    }
+
+    fn proc_cmd(pid: u32, name: &str, cmd: &[&str]) -> ProcInfo {
+        ProcInfo {
+            pid,
+            name: name.into(),
+            cmd: cmd.iter().map(|s| s.to_string()).collect(),
+            exe: None,
         }
     }
 
@@ -352,15 +473,111 @@ mod tests {
     }
 
     #[test]
-    fn no_force_blocking_means_no_kills_ever() {
+    fn idle_means_no_kills_ever() {
+        // Phase::Idle (no lock source) is the ONLY phase that kills nothing —
+        // not even a blocklisted app that would die instantly while armed.
         let cfg = config(&["steam"], &[]);
         let procs = [proc(1, "steam"), proc(2, "brave"), proc(3, "chrome")];
-        for status in [idle_status(), armed_status()] {
-            let (state, actions) =
-                tick_at(&EnforcerState::default(), 0, &status, &procs, &[], &cfg);
-            assert!(actions.is_empty());
-            assert!(state.suspects.is_empty() && state.incompatibles.is_empty());
-        }
+        let (state, actions) = tick_at(
+            &EnforcerState::default(),
+            0,
+            &idle_status(),
+            &procs,
+            &[],
+            &cfg,
+        );
+        assert!(actions.is_empty());
+        assert!(state.suspects.is_empty() && state.incompatibles.is_empty());
+    }
+
+    #[test]
+    fn armed_phase_closes_blocklisted_apps_and_incompatibles() {
+        // Red-team #25 (user-approved): a plain TIMER lock — settings_locked
+        // but NOT force_blocking — carries the same OS-level protection as
+        // a forced block. Immediate app kills, notice-then-close browsers.
+        let cfg = config(&["steam"], &[]);
+        let status = armed_status();
+        let procs = [proc(30, "steamwebhelper"), proc(20, "brave")];
+
+        let (s1, a1) = tick_at(&EnforcerState::default(), 1_000, &status, &procs, &[], &cfg);
+        // Blocklisted app dies on the very first armed tick, like Enforcing.
+        assert_eq!(kills(&a1), vec![(30, KillReason::BlockedApp)]);
+        // Both notices land on first sight: blocked-app and incompatible.
+        assert_eq!(notifies(&a1), 2);
+
+        // After the 10s notice the incompatible browser is closed too.
+        let (_s2, a2) = tick_at(&s1, 11_001, &status, &[proc(20, "brave")], &[], &cfg);
+        assert_eq!(kills(&a2), vec![(20, KillReason::IncompatibleBrowser)]);
+    }
+
+    #[test]
+    fn armed_phase_runs_the_watchdog_and_kills_decoys() {
+        // Red-team #25: while a timer/password lock is armed, a supported
+        // browser with a dead/absent pairing follows the same notice+grace+
+        // close watchdog path, and unrecorded protected-stem doppelgangers
+        // are killed as decoys (no forced block required).
+        let cfg = config(&[], &[]);
+        let status = armed_status();
+        let procs = [proc(10, "chrome"), proc(5041, "smartblocker-daemon")];
+
+        let (s1, a1) = tick_at(&EnforcerState::default(), 1_000, &status, &procs, &[], &cfg);
+        assert_eq!(kills(&a1), vec![(5041, KillReason::DecoyImpersonation)]);
+        assert_eq!(notifies(&a1), 2); // decoy notice + watchdog notice
+        assert!(kills(&a1).iter().all(|(pid, _)| *pid != 10));
+
+        // Watchdog grace expires mid-lock → chrome is closed.
+        let (_s2, a2) = tick_at(&s1, 61_001, &status, &[proc(10, "chrome")], &[], &cfg);
+        assert_eq!(kills(&a2), vec![(10, KillReason::Watchdog)]);
+    }
+
+    #[test]
+    fn dev_flag_pair_is_tolerated_only_while_its_pairing_is_healthy() {
+        // Red-team #23: the dev-extension launch pair
+        // (--load-extension=<dir> + --disable-extensions-except=<dir>) is the
+        // one tolerated flag class — and ONLY while a paired extension
+        // connection of that browser kind is heartbeating. A dead/absent
+        // pairing converts it into a full bypass attempt (watchdog kill).
+        let cfg = config(&[], &[]);
+        let status = forced_status();
+        let dev = [
+            "chromium",
+            "--disable-extensions-except=/repo/dist/chrome",
+            "--load-extension=/repo/dist/chrome",
+        ];
+        let procs = [proc_cmd(90, "chromium", &dev)];
+
+        // Healthy paired connection: tolerated indefinitely (no actions ever).
+        let healthy = [ConnInfo {
+            browser: CompanionBrowser::Chrome,
+            last_heartbeat_mono_ms: 900,
+        }];
+        let (s1, a1) = tick_at(
+            &EnforcerState::default(),
+            1_000,
+            &status,
+            &procs,
+            &healthy,
+            &cfg,
+        );
+        assert!(a1.is_empty());
+        let healthy2 = [ConnInfo {
+            browser: CompanionBrowser::Chrome,
+            last_heartbeat_mono_ms: 110_000,
+        }];
+        let (_s2, a2) = tick_at(&s1, 120_000, &status, &procs, &healthy2, &cfg);
+        assert!(
+            a2.is_empty(),
+            "healthy pairing keeps the dev pair tolerated"
+        );
+
+        // Dead pairing (no connection of that kind): full bypass attempt —
+        // watchdog notice then close, exactly like a browser with no
+        // extension at all.
+        let (d1, da1) = tick_at(&EnforcerState::default(), 1_000, &status, &procs, &[], &cfg);
+        assert_eq!(notifies(&da1), 1);
+        assert!(kills(&da1).is_empty());
+        let (_d2, da2) = tick_at(&d1, 61_001, &status, &procs, &[], &cfg);
+        assert_eq!(kills(&da2), vec![(90, KillReason::Watchdog)]);
     }
 
     #[test]
@@ -516,7 +733,10 @@ mod tests {
     fn smartblocker_processes_are_never_killed() {
         let cfg = config(&["smartblocker", "daemon"], &[]);
         let status = forced_status();
-        // own pid (999) under a hostile name + our binaries by name.
+        // own pid (999) under a hostile name + our binaries by RECORDED pid.
+        // A bare name match no longer exempts anything (decoy finding).
+        record_protected_pid(40);
+        record_protected_pid(41);
         let procs = [
             proc(999, "totally-a-game"),
             proc(40, "smartblocker-daemon"),
@@ -524,5 +744,166 @@ mod tests {
         ];
         let (_s, actions) = tick_at(&EnforcerState::default(), 1_000, &status, &procs, &[], &cfg);
         assert!(kills(&actions).is_empty());
+    }
+
+    #[test]
+    fn unrecorded_process_with_protected_stem_is_killed_as_a_decoy() {
+        let cfg = config(&[], &[]);
+        let status = forced_status();
+        // NOT recorded: a renamed /bin/sleep probing for kill-immunity.
+        // (pid range kept clear of the pids recorded by other tests.)
+        let procs = [proc(5041, "smartblocker-daemon")];
+
+        let (s1, a1) = tick_at(&EnforcerState::default(), 1_000, &status, &procs, &[], &cfg);
+        assert_eq!(kills(&a1), vec![(5041, KillReason::DecoyImpersonation)]);
+        assert_eq!(notifies(&a1), 1);
+        assert!(
+            a1.iter()
+                .any(|a| matches!(a, Action::LogEvent { kind, .. } if *kind == "decoy-immune")),
+            "first sighting logged as a failed immunity probe"
+        );
+        assert!(
+            a1.iter()
+                .any(|a| matches!(a, Action::LogEvent { kind, .. } if *kind == "decoy-killed")),
+            "the kill itself is logged"
+        );
+
+        // Stubborn decoy: killed again next tick, but the probe is reported
+        // once per session (notification latch), like the blocklist nag.
+        let (_s2, a2) = tick_at(&s1, 4_000, &status, &procs, &[], &cfg);
+        assert_eq!(kills(&a2), vec![(5041, KillReason::DecoyImpersonation)]);
+        assert_eq!(notifies(&a2), 0);
+        assert!(!a2
+            .iter()
+            .any(|a| matches!(a, Action::LogEvent { kind, .. } if *kind == "decoy-immune")));
+    }
+
+    #[test]
+    fn rebuilt_set_adopts_only_protected_stems_from_the_install_dir() {
+        // own pid + the watchdog (same binary in our dir) + an nm-host relay
+        // (sibling stem in our dir) belong; a decoy in /tmp wearing our name
+        // and a same-name process with an unreadable exe path do not.
+        let procs = [
+            ProcInfo {
+                pid: 6010,
+                name: "smartblocker-daemon".into(),
+                cmd: Vec::new(),
+                exe: Some("/opt/smartblocker/smartblocker-daemon".into()),
+            },
+            ProcInfo {
+                pid: 6011,
+                name: "smartblocker-nm-host".into(),
+                cmd: Vec::new(),
+                exe: Some("/opt/smartblocker/smartblocker-nm-host".into()),
+            },
+            ProcInfo {
+                pid: 6012,
+                name: "smartblocker-daemon".into(),
+                cmd: Vec::new(),
+                exe: Some("/tmp/decoy/smartblocker-daemon".into()),
+            },
+            ProcInfo {
+                pid: 6013,
+                name: "smartblocker-daemon".into(),
+                cmd: Vec::new(),
+                exe: None,
+            },
+            proc(6014, "steam"),
+        ];
+        let set = rebuilt_protected_pids(&procs, 999, "/opt/smartblocker");
+        assert_eq!(set, HashSet::from([999, 6010, 6011]));
+    }
+
+    #[test]
+    fn renamed_browser_is_closed_via_engine_fingerprint() {
+        // brave.exe renamed to surf.exe: no stem match, but Chromium child
+        // flags give it away → incompatible path (notice, then close).
+        let cfg = config(&[], &[]);
+        let status = forced_status();
+        let procs = [proc_cmd(50, "surf", &["surf", "--type=renderer"])];
+
+        let (s1, a1) = tick_at(&EnforcerState::default(), 1_000, &status, &procs, &[], &cfg);
+        assert_eq!(notifies(&a1), 1);
+        assert!(kills(&a1).is_empty());
+
+        let (_s2, a2) = tick_at(&s1, 11_001, &status, &procs, &[], &cfg);
+        assert_eq!(kills(&a2), vec![(50, KillReason::IncompatibleBrowser)]);
+    }
+
+    #[test]
+    fn renamed_gecko_browser_is_closed_via_contentproc_flag() {
+        let cfg = config(&[], &[]);
+        let status = forced_status();
+        let procs = [proc_cmd(
+            51,
+            "citrus",
+            &["/opt/citrus/citrus", "-contentproc", "-prefsji"],
+        )];
+
+        let (s1, _a1) = tick_at(&EnforcerState::default(), 1_000, &status, &procs, &[], &cfg);
+        let (_s2, a2) = tick_at(&s1, 11_001, &status, &procs, &[], &cfg);
+        assert_eq!(kills(&a2), vec![(51, KillReason::IncompatibleBrowser)]);
+    }
+
+    #[test]
+    fn electron_apps_are_not_fingerprinted_as_browsers() {
+        let cfg = config(&[], &[]);
+        let status = forced_status();
+        // VS Code by stem; a renamed Electron app caught only by app.asar.
+        let procs = [
+            proc_cmd(60, "code", &["/usr/share/code/code", "--type=renderer"]),
+            proc_cmd(61, "writely", &["writely", "--type=renderer", "app.asar"]),
+        ];
+        // Past any grace: neither may ever be killed or flagged.
+        let (s1, a1) = tick_at(&EnforcerState::default(), 1_000, &status, &procs, &[], &cfg);
+        assert!(a1.is_empty());
+        let (_s2, a2) = tick_at(&s1, 30_000, &status, &procs, &[], &cfg);
+        assert!(a2.is_empty());
+    }
+
+    #[test]
+    fn supported_browser_with_bypass_flags_is_closed_as_incompatible() {
+        let cfg = config(&[], &[]);
+        let status = forced_status();
+        let procs = [proc_cmd(70, "chrome", &["chrome", "--incognito"])];
+
+        let (s1, a1) = tick_at(&EnforcerState::default(), 1_000, &status, &procs, &[], &cfg);
+        assert_eq!(notifies(&a1), 1);
+        assert!(kills(&a1).is_empty());
+
+        let (_s2, a2) = tick_at(&s1, 11_001, &status, &procs, &[], &cfg);
+        assert_eq!(kills(&a2), vec![(70, KillReason::IncompatibleBrowser)]);
+    }
+
+    #[test]
+    fn disable_extensions_launch_is_closed_as_incompatible() {
+        let cfg = config(&[], &[]);
+        let status = forced_status();
+        let procs = [proc_cmd(71, "chrome", &["chrome", "--disable-extensions"])];
+
+        let (s1, _a1) = tick_at(&EnforcerState::default(), 1_000, &status, &procs, &[], &cfg);
+        let (_s2, a2) = tick_at(&s1, 11_001, &status, &procs, &[], &cfg);
+        assert_eq!(kills(&a2), vec![(71, KillReason::IncompatibleBrowser)]);
+    }
+
+    #[test]
+    fn lookalike_names_get_no_self_exemption() {
+        // The old substring exemption would have spared "smartblocker-steam",
+        // and the old exact-stem exemption would have spared the unrecorded
+        // "smartblocker-daemon" decoy. Neither survives now.
+        let cfg = config(&["smartblocker", "steam"], &[]);
+        let status = forced_status();
+        let procs = [
+            proc(80, "smartblocker-steam"),
+            proc(81, "smartblocker-daemon"),
+        ];
+        let (_s, actions) = tick_at(&EnforcerState::default(), 1_000, &status, &procs, &[], &cfg);
+        assert_eq!(
+            kills(&actions),
+            vec![
+                (81, KillReason::DecoyImpersonation),
+                (80, KillReason::BlockedApp)
+            ]
+        );
     }
 }

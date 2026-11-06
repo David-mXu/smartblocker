@@ -1,71 +1,127 @@
 {
-  "_note": "Golden cross-language fixtures for the lock-state contract, consumed by BOTH scripts/lock-math-test.mjs (src/shared/lock-math.ts) and the smartblocker-core cargo tests (lock_math.rs / merge.rs). Every case here must pass identically in TypeScript and Rust — that is the parity guarantee between the extension and the desktop companion. Cases are deliberately timezone-free (timer/frozen/password only); schedule *window* math depends on local time and is covered by each language's own unit tests. The merge runner additionally asserts commutativity (merge(b,a) == expect) and idempotence (merge(expect,expect) == expect) for every case. `reasons` array order is fixed: timer, password, frozen, schedule.",
+  "_note": "Golden cross-language fixtures for the lock-state contract, consumed by BOTH scripts/lock-math-test.mjs (src/shared/lock-math.ts) and the smartblocker-core cargo tests (lock_math.rs / merge.rs). Every case here must pass identically in TypeScript and Rust — that is the parity guarantee between the extension and the desktop companion. Schedule rules pinned to `tzOffsetMinutes` evaluate against that FIXED offset regardless of the host zone, so the tz-pinned cases below are host-independent by design (red-team #26); UNPINNED rules still follow the device's current zone, which the Rust runner pins to Utc and the TS runner leaves local — legacy-window behavior is therefore covered by each language's own unit tests instead of this file. The DST-residual case documents the accepted cost of fixed-offset pins: a rule pinned on winter time fires one hour off the civil clock after a DST change (the mirror has no IANA tz database — offline build constraint). The merge runner additionally asserts commutativity (merge(b,a) == expect) and idempotence (merge(expect,expect) == expect) for every case. `reasons` array order is fixed: timer, password, frozen, schedule. Merge cases carry an optional `now` (default 0): the schedule rule asks whether exactly one side is settings_locked at merge time — with fixture stamps in the small thousands, an active timer/frozen/password means locked. The password is a timestamped arm/unlock tombstone CRDT (greater passwordTs wins; a tie keeps an armed hash over a cleared one, and two armed hashes keep the lexicographically smaller); schedules are last-writer-wins EXCEPT that a locked side's list beats an unlocked peer regardless of stamps. passwordTs and schedulesUpdatedAt are clamped to `now` by sanitize (never now+maxLockMs): both order last-writer-wins merges, so forged future stamps must never be admitted. Same-id rules at equal schedule stamps resolve by a canonical content string that includes the tz pin, so two same-id rules pinned to different zones still converge deterministically.",
   "mergeLockStates": [
     {
       "name": "empty states merge to empty",
       "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [] },
       "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [] },
-      "expect": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+      "expect": { "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
     },
     {
       "name": "timer takes the max",
       "a": { "timerUntil": 2000, "passwordHash": null, "frozenUntil": null, "schedules": [] },
       "b": { "timerUntil": 3000, "passwordHash": null, "frozenUntil": null, "schedules": [] },
-      "expect": { "timerUntil": 3000, "passwordHash": null, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+      "expect": { "timerUntil": 3000, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
     },
     {
       "name": "null timer loses to a set timer",
       "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [] },
       "b": { "timerUntil": 1500, "passwordHash": null, "frozenUntil": null, "schedules": [] },
-      "expect": { "timerUntil": 1500, "passwordHash": null, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+      "expect": { "timerUntil": 1500, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
     },
     {
       "name": "frozen takes the max",
       "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": 5000, "schedules": [] },
       "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": 4000, "schedules": [] },
-      "expect": { "timerUntil": null, "passwordHash": null, "frozenUntil": 5000, "schedules": [], "schedulesUpdatedAt": 0 }
+      "expect": { "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": 5000, "schedules": [], "schedulesUpdatedAt": 0 }
     },
     {
-      "name": "password armed on either side survives the merge",
+      "name": "password armed on either side survives the merge (stampless legacy)",
       "a": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "frozenUntil": null, "schedules": [] },
       "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [] },
-      "expect": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+      "expect": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
     },
     {
-      "name": "conflicting passwords pick the lexicographically smaller hash",
+      "name": "conflicting stampless passwords pick the lexicographically smaller hash",
       "a": { "timerUntil": null, "passwordHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "frozenUntil": null, "schedules": [] },
       "b": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "frozenUntil": null, "schedules": [] },
-      "expect": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+      "expect": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "an unlock tombstone beats an older arm (password unlock can propagate)",
+      "a": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "passwordTs": 100, "frozenUntil": null, "schedules": [] },
+      "b": { "timerUntil": null, "passwordHash": null, "passwordTs": 200, "frozenUntil": null, "schedules": [] },
+      "expect": { "timerUntil": null, "passwordHash": null, "passwordTs": 200, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "a newer arm beats an older tombstone (re-lock can propagate)",
+      "a": { "timerUntil": null, "passwordHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "passwordTs": 300, "frozenUntil": null, "schedules": [] },
+      "b": { "timerUntil": null, "passwordHash": null, "passwordTs": 200, "frozenUntil": null, "schedules": [] },
+      "expect": { "timerUntil": null, "passwordHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "passwordTs": 300, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "a stamp tie keeps an armed hash over a tombstone (fail-safe)",
+      "a": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "passwordTs": 200, "frozenUntil": null, "schedules": [] },
+      "b": { "timerUntil": null, "passwordHash": null, "passwordTs": 200, "frozenUntil": null, "schedules": [] },
+      "expect": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "passwordTs": 200, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "the greater stamp wins before the hash tiebreak",
+      "a": { "timerUntil": null, "passwordHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "passwordTs": 100, "frozenUntil": null, "schedules": [] },
+      "b": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "passwordTs": 200, "frozenUntil": null, "schedules": [] },
+      "expect": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "passwordTs": 200, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "an absent stamp reads as 0 (legacy arm yields to a stamped unlock)",
+      "a": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "frozenUntil": null, "schedules": [] },
+      "b": { "timerUntil": null, "passwordHash": null, "passwordTs": 200, "frozenUntil": null, "schedules": [] },
+      "expect": { "timerUntil": null, "passwordHash": null, "passwordTs": 200, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
     },
     {
       "name": "newer schedule list wins (last-writer-wins)",
       "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "old", "days": [1], "startMinutes": 540, "endMinutes": 1020 }], "schedulesUpdatedAt": 100 },
       "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "new", "days": [2], "startMinutes": 600, "endMinutes": 660 }], "schedulesUpdatedAt": 200 },
-      "expect": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "new", "days": [2], "startMinutes": 600, "endMinutes": 660 }], "schedulesUpdatedAt": 200 }
+      "expect": { "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [{ "id": "new", "days": [2], "startMinutes": 600, "endMinutes": 660 }], "schedulesUpdatedAt": 200 }
     },
     {
       "name": "newer EMPTY schedule list still wins (deletion is not resurrected)",
       "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "old", "days": [1], "startMinutes": 540, "endMinutes": 1020 }], "schedulesUpdatedAt": 100 },
       "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 200 },
-      "expect": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 200 }
+      "expect": { "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 200 }
     },
     {
       "name": "equal timestamps union schedules sorted by id",
       "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "b", "days": [2], "startMinutes": 600, "endMinutes": 660 }] },
       "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "a", "days": [1], "startMinutes": 540, "endMinutes": 1020 }] },
-      "expect": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "a", "days": [1], "startMinutes": 540, "endMinutes": 1020 }, { "id": "b", "days": [2], "startMinutes": 600, "endMinutes": 660 }], "schedulesUpdatedAt": 0 }
+      "expect": { "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [{ "id": "a", "days": [1], "startMinutes": 540, "endMinutes": 1020 }, { "id": "b", "days": [2], "startMinutes": 600, "endMinutes": 660 }], "schedulesUpdatedAt": 0 }
     },
     {
       "name": "same id at equal timestamps keeps the canonically smaller rule",
       "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "x", "days": [3], "startMinutes": 700, "endMinutes": 800 }] },
       "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "x", "days": [1], "startMinutes": 540, "endMinutes": 1020 }] },
-      "expect": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "x", "days": [1], "startMinutes": 540, "endMinutes": 1020 }], "schedulesUpdatedAt": 0 }
+      "expect": { "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [{ "id": "x", "days": [1], "startMinutes": 540, "endMinutes": 1020 }], "schedulesUpdatedAt": 0 }
     },
     {
       "name": "all fields merge independently",
       "a": { "timerUntil": 9000, "passwordHash": null, "frozenUntil": 4000, "schedules": [], "schedulesUpdatedAt": 50 },
       "b": { "timerUntil": 2000, "passwordHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "frozenUntil": 8000, "schedules": [{ "id": "s", "days": [5], "startMinutes": 60, "endMinutes": 120 }], "schedulesUpdatedAt": 60 },
-      "expect": { "timerUntil": 9000, "passwordHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "frozenUntil": 8000, "schedules": [{ "id": "s", "days": [5], "startMinutes": 60, "endMinutes": 120 }], "schedulesUpdatedAt": 60 }
+      "expect": { "timerUntil": 9000, "passwordHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "passwordTs": 0, "frozenUntil": 8000, "schedules": [{ "id": "s", "days": [5], "startMinutes": 60, "endMinutes": 120 }], "schedulesUpdatedAt": 60 }
+    },
+    {
+      "name": "a locked side's schedules survive an unlocked peer's newer write",
+      "now": 1000,
+      "a": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "passwordTs": 50, "frozenUntil": null, "schedules": [{ "id": "x", "days": [1], "startMinutes": 540, "endMinutes": 1020 }], "schedulesUpdatedAt": 100 },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 200 },
+      "expect": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "passwordTs": 50, "frozenUntil": null, "schedules": [{ "id": "x", "days": [1], "startMinutes": 540, "endMinutes": 1020 }], "schedulesUpdatedAt": 100 }
+    },
+    {
+      "name": "both sides locked: the newer schedule list still wins",
+      "now": 1000,
+      "a": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "passwordTs": 50, "frozenUntil": null, "schedules": [{ "id": "x", "days": [1], "startMinutes": 540, "endMinutes": 1020 }], "schedulesUpdatedAt": 100 },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": 5000, "schedules": [], "schedulesUpdatedAt": 200 },
+      "expect": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "passwordTs": 50, "frozenUntil": 5000, "schedules": [], "schedulesUpdatedAt": 200 }
+    },
+    {
+      "name": "tz pins ride along with the winning schedule list",
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "pinned-old", "days": [2], "startMinutes": 600, "endMinutes": 660, "tzOffsetMinutes": 330, "tzName": "Asia/Kolkata" }], "schedulesUpdatedAt": 100 },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "plain-new", "days": [2], "startMinutes": 700, "endMinutes": 800 }], "schedulesUpdatedAt": 200 },
+      "expect": { "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [{ "id": "plain-new", "days": [2], "startMinutes": 700, "endMinutes": 800 }], "schedulesUpdatedAt": 200 }
+    },
+    {
+      "name": "same id with different tz pins at equal timestamps picks the canonically smaller pin",
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "x", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 330, "tzName": "Asia/Kolkata" }] },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "x", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": -300, "tzName": "America/New_York" }] },
+      "expect": { "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [{ "id": "x", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": -300, "tzName": "America/New_York" }], "schedulesUpdatedAt": 0 }
     }
   ],
   "deriveLockStatus": [
@@ -116,6 +172,24 @@
       "state": { "timerUntil": 1060000, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "frozenUntil": null, "schedules": [] },
       "now": 1000000,
       "expect": { "settingsLocked": true, "forceBlocking": false, "reasons": ["timer", "password"], "until": null }
+    },
+    {
+      "name": "pinned window active: 16:00 in the pinned zone (UTC+05:30) is inside 09:00–17:00 though the device clock says 10:30 UTC",
+      "state": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "tz-pin", "days": [0, 1, 2, 3, 4, 5, 6], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 330, "tzName": "Asia/Kolkata" }] },
+      "now": 1767609000000,
+      "expect": { "settingsLocked": true, "forceBlocking": true, "reasons": ["schedule"], "until": 1767612600000 }
+    },
+    {
+      "name": "tz changed after pinning: 17:30 in the pinned zone is outside — moving the device to UTC cannot sidestep a 09:00–17:00 rule",
+      "state": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "tz-pin", "days": [0, 1, 2, 3, 4, 5, 6], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 330, "tzName": "Asia/Kolkata" }] },
+      "now": 1767614400000,
+      "expect": { "settingsLocked": false, "forceBlocking": false, "reasons": [], "until": null }
+    },
+    {
+      "name": "DST residual documented: a rule pinned on winter time (-300) has NOT started at 09:30 summer civil time (13:30 UTC) — fixed offsets fire one hour off across a DST change",
+      "state": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "dst-doco", "days": [0, 1, 2, 3, 4, 5, 6], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": -300, "tzName": "America/New_York" }] },
+      "now": 1767619800000,
+      "expect": { "settingsLocked": false, "forceBlocking": false, "reasons": [], "until": null }
     }
   ],
   "nextBoundary": [
@@ -142,6 +216,12 @@
       "state": { "timerUntil": null, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "frozenUntil": null, "schedules": [] },
       "now": 1000000,
       "expect": null
+    },
+    {
+      "name": "a pinned rule's boundary lands on the pinned zone's clock: after 17:30 IST the next start is tomorrow 09:00 IST (03:30 UTC), not anything device-local",
+      "state": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "tz-pin", "days": [0, 1, 2, 3, 4, 5, 6], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 330, "tzName": "Asia/Kolkata" }] },
+      "now": 1767614400000,
+      "expect": 1767670200000
     }
   ],
   "sanitizeLockState": [
@@ -150,34 +230,49 @@
       "raw": {},
       "now": 1000000,
       "maxLockMs": 2592000000,
-      "expect": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+      "expect": { "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
     },
     {
       "name": "absurd timer is clamped to now + maxLockMs",
       "raw": { "timerUntil": 9000000000000000 },
       "now": 1000000,
       "maxLockMs": 2592000000,
-      "expect": { "timerUntil": 2593000000, "passwordHash": null, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+      "expect": { "timerUntil": 2593000000, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
     },
     {
       "name": "non-numeric and non-positive untils are dropped",
       "raw": { "timerUntil": "soon", "frozenUntil": -5 },
       "now": 1000000,
       "maxLockMs": 2592000000,
-      "expect": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+      "expect": { "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
     },
     {
       "name": "password must be 64 lowercase hex chars",
       "raw": { "passwordHash": "hunter2" },
       "now": 1000000,
       "maxLockMs": 2592000000,
-      "expect": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+      "expect": { "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "a future schedulesUpdatedAt clamps to now, never the lock cap",
+      "raw": { "schedulesUpdatedAt": 3000000 },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 1000000 }
+    },
+    {
+      "name": "a future passwordTs clamps to now",
+      "raw": { "passwordTs": 9000000000000000 },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "timerUntil": null, "passwordHash": null, "passwordTs": 1000000, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
     },
     {
       "name": "well-formed fields pass through, invalid rules are dropped",
       "raw": {
         "timerUntil": 1500000,
         "passwordHash": "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+        "passwordTs": 800000,
         "frozenUntil": 2000000,
         "schedules": [
           { "id": "ok", "days": [1, 5], "startMinutes": 540, "endMinutes": 1020 },
@@ -191,10 +286,32 @@
       "expect": {
         "timerUntil": 1500000,
         "passwordHash": "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+        "passwordTs": 800000,
         "frozenUntil": 2000000,
         "schedules": [{ "id": "ok", "days": [1, 5], "startMinutes": 540, "endMinutes": 1020 }],
         "schedulesUpdatedAt": 900000
       }
+    },
+    {
+      "name": "valid tz pins pass through sanitize intact",
+      "raw": { "schedules": [{ "id": "ok", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": -300, "tzName": "America/New_York" }] },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [{ "id": "ok", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": -300, "tzName": "America/New_York" }], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "rules with invalid tz pins are dropped, valid neighbors kept",
+      "raw": {
+        "schedules": [
+          { "id": "too-far", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 9999 },
+          { "id": "float", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 330.5 },
+          { "id": "bad-name", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzName": 42 },
+          { "id": "ok", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 840 }
+        ]
+      },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [{ "id": "ok", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 840 }], "schedulesUpdatedAt": 0 }
     }
   ]
 }

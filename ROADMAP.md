@@ -73,7 +73,7 @@ Done alongside: `version` → 0.2.0, `CLAUDE.md` + `README.md` updated.
 ---
 
 ## Phase 2.5 — All sites + whitelist ✅ (v0.3.0)
-/
+
 Flipped the watch model from YouTube/Reddit-only to **every `http(s)` site except a
 user whitelist** (Cold-Turkey-style "allow these, block the rest").
 
@@ -237,20 +237,45 @@ Design facts that matter later:
 
 ---
 
-## Phase 3 — Public beta
+## Phase 3 — Public beta — code ✅ (2026-11-05); external launch ops remaining
 
 - ~~Open problem carried from Phase 2: model quality.~~ **Resolved in
-  Phase 2.7** by the embedding-prototype backend (see table above). Remaining
-  model work is dataset-driven: grow `eval-dataset.json` from real feedback.
-- Open-source GitHub release + Chrome Web Store beta listing (needs a privacy
-  policy — `PRIVACY.md` exists; deploy `feedback-worker/` and set
-  `FEEDBACK_ENDPOINT` before the listing if opt-in sharing should be live).
-- Watch RAM/battery, false-positive rate, and model download UX in the wild.
+  Phase 2.7** by the embedding-prototype backend (see table above), then
+  pushed far beyond it in the 2026-10/11 dataset + classifier passes:
+  - **v3–v8 dataset expansion:** `eval-dataset.json` grew from 395 to
+    **15,874 cases** (615 `v3` multi-context + 1,195 `v4` adversarial +
+    4,543 `v5` multilingual/boundary/focus + 4,199 `v6` SERP &
+    chatbot-embed + 2,443 `v7` lexical-twin/focus/global + 2,484 `v8` dense
+    gaming/spec-stores/statutory-law), mined by agent swarms and kept
+    train/test-disjoint from the **518** support-vector seed texts by
+    `scripts/verify-dataset.mjs`.
+  - **Multi-prototype System 1 head + Focus Context:** 75% mean-centroid +
+    25% weighted top-2 seed similarity, `effectiveBlockScore` top-2 blocked
+    mass, and the gated `focusGoal` / `useTabContext` rescue centroid.
+    Combined: **95.4% top-1, 0.4% productive FP, 97.6% must-block recall,
+    98.7% e2e decision accuracy**.
+  - **Blocking surface coverage:** direct sub-frame classification
+    (`frameIds`), YouTube oEmbed resolution, open shadow-root traversal
+    (closed roots are unreachable by design), and the two-pass
+    SERP/chatbot-embed sanitizer (`src/content/sanitize-page.ts`).
+- **UI refresh ✅ (2026-10-26):** React 19 + Tailwind CSS v4 + shadcn/ui +
+  GSAP editorial surfaces (popup + options + block screen), real extension
+  and companion icons.
+- **Firefox parity ✅:** MV3 event-page keepalive in `lock-enforcer.ts`
+  (event-page suspension can no longer stall enforcement or impersonate a
+  dead extension to the companion watchdog) + incognito-access warning UI.
+- **Remaining — external launch ops only (no code blockers):**
+  - Deploy `feedback-worker/` to Cloudflare D1 (create the db, `wrangler
+    deploy`, then set `FEEDBACK_ENDPOINT` in `config.ts`) so opt-in sharing
+    is live for the listing.
+  - Open-source GitHub release + Chrome Web Store beta listing (privacy
+    policy exists as `PRIVACY.md`).
+  - Watch RAM/battery, false-positive rate, and model download UX in the wild.
+  - Marketing: Show HN, r/ADHD, r/productivity, Product Hunt. Hook: *"Stop
+    blocking the whole internet. Start blocking your bad habits."*
 - Telemetry-free by default; the ONLY network write is the explicit opt-in
   feedback sharing (off by default, hostname-only records — see PRIVACY.md).
   All classification + history analysis remain local.
-- Marketing: Show HN, r/ADHD, r/productivity, Product Hunt. Hook: *"Stop blocking
-  the whole internet. Start blocking your bad habits."*
 
 ### Design note: collective feedback → a better model for everyone
 
@@ -290,11 +315,15 @@ D1 store tell us WHERE to grow the dataset next, without reading titles.
 
 ---
 
-## Phase 4 — Paid Pro (tamper-proof companion) — core ✅ (2026-07-04)
+## Phase 4 — Paid Pro (tamper-proof companion) — core ✅ (2026-07-04), hardening ✅ (2026-11-05)
 
-The desktop companion is built and e2e-verified on Linux; Windows is a
-manual-verification pass away (checklist in `companion/README.md`). Free
-extension = the Phase 2.9 soft lock; the companion is the paid hard enforcer.
+The desktop companion is built, e2e-verified on Linux, and hardened against
+the ten concrete OS/extension bypass vectors found in the 2026-11 bypass
+audit (see
+`docs/learning-notes/2026-11-05-companion-hardening-and-roadmap-completion.md`).
+What remains is launch logistics, not code: real-hardware Windows
+verification and a signed installer. Free extension = the Phase 2.9 soft
+lock; the companion is the paid hard enforcer.
 
 **Shipped** (`companion/` cargo workspace + extension bridge):
 
@@ -314,9 +343,8 @@ extension = the Phase 2.9 soft lock; the companion is the paid hard enforcer.
   clock, kills only from PERSISTED state): watchdog (supported browser w/o a
   responsive extension → notify → 60s grace → browser closed), incompatible
   browsers (Brave/Opera/Vivaldi/…) closed after 10s notice, app blocklist
-  closed instantly. SmartBlocker's own processes unkillable; healthy browsers
-  never touched (30s extension keepalive alarm + 60s grace absorb MV3 SW
-  reaping).
+  closed instantly. Healthy browsers never touched (extension keepalive
+  alarms + 60s grace absorb MV3 SW/event-page reaping — now on Firefox too).
 - **Tauri 2 tray app** (`crates/smartblocker-companion`): status, start locks
   (via IPC as a hello-less client so the UI can't mask a dead extension),
   add-only-while-locked app blocklist, Install/Repair (HKCU registry keys on
@@ -330,17 +358,49 @@ extension = the Phase 2.9 soft lock; the companion is the paid hard enforcer.
   incl. daemon-restart seeding, fake blocked app + fake incompatible browser
   killed, page blocked under a companion-held lock.
 
-**Remaining for the paid release:**
+**Hardened (2026-11-05):**
 
-- Manual Windows verification (checklist in `companion/README.md`), real
-  icons (`cargo tauri icon`), signed installer.
-- Managed-policy tamper-proofing ships **implemented but OFF** (`policy.rs`):
-  Chrome/Edge silently ignore non-store force-install on unmanaged consumer
-  machines, and it needs the Phase 3 store `update_url` anyway — the
-  watchdog is the enforcement that works everywhere. Hosts-file/proxy
-  fallback: dropped from scope (2026-07-03 decision).
-- $39 lifetime license (Stripe / Lemon Squeezy) — `license.rs` is a stub
-  (everyone is Pro); `config.json licenseKey` reserved.
+- **Behavioral process fingerprinting** (`procwatch.rs classify_process`):
+  browsers identified by renderer command-line structure (`--type=renderer`,
+  `-contentproc`) instead of trusting exe stems — rename-spoofing a blocked
+  app to `chrome` no longer inherits trust, and masquerading as the
+  companion fails because kill-immunity (`PROTECTED_STEMS` + recorded own
+  PIDs) binds to the companion's real executables only.
+- **Private/extensionless launch detection**: `--incognito`, `--inprivate`,
+  `--guest`, `--disable-extensions` flags mark a browser as unable to host
+  the extension → treated as a bypass attempt; the extension UI also warns
+  when incognito access is not granted.
+- **Monotonic clock-jump compensation**: daemon and extension
+  (`lock-enforcer.ts`) anchor lock/expiry math to a monotonic source and
+  compensate wall-clock rewinds — setting the system clock back can't
+  shorten a lock.
+- **Reverse-sync self-healing**: the daemon's persisted copy re-merges
+  (`merge.rs merge_in`) into a wiped/reinstalled extension on reconnect, so
+  a storage wipe heals back to the lock instead of clearing it; mid-lock
+  `config.json` edits merge against enforcement-critical fields instead of
+  silently weakening them.
+- **Paired watchdog supervisor** (`smartblocker-daemon watchdog`): supervisor
+  and daemon monitor each other and respawn whichever is killed;
+  `uninstall` is lock-guarded and refuses to tear down registration and
+  autostart mid-lock.
+- **Offline HMAC-SHA256 Pro licensing** (`license.rs`): verifies
+  `SBPRO1.<payload>.<sig>` keys fully offline — no activation server, zero
+  network traffic (companion still has no network code).
+- **Policy hardening**: Firefox `policies.json` + Chromium hardening policies
+  written by Install/Repair where consumer policy is honored; force-install
+  still needs the Phase 3 store `update_url` on unmanaged machines — the
+  behavioral watchdog remains the enforcement that works everywhere.
+- **Real icons** for the extension and the companion tray app.
+
+**Remaining for the paid release (launch logistics, not code):**
+
+- Manual Windows verification on real hardware (checklist in
+  `companion/README.md`) + a signed Windows installer (code-signing cert is
+  a purchase, not code).
+- $39 lifetime payment flow (Stripe / Lemon Squeezy) issuing the `SBPRO1`
+  keys `license.rs` already verifies; `config.json licenseKey` is wired.
+- Chrome Web Store listing (Phase 3) — the deployment dependency for
+  managed force-install policy.
 
 ---
 

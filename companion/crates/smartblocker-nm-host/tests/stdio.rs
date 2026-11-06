@@ -35,6 +35,17 @@ fn now_ms() -> i64 {
 fn relays_hello_and_lock_sync_to_a_live_daemon() {
     let socket = unique("live");
     let data_dir = tempfile::tempdir().unwrap();
+    // The license gate is fail-closed (red-team #24): a keyless install is
+    // NOT Pro, so install a valid key for the pro:true assertion below.
+    let config = smartblocker_core::store::CompanionConfig {
+        license_key: Some(smartblocker_core::license::generate_license_key(
+            "user@example.com",
+        )),
+        ..smartblocker_core::store::CompanionConfig::default()
+    };
+    smartblocker_core::store::Store::new(data_dir.path())
+        .save_config(&config)
+        .unwrap();
     assert!(spawn_daemon(DaemonOptions {
         socket_name: socket.clone(),
         store: Store::new(data_dir.path()),

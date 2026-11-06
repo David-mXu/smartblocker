@@ -26,6 +26,11 @@ struct MergeCase {
     name: String,
     a: LockState,
     b: LockState,
+    /// Wall clock for activeness checks inside the schedule rule. Defaults
+    /// to 0: with fixture timestamps in the small thousands, timer/frozen
+    /// sources read as active and password arms read as locked — see _note.
+    #[serde(default)]
+    now: i64,
     expect: LockState,
 }
 
@@ -67,17 +72,22 @@ fn fixtures() -> Fixtures {
 #[test]
 fn fixture_merge_cases() {
     for c in fixtures().merge_lock_states {
-        assert_eq!(merge_lock_states(&c.a, &c.b), c.expect, "merge: {}", c.name);
+        assert_eq!(
+            merge_lock_states(&c.a, &c.b, c.now),
+            c.expect,
+            "merge: {}",
+            c.name
+        );
         // The merge is a convergence step between two independent stores —
         // it must be commutative and idempotent or the sides never settle.
         assert_eq!(
-            merge_lock_states(&c.b, &c.a),
+            merge_lock_states(&c.b, &c.a, c.now),
             c.expect,
             "merge commutativity: {}",
             c.name
         );
         assert_eq!(
-            merge_lock_states(&c.expect, &c.expect),
+            merge_lock_states(&c.expect, &c.expect, c.now),
             c.expect,
             "merge idempotence: {}",
             c.name

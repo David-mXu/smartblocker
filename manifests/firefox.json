@@ -3,6 +3,12 @@
   "name": "Smart Blocker",
   "version": "0.5.0",
   "description": "Local-AI distraction blocker — classifies what you watch, blocks only your bad habits",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "background": {
     "scripts": ["background.js"]
   },
@@ -14,7 +20,13 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "SmartBlocker"
+    "default_title": "SmartBlocker",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
   },
   "options_ui": {
     "page": "options.html",
@@ -22,6 +34,7 @@
   },
   "permissions": [
     "alarms",
+    "declarativeNetRequest",
     "history",
     "nativeMessaging",
     "scripting",
@@ -31,7 +44,13 @@
     "tabs"
   ],
   "host_permissions": ["<all_urls>"],
+  "web_accessible_resources": [
+    {
+      "resources": ["blocked.html"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+    "extension_pages": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://huggingface.co https://*.huggingface.co https://*.hf.co https://*.xethub.hf.co https://www.youtube.com; object-src 'self'"
   }
 }

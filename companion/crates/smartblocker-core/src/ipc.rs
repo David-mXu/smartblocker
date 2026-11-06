@@ -7,12 +7,13 @@
 
 use std::io;
 
-use interprocess::local_socket::traits::Stream as _;
+use interprocess::local_socket::traits::{Stream as _, StreamCommon as _};
 use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName};
 // Re-exported so the bins never need interprocess as a direct dependency.
 // `traits` carries accept()/incoming()/split() — import `traits::{Listener
-// as _, Stream as _}` wherever those are called.
-pub use interprocess::local_socket::{traits, Listener, Stream};
+// as _, Stream as _}` wherever those are called. The split halves are named
+// by the daemon's per-connection reader/writer threads.
+pub use interprocess::local_socket::{traits, Listener, RecvHalf, SendHalf, Stream};
 
 /// Production socket name; tests and the e2e pass a unique one instead.
 pub const DEFAULT_SOCKET_NAME: &str = "smartblocker-companion";
@@ -26,6 +27,41 @@ pub fn listen(name: &str) -> io::Result<Listener> {
 pub fn connect(name: &str) -> io::Result<Stream> {
     let ns = name.to_ns_name::<GenericNamespaced>()?;
     Stream::connect(ns)
+}
+
+/// Our own effective uid, read from `/proc/self/status` (the `Uid:` line
+/// carries real/effective/saved/fs uids — field 2 is the effective one, the
+/// same notion `SO_PEERCRED` reports about a peer). Linux-only, like the
+/// gate below: on this OS an abstract-namespace socket has no filesystem
+/// permission layer, so without a uid check ANY local user could connect
+/// (red-team #20, cross-user DoS/harassment). Parsing /proc keeps this
+/// std-only — no libc dependency needed for the check.
+#[cfg(target_os = "linux")]
+pub fn own_euid() -> Option<u32> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|l| l.starts_with("Uid:"))?;
+    line.split_whitespace().nth(2)?.parse().ok()
+}
+
+/// The connecting peer's effective uid (kernel-authenticated `SO_PEERCRED`
+/// via `interprocess::local_socket::traits::StreamCommon::peer_creds`), or
+/// None when the platform reports no euid.
+#[cfg(target_os = "linux")]
+pub fn peer_euid(stream: &Stream) -> Option<u32> {
+    stream.peer_creds().ok()?.euid()
+}
+
+/// Same-uid admission gate for accepted connections (red-team #20). Fails
+/// CLOSED only when BOTH uids are known and differ; when credentials are
+/// unavailable (can't happen for a Linux stream socket in practice — the
+/// kernel always answers SO_PEERCRED) the connection is admitted and the
+/// pairing layer remains the trust boundary, same as before this gate.
+#[cfg(target_os = "linux")]
+pub fn same_user_peer(stream: &Stream, own_uid: Option<u32>) -> bool {
+    let (Some(own), Some(peer)) = (own_uid, peer_euid(stream)) else {
+        return true;
+    };
+    peer == own
 }
 
 #[cfg(test)]
@@ -62,5 +98,24 @@ mod tests {
         write_frame(&mut server, &json!({ "pong": 2 })).unwrap();
 
         assert_eq!(handle.join().unwrap(), json!({ "pong": 2 }));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn same_uid_peers_pass_the_admission_gate() {
+        // Self-connection: kernel reports the SAME euid for both ends, so
+        // the gate admits. (A cross-uid peer can only be manufactured with
+        // setuid binaries — out of scope for a unit test; the mismatch arm
+        // is `peer == own`, trivially false for differing u32s.)
+        let name = unique_name("peercred");
+        let listener = listen(&name).unwrap();
+        let own = own_euid().expect("proc/self/status parses on Linux");
+        let client = connect(&name).unwrap();
+        std::thread::spawn(move || drop(client));
+        let server = listener.accept().unwrap();
+        assert!(same_user_peer(&server, Some(own)));
+        // Unknown-own-uid (unmeasurable gate) admits, per the documented
+        // fallback; a definitive mismatch would refuse.
+        assert!(same_user_peer(&server, None));
     }
 }

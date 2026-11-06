@@ -53,6 +53,19 @@ fn fill_or_clean_eof<R: Read>(r: &mut R, buf: &mut [u8]) -> io::Result<bool> {
 }
 
 pub fn write_frame<W: Write>(w: &mut W, value: &Value) -> io::Result<()> {
+    let body = encode(value)?;
+    w.write_all(&body)?;
+    w.flush()
+}
+
+/// One length-prefixed JSON frame as bytes: the 4-byte u32 length + UTF-8
+/// JSON body, with no JSON envelope. Values over the 1MB cap are
+/// `InvalidData`, exactly like `write_frame`.
+pub fn encode_frame(value: &Value) -> io::Result<Vec<u8>> {
+    encode(value)
+}
+
+fn encode(value: &Value) -> io::Result<Vec<u8>> {
     let body = serde_json::to_vec(value).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
     if body.len() > MAX_FRAME_BYTES as usize {
         return Err(io::Error::new(
@@ -63,9 +76,10 @@ pub fn write_frame<W: Write>(w: &mut W, value: &Value) -> io::Result<()> {
             ),
         ));
     }
-    w.write_all(&(body.len() as u32).to_le_bytes())?;
-    w.write_all(&body)?;
-    w.flush()
+    let mut out = Vec::with_capacity(4 + body.len());
+    out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    out.extend_from_slice(&body);
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -119,6 +133,20 @@ mod tests {
         let mut cursor = io::Cursor::new(wire);
         let err = read_frame(&mut cursor).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn encode_frame_matches_write_frame_bytes() {
+        let msg = json!({ "type": "ping", "v": 2 });
+        let mut wire = Vec::new();
+        write_frame(&mut wire, &msg).unwrap();
+        assert_eq!(encode_frame(&msg).unwrap(), wire);
+        // The oversize limit applies to the buffered encode too.
+        let big = json!("x".repeat(MAX_FRAME_BYTES as usize + 1));
+        assert_eq!(
+            encode_frame(&big).unwrap_err().kind(),
+            ErrorKind::InvalidData
+        );
     }
 
     #[test]

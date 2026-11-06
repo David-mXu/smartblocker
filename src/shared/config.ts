@@ -14,6 +14,14 @@ export const CLASSIFIER_BACKEND: 'embed' | 'nli' = 'embed';
 
 // Embedding backend model (~34MB q8, cached via Cache API).
 export const EMBED_MODEL_ID = 'Xenova/bge-small-en-v1.5';
+// Pinned HF Hub commit (red-team #19): without `revision`, pipeline() floats
+// on the mutable `main` branch with no integrity check. Bump by resolving the
+// current main SHA:
+//   curl -s https://huggingface.co/api/models/Xenova/bge-small-en-v1.5 | grep -o '"sha":"[0-9a-f]*"' | head -1
+// NOTE: cached title verdicts and centroids are keyed by model ID, not
+// revision — when bumping, also bump the ':mp1' version suffix in
+// classifier.ts getCentroids()/classify() so stale caches are invalidated.
+export const EMBED_MODEL_REVISION = 'ea104dacec62c0de699686887e3f920caeb4f3e3';
 // Softmax temperature over centroid cosine similarities, calibrated on the
 // eval set so the natural operating point sits at the default 0.5 threshold.
 // Recalibrated 0.03 -> 0.026 when the 18th centroid (neutral "accounts and
@@ -24,6 +32,9 @@ export const SOFTMAX_TEMPERATURE = 0.026;
 // Legacy NLI backend (bake-off baseline). Known ceiling: doesn't recognize
 // newer proper nouns — e.g. "Elden Ring Boss Fight" classifies as sports.
 export const MODEL_ID = 'Xenova/nli-deberta-v3-xsmall';
+// Pinned HF Hub commit (see EMBED_MODEL_REVISION above). Bump with:
+//   curl -s https://huggingface.co/api/models/Xenova/nli-deberta-v3-xsmall | grep -o '"sha":"[0-9a-f]*"' | head -1
+export const MODEL_REVISION = '2a4f614a701367a02d51389039afc998faeda637';
 
 export const HYPOTHESIS_TEMPLATE = 'This web page is about {}.';
 
@@ -105,9 +116,11 @@ export const HISTORY_CAP = 200; // raiseable to 1000; ~1-4 min scan at 200
 export const TITLE_CACHE_MAX = 500;
 export const LATENCY_LOG_MAX = 50;
 
-// "Elden Ring Boss Fight" is kept deliberately: it demonstrates the model's
-// proper-noun knowledge ceiling (classifies as sports). The Minecraft title
-// shows a correct video-game hit.
+// "Elden Ring Boss Fight" is kept deliberately: the legacy zero-shot NLI
+// pipeline suffered proper-noun blindness here (misclassifying the title as
+// sports), whereas the embedding model with prototype seeds now correctly
+// classifies it as video games. The Minecraft title shows an easy
+// video-game hit.
 export const TEST_TITLES = [
   'Elden Ring Boss Fight',
   'React Router Tutorial',

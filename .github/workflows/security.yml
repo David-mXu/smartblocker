@@ -1,0 +1,78 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Companion (Rust) supply-chain + lints + the ported red-team regression PoC.
+#
+# DELIBERATE EXCLUSION — the Playwright extension e2es (scripts/e2e-test.mjs,
+# scripts/e2e-companion-test.mjs, scripts/e2e-p1-*.mjs,
+# scripts/e2e-security-blockscreen.mjs) do NOT run in CI. Each one boots a
+# persistent Chromium profile, needs `channel: chromium` downloaded per
+# runner, downloads the ~35MB Transformers.js model on first run, and fights
+# MV3 service-worker wake races — a flake farm that would burn CI minutes and
+# train everyone to ignore failures. They remain local/commit-time gates run
+# by the integrator (`npm run build:chrome` first). Everything that runs here
+# is deterministic and hermetic.
+
+jobs:
+  audit:
+    name: cargo audit (dependency vulnerabilities)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: companion
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Audit companion/Cargo.lock
+        run: cargo audit
+        working-directory: companion
+
+  companion:
+    name: companion fmt + clippy + test + IPC security regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: companion
+      - name: cargo fmt --check
+        run: cargo fmt --check
+        working-directory: companion
+      # NOTE: never pass --workspace here — default-members excludes the
+      # Tauri tray app, whose build script needs system pkg-config deps the
+      # runner image doesn't have (see companion/Cargo.toml).
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: companion
+      - name: cargo test
+        run: cargo test
+        working-directory: companion
+      - name: Build daemon (for the security regression PoC)
+        run: cargo build -p smartblocker-daemon
+        working-directory: companion
+      - name: IPC security regression (ported red-team PoC)
+        run: python3 scripts/security-companion-test.py
+
+  lock-math:
+    name: shared lock-math fixtures (Node type stripping)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24 # >= 22.6 required for --experimental type stripping
+      - name: lock-math fixtures
+        run: node scripts/lock-math-test.mjs

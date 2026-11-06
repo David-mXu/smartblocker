@@ -12,13 +12,19 @@
 //   only when a merge CHANGED its state — that guard is what prevents
 //   sync loops, and it is mandatory on both sides.
 // - Messages stay far below Chrome's 1MB native->browser limit.
+// - `ping`/`pong` exist too, but only BETWEEN the daemon and its own
+//   supervisor watchdog (liveness probe, never sent by/to the extension), so
+//   they are declared on the Rust side only — see protocol.rs.
 import type { LockState } from './lock-math';
 
 /** Native messaging host name — must match the NM host manifest `name` and
  *  the registry entries / manifest files written by the companion. */
 export const NM_HOST_NAME = 'dev.davidxu.smartblocker';
 
-export const PROTOCOL_VERSION = 1;
+/** v2: hello gains `pairing` (daemon authenticates the channel — see the
+ *  daemon's pairing notes) and LockState gains `passwordTs`. Unknown fields
+ *  are ignored by older peers, but only v2+ daemons get full lock sync. */
+export const PROTOCOL_VERSION = 2;
 
 /** Heartbeat cadence while the port is open. The companion treats a gap of
  *  ~2 misses (45s) as "extension not responding" during an active lock. */
@@ -47,13 +53,17 @@ export interface CompanionStatus {
 }
 
 export type CompanionMessage =
-  // extension -> companion: first message after the port opens.
+  // extension -> companion: first message after the port opens. `pairing` is
+  // the bearer token authenticating this browser profile to the daemon
+  // (TOFU — persisted by both sides; re-pairing is refused while locked).
+  // Without it the daemon redacts password state and ignores heartbeats.
   | {
       v: number;
       type: 'hello';
       extVersion: string;
       browser: CompanionBrowser;
       extensionId: string;
+      pairing?: string;
     }
   // Both directions: sent once after hello and whenever local state changes.
   | { v: number; type: 'lockStateSync'; lockState: LockState }

@@ -3,10 +3,19 @@ import { CLASSIFIER_BACKEND, EMBED_MODEL_ID, MODEL_ID, TEST_TITLES } from '../sh
 import { addOverride } from '../shared/overrides';
 import { addFeedback } from '../shared/feedback';
 import { getLockStatus } from '../shared/lock';
+import { getSettings } from '../shared/settings';
+import { NEUTRAL_PREFIX } from '../shared/prototypes';
 import { cleanTitle } from '../shared/titles';
-import type { CompanionStatusResponse, Request, TestPairResponse } from '../shared/messages';
+import { hostnameOf } from '../shared/url-signals';
+import type {
+  CompanionStatusResponse,
+  Request,
+  SubItemsResponse,
+  TestPairResponse,
+} from '../shared/messages';
 import { classify } from './classifier';
-import { initBlocker } from './blocker';
+import { consumeOverrideToken } from './override-tokens';
+import { evaluateSubItems, initBlocker } from './blocker';
 import { getCompanionSnapshot, initCompanionBridge } from './companion';
 import { initFeedbackUploader } from './feedback-uploader';
 import { initLockEnforcer } from './lock-enforcer';
@@ -37,7 +46,22 @@ api.runtime.onInstalled.addListener(({ reason }) => {
 });
 
 api.runtime.onMessage.addListener(
-  (msg: Request, sender, sendResponse: (r: TestPairResponse | CompanionStatusResponse) => void) => {
+  (
+    msg: Request,
+    sender,
+    sendResponse: (r: TestPairResponse | CompanionStatusResponse | SubItemsResponse) => void,
+  ) => {
+    // Defense-in-depth (red-team #34): only this extension's own contexts
+    // (options/popup/content scripts) may invoke these handlers. Web pages
+    // can't reach runtime messaging today (no externally_connectable) — this
+    // keeps the handlers unreachable if that ever regresses.
+    if (sender.id !== api.runtime.id) return false;
+    if (msg?.type === 'EVAL_SUBITEMS') {
+      evaluateSubItems(msg.items ?? [], sender.tab?.id)
+        .then((results) => sendResponse({ ok: true, results }))
+        .catch((e) => sendResponse({ ok: false, error: String(e) }));
+      return true;
+    }
     if (msg?.type === 'TEST_PAIR') {
       (async () => {
         const results = [];
@@ -60,7 +84,11 @@ api.runtime.onMessage.addListener(
       // classifier via the user-approved neutral centroid.
       void (async () => {
         if ((await getLockStatus()).settingsLocked) return;
-        await addOverride(msg.title);
+        // Only a genuine rendered block screen may allowlist: the nonce
+        // minted at injection is consumed once, so replayed or forged
+        // OVERRIDE messages can't write overrides or feedback.
+        if (!(await consumeOverrideToken(msg.nonce))) return;
+        await addOverride(msg.title, hostnameOf(sender.tab?.url ?? msg.url ?? ''));
         await addFeedback({
           kind: 'false_positive',
           title: msg.title,
@@ -77,6 +105,24 @@ api.runtime.onMessage.addListener(
       // Popup's "this page should have been blocked" — classify (usually a
       // cache hit) so the record captures the verdict being corrected.
       (async () => {
+        // Mirror the OVERRIDE guard: while locked, forged corrections must
+        // not weaken the classifier (red-team 2026-11 — this handler was the
+        // remaining unguarded feedback write path).
+        if ((await getLockStatus()).settingsLocked) {
+          sendResponse({ ok: false, error: 'locked' });
+          return;
+        }
+        // correctedLabel becomes a centroid key — only a configured,
+        // non-neutral label may be recorded; anything else (e.g. a forged
+        // 'neutral: …' key) would mint a never-block centroid on demand.
+        const settings = await getSettings();
+        if (
+          !settings.labels.includes(msg.correctedLabel) ||
+          msg.correctedLabel.startsWith(NEUTRAL_PREFIX)
+        ) {
+          sendResponse({ ok: false, error: 'unknown label' });
+          return;
+        }
         const title = cleanTitle(msg.title) || msg.title;
         const outcome = await classify({ title });
         await addFeedback({
@@ -95,9 +141,17 @@ api.runtime.onMessage.addListener(
       return true;
     }
     if (msg?.type === 'GET_COMPANION_STATUS') {
-      getCompanionSnapshot()
-        .then((snapshot) => sendResponse({ ok: true, snapshot }))
-        .catch((e) => sendResponse({ ok: false, error: String(e) }));
+      (async () => {
+        const snapshot = await getCompanionSnapshot();
+        // With "Allow in Incognito" off, Incognito windows run no extension
+        // pages at all and bypass blocking entirely — surface the state so
+        // the options page can warn. Fail open (true): a query error should
+        // never raise a false alarm about Incognito bypasses.
+        const incognitoAllowed = await api.extension
+          .isAllowedIncognitoAccess()
+          .catch(() => true);
+        sendResponse({ ok: true, snapshot, incognitoAllowed });
+      })().catch((e) => sendResponse({ ok: false, error: String(e) }));
       return true;
     }
     if (msg?.type === 'CLOSE_TAB') {

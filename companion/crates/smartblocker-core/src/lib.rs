@@ -20,3 +20,4 @@ pub mod procwatch;
 pub mod protocol;
 pub mod registration;
 pub mod store;
+pub mod supervisor;

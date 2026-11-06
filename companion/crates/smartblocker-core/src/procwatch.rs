@@ -12,6 +12,15 @@ pub struct ProcInfo {
     /// never match its stem); `name()` is only the fallback when the exe
     /// path is unreadable (e.g. zombie or permission-denied).
     pub name: String,
+    /// Lowercased command-line arguments: the fingerprint data behind
+    /// bypass-flag detection (`--incognito`, `--disable-extensions`) and
+    /// anti-rename engine detection (`--type=renderer`, `-contentproc`).
+    /// Empty for tests that don't exercise the command line.
+    pub cmd: Vec<String>,
+    /// Lowercased full exe path when readable. The enforcer's recorded-PID
+    /// immunity binds to this (exe under the companion's install dir), so a
+    /// process merely RENAMED to a protected stem can't inherit trust.
+    pub exe: Option<String>,
 }
 
 pub trait ProcessSource {
@@ -22,31 +31,62 @@ pub trait ProcessSource {
 
 pub struct SysinfoSource {
     sys: System,
+    /// Lowercased dir of OUR OWN executable: the identity anchor for the
+    /// enforcer's recorded-PID set (our daemon/watchdog/nm-host all ship in
+    /// the same dir; every same-stem process elsewhere is a decoy).
+    own_dir: Option<String>,
 }
 
 impl SysinfoSource {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        Self { sys: System::new() }
+        let own_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|dir| dir.to_string_lossy().to_lowercase()));
+        Self {
+            sys: System::new(),
+            own_dir,
+        }
     }
 }
 
 impl ProcessSource for SysinfoSource {
     fn snapshot(&mut self) -> Vec<ProcInfo> {
-        // Selective refresh: we only consume pid + exe/name.
+        // Selective refresh: we only consume pid + exe/name + cmdline.
         self.sys.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,
-            ProcessRefreshKind::nothing().with_exe(UpdateKind::OnlyIfNotSet),
+            ProcessRefreshKind::nothing()
+                .with_exe(UpdateKind::OnlyIfNotSet)
+                .with_cmd(UpdateKind::OnlyIfNotSet),
         );
-        self.sys
+        let procs: Vec<ProcInfo> = self
+            .sys
             .processes()
             .iter()
             .map(|(pid, p)| ProcInfo {
                 pid: pid.as_u32(),
                 name: stem_of(p),
+                cmd: p
+                    .cmd()
+                    .iter()
+                    .map(|s| s.to_string_lossy().to_lowercase())
+                    .collect(),
+                exe: p.exe().map(|path| path.to_string_lossy().to_lowercase()),
             })
-            .collect()
+            .collect();
+        // Keep kill-immunity fresh from the same data the enforcer tick will
+        // judge: the daemon only snapshots while enforcing, so the set is
+        // rebuilt right where it is used (dead pids and pid-reuse drop out
+        // on every refresh, and late-spawned nm-host relays are adopted).
+        if let Some(dir) = &self.own_dir {
+            crate::enforcer::install_protected_pids(crate::enforcer::rebuilt_protected_pids(
+                &procs,
+                std::process::id(),
+                dir,
+            ));
+        }
+        procs
     }
 
     fn kill(&mut self, pid: u32) -> bool {
@@ -62,6 +102,19 @@ fn stem_of(p: &sysinfo::Process) -> String {
         .and_then(|path| path.file_stem())
         .map(|s| s.to_string_lossy().to_lowercase())
         .unwrap_or_else(|| p.name().to_string_lossy().to_lowercase())
+}
+
+/// Cheap liveness probe for one pid (the supervisor thread's "is my
+/// watchdog still there?" check — no full process refresh).
+pub fn pid_alive(pid: u32) -> bool {
+    let pid = sysinfo::Pid::from_u32(pid);
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing(),
+    );
+    sys.process(pid).is_some()
 }
 
 /// Scriptable source for tests (enforcer scenarios, M5 daemon tests, e2e
@@ -111,10 +164,14 @@ mod tests {
         let a = vec![ProcInfo {
             pid: 1,
             name: "chrome".into(),
+            cmd: Vec::new(),
+            exe: None,
         }];
         let b = vec![ProcInfo {
             pid: 2,
             name: "steam".into(),
+            cmd: Vec::new(),
+            exe: None,
         }];
         let mut src = FakeSource::new(vec![a.clone(), b.clone()]);
         assert_eq!(src.snapshot(), a);
@@ -140,5 +197,12 @@ mod tests {
         let me = std::process::id();
         let procs = src.snapshot();
         assert!(procs.iter().any(|p| p.pid == me));
+    }
+
+    #[test]
+    fn pid_alive_knows_the_current_process_and_a_dead_one() {
+        assert!(pid_alive(std::process::id()));
+        // pid 0 is never a userspace process.
+        assert!(!pid_alive(0));
     }
 }

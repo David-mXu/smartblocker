@@ -10,12 +10,30 @@
 # With no EXPORT_TOKEN set the export route fails closed (503); ingest still
 # works, so an un-configured deploy collects but cannot be read.
 #
+# RETENTION (#32): rows expire 90 days after receipt (expires_at in schema.sql;
+# PRIVACY.md "Data retention") and are purged by the daily cron below; the
+# write path also lazily deletes expired rows and export excludes them.
+# Users can erase their rows earlier via POST /v1/delete {installId} (see
+# src/index.js for the honest auth design: rate-limited + logged, because a
+# public bundle cannot hold per-install secrets).
+#
+# ANTI-ABUSE (#18): ingest enforces D1 fixed-window limits — 100 records/day/
+# install, 300/day/IP, 10 requests/min bursts — plus a 350 KiB pre-read body
+# cap. BELT-AND-SUSPENDERS FOR PRODUCTION: also create a Cloudflare Rate
+# Limiting rule on POST /v1/feedback in the dashboard (Security → WAF →
+# Rate limiting rules — dashboard-managed, NOT wrangler), e.g. block 10-minute
+# any IP above ~60 requests/minute. The in-worker limits understand installId
+# semantics; the edge rule sheds floods before they reach the worker at all.
+#
 # Harvest the data with:
 #   node ../scripts/import-feedback.mjs --from-worker \
 #        --endpoint=https://<...>.workers.dev --token=$EXPORT_TOKEN
 name = "smartblocker-feedback"
 main = "src/index.js"
 compatibility_date = "2026-06-01"
+
+[triggers]
+crons = ["0 4 * * *"] # daily 04:00 UTC: purge expired feedback + stale rate-limit buckets
 
 [[d1_databases]]
 binding = "DB"

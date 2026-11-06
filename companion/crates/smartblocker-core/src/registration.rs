@@ -94,7 +94,9 @@ pub fn uninstall_linux(home: &Path) -> Vec<PathBuf> {
 }
 
 /// XDG autostart entry so the daemon survives logout/login. Windows uses the
-/// HKCU Run key (M7).
+/// HKCU Run key (M7). Exec launches the WATCHDOG supervisor (quoted: install
+/// paths may contain spaces) — it spawns the daemon and revives it whenever
+/// the IPC socket dies, so `pkill` after login can't end hard enforcement.
 pub fn install_autostart_linux(home: &Path, daemon_path: &Path) -> io::Result<PathBuf> {
     let dir = home.join(".config/autostart");
     fs::create_dir_all(&dir)?;
@@ -102,7 +104,7 @@ pub fn install_autostart_linux(home: &Path, daemon_path: &Path) -> io::Result<Pa
     fs::write(
         &path,
         format!(
-            "[Desktop Entry]\nType=Application\nName=SmartBlocker Companion\nExec={} run\nX-GNOME-Autostart-enabled=true\n",
+            "[Desktop Entry]\nType=Application\nName=SmartBlocker Companion\nExec=\"{}\" watchdog\nX-GNOME-Autostart-enabled=true\n",
             daemon_path.display()
         ),
     )?;
@@ -226,7 +228,7 @@ mod tests {
         )
         .unwrap();
         let content = fs::read_to_string(path).unwrap();
-        assert!(content.contains("Exec=/opt/smartblocker/smartblocker-daemon run"));
+        assert!(content.contains("Exec=\"/opt/smartblocker/smartblocker-daemon\" watchdog"));
         assert!(uninstall_autostart_linux(home.path()));
         assert!(!uninstall_autostart_linux(home.path()));
     }

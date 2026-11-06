@@ -25,9 +25,24 @@ pub struct CompanionConfig {
     /// Extra exe stems treated as incompatible browsers — the e2e uses this
     /// to nominate a fake browser binary.
     pub extra_incompatible_browsers: Vec<String>,
-    /// Pro license key. Unvalidated for now — see `license::is_pro`.
+    /// Pro license key (`SBPRO1.<payload_hex>.<hmac_hex>`). Fail-CLOSED
+    /// (#24): None/empty or an unverifiable key is NOT Pro; the pre-store
+    /// dev period is covered by the daemon's SBPRO_DEV_OPEN=1 escape hatch
+    /// instead. Expiry/grace semantics — see `license`.
     pub license_key: Option<String>,
+    /// Bearer tokens pairing browser profiles to the daemon (TOFU, one per
+    /// extension profile; the extension sends its token in `hello.pairing`).
+    /// Connections presenting none/unknown tokens get redacted status, their
+    /// password writes stripped, and their heartbeats ignored. New tokens
+    /// are only adopted while UNLOCKED — while locked, the pairing set is as
+    /// frozen as every other setting. Bounded: oldest evicted past the cap.
+    pub pairing_tokens: Vec<String>,
 }
+
+/// Cap on remembered pairing tokens — one per browser profile is the honest
+/// workload; the bound keeps an unlocked-window attacker from growing the
+/// file (or flushing honest tokens) without limit.
+pub const MAX_PAIRING_TOKENS: usize = 32;
 
 const LOCK_STATE_FILE: &str = "lock-state.json";
 const CONFIG_FILE: &str = "config.json";
@@ -123,6 +138,7 @@ mod tests {
             timer_until: Some(1_720_000_000_000),
             frozen_until: None,
             password_hash: Some("ab".repeat(32)),
+            password_ts: 4,
             schedules: vec![],
             schedules_updated_at: 5,
         };

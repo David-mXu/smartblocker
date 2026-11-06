@@ -28,9 +28,9 @@ async function refresh() {
       banner.textContent = 'No lock active';
       banner.className = '';
     }
-    mark($('enf-app'), true, '');
-    mark($('enf-watchdog'), true, '');
-    $('enf-policy').textContent = s.policyEnforce
+    mark($('enf-app'), s.enforcement?.appBlocking ?? false, '');
+    mark($('enf-watchdog'), s.enforcement?.watchdog ?? false, '');
+    $('enf-policy').textContent = (s.enforcement?.policyProtected ?? s.policyEnforce)
       ? '✓ active'
       : 'unavailable until store release';
     if (document.activeElement !== $('apps')) {

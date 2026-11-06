@@ -18,7 +18,10 @@ use serde_json::Value;
 /// the registry entries / manifest files written by the companion.
 pub const NM_HOST_NAME: &str = "dev.davidxu.smartblocker";
 
-pub const PROTOCOL_VERSION: u32 = 1;
+/// v2: hello gains `pairing` (daemon authenticates the channel — see
+/// `daemon::authenticate`) and LockState gains `passwordTs`. Unknown fields
+/// are ignored by older peers, but only v2+ daemons get full lock sync.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Heartbeat cadence while the port is open. The companion treats a gap of
 /// ~2 misses (45s, `enforcer::HEARTBEAT_STALE_MS`) as "extension not
@@ -50,7 +53,9 @@ pub struct CompanionEnforcement {
 #[serde(rename_all = "camelCase")]
 pub struct CompanionStatus {
     pub companion_version: String,
-    /// License stub — always true this milestone; real licensing is Phase 4b.
+    /// The license gate's verdict (`license::is_pro`): real offline
+    /// verification, fail-closed on a missing/invalid key, with the
+    /// documented `SBPRO_DEV_OPEN=1` pre-store escape hatch + expiry grace.
     pub pro: bool,
     pub enforcement: CompanionEnforcement,
     /// The companion's merged view of the lock state. Receivers merge it in.
@@ -60,13 +65,19 @@ pub struct CompanionStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum CompanionMessage {
-    /// extension -> companion: first message after the port opens.
+    /// extension -> companion: first message after the port opens. `pairing`
+    /// is the bearer token authenticating this browser profile to the daemon
+    /// (TOFU — persisted by both sides; re-pairing is refused while locked).
+    /// Without it the daemon redacts password state, strips password writes,
+    /// and ignores heartbeats for watchdog purposes.
     #[serde(rename_all = "camelCase")]
     Hello {
         v: u32,
         ext_version: String,
         browser: CompanionBrowser,
         extension_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pairing: Option<String>,
     },
     /// Both directions: sent once after hello and whenever local state changes.
     #[serde(rename_all = "camelCase")]
@@ -94,6 +105,25 @@ pub enum CompanionMessage {
         v: u32,
         message: String,
     },
+    /// COMPANION-INTERNAL liveness probe (the watchdog supervisor's
+    /// daemon-squat check, and the idle keepalive for long-lived unauthenticated
+    /// local UI connections). Deliberately NOT mirrored as a sendable type in
+    /// `src/shared/companion-protocol.ts`: the extension never sends it and
+    /// must never need to — it expires stale on the extension side like any
+    /// unknown type. Answered with `Pong`; a socket squatter that accepts
+    /// TCP-style connects but can't answer is detected by the watchdog.
+    Ping {
+        v: u32,
+    },
+    /// companion-internal answer to `Ping`: the daemon's pid + monotonic ms
+    /// since ITS start — both liveness and identity-of-instance, so a
+    /// respawned daemon is distinguishable from a stale answer.
+    #[serde(rename_all = "camelCase")]
+    Pong {
+        v: u32,
+        pid: u32,
+        mono_ms: u64,
+    },
 }
 
 /// Decode an already-framed JSON value; `None` for unknown/malformed message
@@ -115,12 +145,13 @@ mod tests {
             ext_version: "0.5.0".into(),
             browser: CompanionBrowser::Chrome,
             extension_id: "abcdef".into(),
+            pairing: None,
         };
         assert_eq!(
             serde_json::to_value(&hello).unwrap(),
             json!({
                 "type": "hello",
-                "v": 1,
+                "v": 2,
                 "extVersion": "0.5.0",
                 "browser": "chrome",
                 "extensionId": "abcdef"
@@ -139,6 +170,7 @@ mod tests {
                 "lockState": {
                     "timerUntil": null,
                     "passwordHash": null,
+                    "passwordTs": 0,
                     "frozenUntil": null,
                     "schedules": [],
                     "schedulesUpdatedAt": 0
@@ -150,6 +182,20 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&heartbeat).unwrap(),
             json!({ "type": "heartbeat", "v": 1, "now": 1234 })
+        );
+
+        // A paired hello carries the bearer token; without it the field is
+        // omitted entirely (older peers ignore it either way).
+        let paired = CompanionMessage::Hello {
+            v: PROTOCOL_VERSION,
+            ext_version: "0.5.0".into(),
+            browser: CompanionBrowser::Chrome,
+            extension_id: "abcdef".into(),
+            pairing: Some("tok".into()),
+        };
+        assert_eq!(
+            serde_json::to_value(&paired).unwrap()["pairing"],
+            json!("tok")
         );
 
         let status = CompanionMessage::CompanionStatus {
@@ -172,6 +218,30 @@ mod tests {
         assert!(v.get("running").is_none());
         assert_eq!(v["status"]["companionVersion"], "0.1.0");
         assert_eq!(v["status"]["enforcement"]["policyProtected"], false);
+    }
+
+    #[test]
+    fn ping_pong_wire_shapes_are_the_companion_internal_probe() {
+        // The watchdog liveness probe (red-team #7 residual): tiny frames,
+        // pong carries identity-of-instance (pid + daemon-start mono).
+        let ping = CompanionMessage::Ping {
+            v: PROTOCOL_VERSION,
+        };
+        assert_eq!(
+            serde_json::to_value(&ping).unwrap(),
+            json!({ "type": "ping", "v": 2 })
+        );
+        let pong = CompanionMessage::Pong {
+            v: PROTOCOL_VERSION,
+            pid: 4321,
+            mono_ms: 99,
+        };
+        let value = serde_json::to_value(&pong).unwrap();
+        assert_eq!(
+            value,
+            json!({ "type": "pong", "v": 2, "pid": 4321, "monoMs": 99 })
+        );
+        assert_eq!(parse_message(&value), Some(pong));
     }
 
     #[test]

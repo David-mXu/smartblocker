@@ -1,6 +1,10 @@
 node_modules/
 dist/
 .e2e-profile/
+.e2e-profile-p1/
+.e2e-profile-p2/
+.e2e-profile-security/
+.e2e-companion-profile/
 *.local
 .DS_Store
 # Private key that fixes the Chrome extension ID (manifest "key" is derived

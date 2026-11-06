@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Blocked — Smart Blocker</title>
+    <!--
+      Extension-OWNED block page. declarativeNetRequest session rules redirect
+      force-locked blocked tabs here (src/background/force-redirect.ts).
+      CSP comes from the manifest (script-src 'self'): no inline scripts, no
+      remote assets; fonts are self-hosted via src/styles/globals.css.
+      Everything dynamic is rendered from blocked.ts via textContent only —
+      the query string is attacker-influenced (this page is web-accessible).
+    -->
+  </head>
+  <body class="m-0 p-0 bg-[#070709] text-zinc-50 antialiased">
+    <div id="root"></div>
+    <script type="module" src="./blocked.ts"></script>
+  </body>
+</html>

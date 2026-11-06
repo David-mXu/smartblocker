@@ -57,12 +57,19 @@ fn get_status() -> Result<serde_json::Value, String> {
     let store = store()?;
     let lock_state = store.load_lock_state();
     let config = store.load_config();
+    let policy_protected = config.policy_enforce && config.extension_update_url.is_some();
     Ok(json!({
         "lockState": lock_state,
         "status": derive_lock_status(&lock_state, now_ms()),
         "appBlocklist": config.app_blocklist,
         "pro": license::is_pro(&config),
         "policyEnforce": config.policy_enforce,
+        "daemonRunning": ipc::connect(DEFAULT_SOCKET_NAME).is_ok(),
+        "enforcement": {
+            "appBlocking": true,
+            "watchdog": true,
+            "policyProtected": policy_protected,
+        },
         "version": env!("CARGO_PKG_VERSION"),
     }))
 }
@@ -163,14 +170,19 @@ fn main() {
         ])
         .setup(|app| {
             // The embedded daemon IS the companion: same core, same socket
-            // the nm-host relays dial. Single-instance via the IPC bind.
-            spawn_daemon(DaemonOptions {
-                socket_name: DEFAULT_SOCKET_NAME.to_string(),
-                store: Store::at_default_dir().expect("data dir"),
-                extra_incompatible: vec![],
-                notifier: Box::new(TauriNotifier(app.handle().clone())),
-                dry_run_kills: false,
-            });
+            // the nm-host relays dial. Single-instance via the IPC bind —
+            // but if a daemon is ALREADY live on the socket (e.g. the
+            // autostarted headless one), attach to it instead of spawning a
+            // loser that immediately dies on AddrInUse.
+            if ipc::connect(DEFAULT_SOCKET_NAME).is_err() {
+                spawn_daemon(DaemonOptions {
+                    socket_name: DEFAULT_SOCKET_NAME.to_string(),
+                    store: Store::at_default_dir().expect("data dir"),
+                    extra_incompatible: vec![],
+                    notifier: Box::new(TauriNotifier(app.handle().clone())),
+                    dry_run_kills: false,
+                });
+            }
 
             let show = MenuItem::with_id(app, "show", "Open SmartBlocker", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;

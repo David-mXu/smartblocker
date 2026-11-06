@@ -4,8 +4,10 @@ import { buildClassifierText, inputCacheKey } from '../shared/build-input';
 import {
   CLASSIFIER_BACKEND,
   EMBED_MODEL_ID,
+  EMBED_MODEL_REVISION,
   HYPOTHESIS_TEMPLATE,
   MODEL_ID,
+  MODEL_REVISION,
   SOFTMAX_TEMPERATURE,
   TITLE_CACHE_MAX,
 } from '../shared/config';
@@ -71,6 +73,7 @@ async function createPipeline(): Promise<ZeroShotPipeline> {
   const pipe = await pipeline('zero-shot-classification', MODEL_ID, {
     dtype: 'q8',
     device: 'wasm',
+    revision: MODEL_REVISION, // pinned HF commit (red-team #19) — see config.ts
     progress_callback: logProgress,
   });
   return pipe as unknown as ZeroShotPipeline;
@@ -97,6 +100,7 @@ async function createEmbedPipeline(): Promise<FeatureExtractionPipeline> {
   const pipe = await pipeline('feature-extraction', EMBED_MODEL_ID, {
     dtype: 'q8',
     device: 'wasm',
+    revision: EMBED_MODEL_REVISION, // pinned HF commit (red-team #19) — see config.ts
     progress_callback: logProgress,
   });
   return pipe as unknown as FeatureExtractionPipeline;
@@ -132,17 +136,24 @@ async function embedTexts(
 // Centroid vectors are derived data: rebuilt whenever their version (model id
 // + active labels + seed/user-correction texts) changes, cached in
 // storage.local so a fresh SW start skips the ~1s rebuild.
-type CentroidCache = { version: string; names: string[]; vectors: number[][] };
+type CentroidCache = {
+  version: string;
+  names: string[];
+  vectors: number[][];
+  seedVectors?: number[][][];
+};
 
 let centroidsInFlight: Promise<CentroidCache> | null = null;
 
 async function getCentroids(labels: string[]): Promise<CentroidCache & { buildMs: number }> {
   const specs = centroidSpecs(labels, await getPrototypeExamples());
-  const version = prototypesVersion(EMBED_MODEL_ID, specs);
+  const version = prototypesVersion(EMBED_MODEL_ID, specs) + ':mp1';
 
   const stored = await api.storage.local.get('centroidCache');
   const cached = stored.centroidCache as CentroidCache | undefined;
-  if (cached && cached.version === version) return { ...cached, buildMs: 0 };
+  if (cached && cached.version === version && cached.seedVectors) {
+    return { ...cached, buildMs: 0 };
+  }
 
   // Another call may already be rebuilding the same version — don't duplicate.
   if (centroidsInFlight) {
@@ -154,13 +165,15 @@ async function getCentroids(labels: string[]): Promise<CentroidCache & { buildMs
   centroidsInFlight = (async () => {
     const names: string[] = [];
     const vectors: number[][] = [];
-    // One embed batch per centroid (~8 texts) keeps peak memory low.
+    const seedVectors: number[][][] = [];
+    // One embed batch per centroid keeps peak memory low.
     for (const spec of specs) {
       const { vectors: vecs } = await embedTexts(spec.texts);
       names.push(spec.name);
       vectors.push(meanNormalize(vecs));
+      seedVectors.push(vecs);
     }
-    const built: CentroidCache = { version, names, vectors };
+    const built: CentroidCache = { version, names, vectors, seedVectors };
     await api.storage.local.set({ centroidCache: built });
     return built;
   })();
@@ -174,6 +187,66 @@ async function getCentroids(labels: string[]): Promise<CentroidCache & { buildMs
   } finally {
     centroidsInFlight = null;
   }
+}
+
+// ---- Focus / Open-Tab Context embedding cache ----
+let focusVecCache: { key: string; vec: number[]; seedVecs: number[][] } | null = null;
+
+function focusContextKey(fc?: ClassifyInput['focusContext']): string {
+  if (!fc) return '';
+  const goal = (fc.focusGoal ?? '').trim().toLowerCase();
+  const tabs = (fc.openTabTitles ?? [])
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean)
+    .slice(0, 6);
+  if (!goal && tabs.length === 0) return '';
+  return `${goal}\x1f${tabs.join('\x1e')}`;
+}
+
+async function resolveFocusVector(
+  fc?: ClassifyInput['focusContext'],
+): Promise<{
+  vec: number[] | null;
+  seedVecs: number[][];
+  hasExplicitGoal: boolean;
+  inferMs: number;
+}> {
+  const key = focusContextKey(fc);
+  if (!key || !fc) return { vec: null, seedVecs: [], hasExplicitGoal: false, inferMs: 0 };
+  const goal = (fc.focusGoal ?? '').trim();
+  const tabs = (fc.openTabTitles ?? []).map((t) => t.trim()).filter(Boolean).slice(0, 6);
+  if (focusVecCache && focusVecCache.key === key) {
+    return {
+      vec: focusVecCache.vec,
+      seedVecs: focusVecCache.seedVecs,
+      hasExplicitGoal: Boolean(goal),
+      inferMs: 0,
+    };
+  }
+  const textsToEmbed: string[] = [];
+  if (goal) textsToEmbed.push(goal);
+  textsToEmbed.push(...tabs);
+  if (textsToEmbed.length === 0) {
+    return { vec: null, seedVecs: [], hasExplicitGoal: false, inferMs: 0 };
+  }
+
+  const { vectors, inferMs } = await embedTexts(textsToEmbed);
+  let combined: number[];
+  let seedVecs: number[][];
+  if (goal && tabs.length > 0) {
+    const goalVec = vectors[0];
+    const tabsMean = meanNormalize(vectors.slice(1));
+    // Weight explicit focus goal 2:1 over passive open-tab titles, and include
+    // goalVec twice in seedVecs so Top-K sub-center pooling never dilutes a
+    // direct goal match with unrelated open tabs.
+    combined = meanNormalize([goalVec, goalVec, tabsMean]);
+    seedVecs = [goalVec, goalVec, ...vectors.slice(1)];
+  } else {
+    combined = meanNormalize(vectors);
+    seedVecs = vectors;
+  }
+  focusVecCache = { key, vec: combined, seedVecs };
+  return { vec: combined, seedVecs, hasExplicitGoal: Boolean(goal), inferMs };
 }
 
 // ---- Title result cache (repeat titles are ~0ms) ----
@@ -215,32 +288,48 @@ async function classifyInProcess(text: string, labels: string[]): Promise<InferR
   };
 }
 
-// Embed backend: one forward pass for the text, then cosine + softmax against
-// the centroid store. Centroid (re)build cost is reported as loadMs.
-async function classifyEmbed(text: string, labels: string[]): Promise<InferResult> {
+// Embed backend: one forward pass for the text, then multi-prototype cosine +
+// softmax against the centroid store. Centroid (re)build cost is reported as loadMs.
+async function classifyEmbed(
+  text: string,
+  labels: string[],
+  focusContext?: ClassifyInput['focusContext'],
+): Promise<InferResult> {
   const centroids = await getCentroids(labels);
-  const { vectors, loadMs, inferMs } = await embedTexts([text]);
+  const [{ vectors, loadMs, inferMs }, focus] = await Promise.all([
+    embedTexts([text]),
+    resolveFocusVector(focusContext),
+  ]);
   const verdict = classifyBySimilarity(
     vectors[0],
-    centroids.names.map((name, i) => ({ name, vec: centroids.vectors[i] })),
+    centroids.names.map((name, i) => ({
+      name,
+      vec: centroids.vectors[i],
+      seedVecs: centroids.seedVectors?.[i],
+    })),
     SOFTMAX_TEMPERATURE,
+    {
+      focusVec: focus.vec,
+      focusSeedVecs: focus.seedVecs,
+      hasExplicitGoal: focus.hasExplicitGoal,
+    },
   );
-  return { ...verdict, loadMs: loadMs + centroids.buildMs, inferMs };
+  return { ...verdict, loadMs: loadMs + centroids.buildMs, inferMs: inferMs + focus.inferMs };
 }
 
 export async function classify(input: ClassifyInput): Promise<ClassifyOutcome> {
   const { labels } = await getSettings();
 
   // The cache key spans every signal (title/channel/context) AND the model
-  // key (backend + model + centroid version), so model switches and user
-  // corrections never serve stale verdicts. Centroid-version lookup is only
-  // meaningful on the embed backend.
+  // key (backend + model + centroid version + active focus context), so model
+  // switches, user corrections, and focus goal changes never serve stale verdicts.
+  const fcKey = focusContextKey(input.focusContext);
   const modelKey =
     CLASSIFIER_BACKEND === 'embed'
       ? `embed:${EMBED_MODEL_ID}:${prototypesVersion(
           EMBED_MODEL_ID,
           centroidSpecs(labels, await getPrototypeExamples()),
-        )}`
+        )}:mp1:${fcKey}`
       : `nli:${MODEL_ID}`;
   const key = inputCacheKey(input, modelKey);
   const text = buildClassifierText(input);
@@ -256,7 +345,7 @@ export async function classify(input: ClassifyInput): Promise<ClassifyOutcome> {
   // read per classification so changes apply without a reload.
   let infer: InferResult;
   if (CLASSIFIER_BACKEND === 'embed') {
-    infer = await classifyEmbed(text, labels);
+    infer = await classifyEmbed(text, labels, input.focusContext);
   } else {
     infer = supportsOffscreen()
       ? await classifyViaOffscreen(text, labels)

@@ -26,6 +26,12 @@ import { EMPTY_LOCK_STATE } from '../shared/lock-math';
 import type { LockState } from '../shared/lock-math';
 
 const SNAPSHOT_KEY = 'companionSnapshot';
+/** Bearer token authenticating this browser profile to the daemon (TOFU):
+ *  generated once per profile, sent in every hello, persisted daemon-side.
+ *  Without it the daemon redacts password fields, ignores our heartbeats for
+ *  watchdog purposes, and strips password writes — the IPC channel is local
+ *  but otherwise unauthenticated (red-team 2026-11). */
+const PAIRING_KEY = 'companionPairing';
 const RETRY_ALARM = 'companion-retry';
 /** Chrome's connectNative SW-keepalive is best-effort (a long-standing bug
  *  can still reap the SW at ~5min); a dead SW stops heartbeating and the
@@ -161,6 +167,16 @@ function onPortDisconnect(p: chrome.runtime.Port): void {
   backoffMs = Math.min(backoffMs * 2, BACKOFF_MAX_MS);
 }
 
+/** Get-or-create the per-profile pairing token. */
+async function pairingToken(): Promise<string> {
+  const stored = await api.storage.local.get(PAIRING_KEY);
+  const existing = stored[PAIRING_KEY];
+  if (typeof existing === 'string' && existing.length > 0) return existing;
+  const token = crypto.randomUUID();
+  await api.storage.local.set({ [PAIRING_KEY]: token });
+  return token;
+}
+
 function connect(): void {
   if (port) return;
   patchSnapshot({ state: 'connecting' });
@@ -178,16 +194,26 @@ function connect(): void {
   p.onDisconnect.addListener(() => onPortDisconnect(p));
   confirmTimer = setTimeout(markConnected, CONNECT_CONFIRM_MS);
 
-  send({
-    v: PROTOCOL_VERSION,
-    type: 'hello',
-    extVersion: api.runtime.getManifest().version,
-    browser: IS_FIREFOX ? 'firefox' : navigator.userAgent.includes('Edg/') ? 'edge' : 'chrome',
-    extensionId: api.runtime.id,
-  });
-  void getLockState().then((lockState) => {
-    if (port === p) send({ v: PROTOCOL_VERSION, type: 'lockStateSync', lockState });
-  });
+  void pairingToken()
+    .then((pairing) => {
+      if (port !== p) return;
+      send({
+        v: PROTOCOL_VERSION,
+        type: 'hello',
+        extVersion: api.runtime.getManifest().version,
+        browser: IS_FIREFOX ? 'firefox' : navigator.userAgent.includes('Edg/') ? 'edge' : 'chrome',
+        extensionId: api.runtime.id,
+        pairing,
+      });
+      // Only after hello auths the connection: the daemon strips password
+      // fields from unauthenticated syncs.
+      return getLockState();
+    })
+    .then((lockState) => {
+      if (port === p && lockState) {
+        send({ v: PROTOCOL_VERSION, type: 'lockStateSync', lockState });
+      }
+    });
 }
 
 /** MV3: called synchronously from index.ts startup. */

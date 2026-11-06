@@ -12,7 +12,13 @@
 
 import { env, pipeline } from '@huggingface/transformers';
 import { api } from '../../shared/api';
-import { EMBED_MODEL_ID, HYPOTHESIS_TEMPLATE, MODEL_ID } from '../../shared/config';
+import {
+  EMBED_MODEL_ID,
+  EMBED_MODEL_REVISION,
+  HYPOTHESIS_TEMPLATE,
+  MODEL_ID,
+  MODEL_REVISION,
+} from '../../shared/config';
 import type { EmbedResult, InferResult, Request } from '../../shared/messages';
 
 // ---- MV3 environment config ----
@@ -70,6 +76,7 @@ async function createPipeline(): Promise<ZeroShotPipeline> {
   const pipe = await pipeline('zero-shot-classification', MODEL_ID, {
     dtype: 'q8',
     device: 'wasm',
+    revision: MODEL_REVISION, // pinned HF commit (red-team #19) — see config.ts
     progress_callback: logProgress,
   });
   return pipe as unknown as ZeroShotPipeline;
@@ -97,6 +104,7 @@ async function createEmbedPipeline(): Promise<FeatureExtractionPipeline> {
   const pipe = await pipeline('feature-extraction', EMBED_MODEL_ID, {
     dtype: 'q8',
     device: 'wasm',
+    revision: EMBED_MODEL_REVISION, // pinned HF commit (red-team #19) — see config.ts
     progress_callback: logProgress,
   });
   return pipe as unknown as FeatureExtractionPipeline;
@@ -134,6 +142,10 @@ api.runtime.onMessage.addListener(
     _sender,
     sendResponse: (result: InferResult | EmbedResult | { error: string }) => void,
   ) => {
+    // Defense-in-depth (red-team #34): only this extension's own contexts may
+    // drive inference. Nothing external can reach this listener today (no
+    // externally_connectable) — keep it that way if that ever regresses.
+    if (_sender.id !== api.runtime.id) return false;
     if (message.type !== 'CLASSIFY' && message.type !== 'EMBED') {
       // Not our message — return false so the channel stays open for other listeners.
       return false;
