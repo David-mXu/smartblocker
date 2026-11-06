@@ -1,79 +1,14 @@
 <!doctype html>
-<html>
+<html lang="en" class="dark">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SmartBlocker</title>
-    <style>
-      body {
-        width: 360px;
-        margin: 0;
-        padding: 12px;
-        font: 13px system-ui, sans-serif;
-      }
-      h1 {
-        font-size: 15px;
-        margin: 0 0 8px;
-      }
-      button {
-        margin: 0 6px 8px 0;
-        padding: 5px 10px;
-        cursor: pointer;
-      }
-      #status {
-        color: #666;
-        margin-bottom: 6px;
-        min-height: 1em;
-      }
-      pre {
-        background: #f4f4f4;
-        border: 1px solid #ddd;
-        border-radius: 4px;
-        padding: 8px;
-        max-height: 380px;
-        overflow: auto;
-        white-space: pre-wrap;
-        word-break: break-word;
-        font-size: 11px;
-        margin: 0;
-      }
-    </style>
+    <!-- Fonts are self-hosted (src/styles/fonts.css + src/assets/fonts/) —
+         no remote font requests at runtime. -->
   </head>
-  <body>
-    <h1>SmartBlocker POC</h1>
-    <div
-      id="lock-line"
-      style="
-        display: none;
-        padding: 6px 8px;
-        margin-bottom: 8px;
-        border-radius: 4px;
-        background: #fef2f2;
-        color: #991b1b;
-        font-weight: 600;
-      "
-    ></div>
-    <div style="margin: 0 0 8px">
-      <span style="font-weight: 600" title="Force blocking ON for a set time — uncancellable">
-        Frozen Turkey:
-      </span>
-      <button class="frozen-btn" data-mins="60">1h</button>
-      <button class="frozen-btn" data-mins="240">4h</button>
-      <button class="frozen-btn" data-mins="480">8h</button>
-    </div>
-    <div>
-      <button id="test-pair">Test Pair</button>
-      <button id="scan-history">Scan History</button>
-      <button id="latency-log">Latency Log</button>
-      <button id="open-options">Options</button>
-    </div>
-    <div style="margin: 0 0 8px; padding: 6px 0; border-top: 1px solid #eee">
-      <select id="report-category" style="max-width: 170px"></select>
-      <button id="report-fn" title="Records a correction SmartBlocker learns from">
-        Should've been blocked
-      </button>
-    </div>
-    <div id="status"></div>
-    <pre id="out">First "Test Pair" click downloads the model (~27MB) — watch the background console for progress.</pre>
+  <body class="w-[392px] min-h-[480px] m-0 p-0 bg-[#070709] text-zinc-50 antialiased selection:bg-zinc-200 selection:text-zinc-950">
+    <div id="root"></div>
     <script type="module" src="./popup.ts"></script>
   </body>
 </html>

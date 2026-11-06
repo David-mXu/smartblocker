@@ -3,7 +3,7 @@
 // The offscreen document's HTML is hand-authored (the offscreen Vite pass has a
 // .ts entry + publicDir:false, so it only emits offscreen.js) — copy it for
 // Chrome/Edge, which is the only target with an offscreen document.
-import { copyFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const target = process.argv[2];
@@ -15,6 +15,15 @@ if (target !== 'chrome' && target !== 'firefox') {
 const dist = join('dist', target);
 copyFileSync(join('manifests', `${target}.json`), join(dist, 'manifest.json'));
 console.log(`[copy-assets] ${target}: manifest -> ${dist}`);
+
+// Extension + toolbar icons (src/assets/icons is the canonical source;
+// regenerate with `node scripts/generate-icons.mjs`).
+mkdirSync(join(dist, 'icons'), { recursive: true });
+for (const size of [16, 32, 48, 128]) {
+  const name = `icon-${size}.png`;
+  copyFileSync(join('src', 'assets', 'icons', name), join(dist, 'icons', name));
+}
+console.log(`[copy-assets] ${target}: icons -> ${join(dist, 'icons')}`);
 
 if (target === 'chrome') {
   copyFileSync(join('src', 'background', 'offscreen', 'offscreen.html'), join(dist, 'offscreen.html'));
