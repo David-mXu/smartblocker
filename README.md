@@ -204,6 +204,7 @@ node scripts/e2e-test.mjs                     # full extension e2e: blocklist, l
 node scripts/e2e-companion-test.mjs           # full companion loop: real Chromium + nm-host + daemon
 node scripts/e2e-p1-overrides-sanitizer.mjs   # host-scoped normalized overrides + sanitizer mask hardening
 node scripts/e2e-p1-privacy-failclosed.mjs    # privacy egress gates (oEmbed/CSP) + fail-closed locks
+SB_FIREFOX=/path/to/firefox node scripts/verify-firefox-dnr.mjs  # live Firefox DNR redirect check
 ```
 
 The `cargo fmt` / `clippy` / `test` gates, `cargo audit`, the shared

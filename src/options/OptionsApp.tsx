@@ -24,8 +24,13 @@ import {
 } from '@phosphor-icons/react';
 import { api } from '../shared/api';
 import { clearFeedback, getFeedback } from '../shared/feedback';
-import { LABELS } from '../shared/config';
-import type { CompanionStatusResponse, HistoryScanState } from '../shared/messages';
+import { FEEDBACK_ENDPOINT, LABELS } from '../shared/config';
+import type {
+  CompanionStatusResponse,
+  DeleteSharedFeedbackResponse,
+  HistoryScanState,
+  SharedFeedbackInfoResponse,
+} from '../shared/messages';
 import type { CompanionSnapshot } from '../shared/companion-protocol';
 import { getSettings, setSettings } from '../shared/settings';
 import {
@@ -205,6 +210,14 @@ export function OptionsApp() {
   const [useTabContext, setUseTabContext] = useState(true);
   const [resolveEmbedTitles, setResolveEmbedTitles] = useState(false);
 
+  // Self-service feedback erasure (#32 P3): installId reveal + delete flow.
+  const [installId, setInstallId] = useState<string | null>(null);
+  const [idRevealed, setIdRevealed] = useState(false);
+  const [idCopied, setIdCopied] = useState(false);
+  const [deleteStage, setDeleteStage] = useState<'idle' | 'confirm' | 'busy'>('idle');
+  const [deleteResult, setDeleteResult] = useState<{ deleted: number } | null>(null);
+  const [deleteError, setDeleteError] = useState('');
+
   // Category Input
   const [customCategory, setCustomCategory] = useState('');
   const [categoryPlaceholder, setCategoryPlaceholder] = useState('e.g. cooking and recipes');
@@ -326,6 +339,55 @@ export function OptionsApp() {
     }
   };
 
+  const refreshInstallId = async () => {
+    try {
+      const resp = (await api.runtime.sendMessage({
+        type: 'GET_SHARED_FEEDBACK_INFO',
+      })) as SharedFeedbackInfoResponse;
+      setInstallId(resp?.ok ? (resp.installId ?? null) : null);
+    } catch {
+      // Background unreachable during SW restart
+    }
+  };
+
+  const copyInstallId = async () => {
+    if (!installId) return;
+    try {
+      await navigator.clipboard.writeText(installId);
+      setIdCopied(true);
+      setTimeout(() => setIdCopied(false), 1500);
+    } catch {
+      // Clipboard can be unavailable (permissions policy) — the revealed
+      // text stays selectable for manual copy.
+    }
+  };
+
+  const runDeleteShared = async () => {
+    if (deleteStage === 'idle') {
+      setDeleteResult(null);
+      setDeleteError('');
+      setDeleteStage('confirm');
+      return;
+    }
+    setDeleteStage('busy');
+    try {
+      const resp = (await api.runtime.sendMessage({
+        type: 'DELETE_SHARED_FEEDBACK',
+      })) as DeleteSharedFeedbackResponse;
+      if (resp?.ok) {
+        setDeleteResult({ deleted: resp.deleted ?? 0 });
+        setDeleteError('');
+      } else {
+        setDeleteResult(null);
+        setDeleteError(resp?.error ?? 'delete failed');
+      }
+    } catch (e) {
+      setDeleteResult(null);
+      setDeleteError(String(e));
+    }
+    setDeleteStage('idle');
+  };
+
   useEffect(() => {
     const load = async () => {
       const s = await getSettings();
@@ -346,6 +408,7 @@ export function OptionsApp() {
       setScheduleRules(ls.schedules.map((r) => ({ ...r, days: [...r.days] })));
       await applyLockUI();
       await refreshFeedbackCount();
+      await refreshInstallId();
     };
 
     void load();
@@ -1576,6 +1639,85 @@ export function OptionsApp() {
                       video ID to www.youtube.com. Never fires for youtube-nocookie or privacy
                       facades. See PRIVACY.md.
                     </p>
+                  </div>
+
+                  {/* Self-service erasure (#32 P3): installId reveal + delete.
+                       The id only exists after the FIRST shared correction —
+                       never minted just for viewing. */}
+                  <div className="rounded-xl border border-zinc-800/80 bg-[#111117] p-4">
+                    <span className="text-xs font-medium text-zinc-200 block mb-2">
+                      Your shared feedback data
+                    </span>
+                    <div className="flex items-center justify-between gap-3 mb-2">
+                      <span className="text-[11px] text-zinc-500">
+                        Install ID (random, not tied to you):
+                      </span>
+                      {installId ? (
+                        <span className="flex items-center gap-2">
+                          <code className="text-[11px] text-zinc-300 font-mono">
+                            {idRevealed ? installId : `${installId.slice(0, 8)}…••••`}
+                          </code>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            className="h-6 px-2 text-[10px]"
+                            onClick={() => setIdRevealed((v) => !v)}
+                          >
+                            {idRevealed ? 'Hide' : 'Reveal'}
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            className="h-6 px-2 text-[10px]"
+                            onClick={() => void copyInstallId()}
+                          >
+                            {idCopied ? 'Copied!' : 'Copy'}
+                          </Button>
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-zinc-600 italic">
+                          none yet — created the first time you share a correction
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="m-0 text-[11px] text-zinc-500 leading-relaxed">
+                        Deletes every record shared from this install. Rate-limited to once per
+                        hour; unshared records also auto-expire after 90 days. See PRIVACY.md.
+                      </p>
+                      <Button
+                        variant={deleteStage === 'confirm' ? 'destructive' : 'secondary'}
+                        size="sm"
+                        className="h-7 px-3 text-[11px] shrink-0"
+                        disabled={
+                          deleteStage === 'busy' || (!FEEDBACK_ENDPOINT && deleteStage !== 'confirm')
+                        }
+                        onClick={() => void runDeleteShared()}
+                      >
+                        {deleteStage === 'busy'
+                          ? 'Deleting…'
+                          : deleteStage === 'confirm'
+                            ? 'Click again to confirm delete'
+                            : 'Delete shared data'}
+                      </Button>
+                    </div>
+                    {!FEEDBACK_ENDPOINT && (
+                      <p className="m-0 mt-2 text-[11px] text-zinc-600 italic">
+                        Feedback sharing is not configured in this build — nothing was ever
+                        uploaded, so there is nothing to delete.
+                      </p>
+                    )}
+                    {deleteResult && (
+                      <p className="m-0 mt-2 text-[11px] text-emerald-400">
+                        Done — {deleteResult.deleted} record(s) deleted
+                        {deleteResult.deleted === 0 ? ' (nothing had been shared)' : ''}.
+                      </p>
+                    )}
+                    {deleteError && (
+                      <p className="m-0 mt-2 text-[11px] text-red-400">
+                        Could not delete: {deleteError}
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>

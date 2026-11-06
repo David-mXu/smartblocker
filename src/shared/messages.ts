@@ -39,6 +39,13 @@ export type Request =
   // Options page: state of the Native Messaging bridge to the desktop
   // companion (silently 'not-installed' for free-tier users without it).
   | { type: 'GET_COMPANION_STATUS' }
+  // Options page: reveal the installId (or null when corrections were never
+  // shared — the id is only minted on first upload) so the user can
+  // self-serve erasure (#32 P3).
+  | { type: 'GET_SHARED_FEEDBACK_INFO' }
+  // Options page: delete every feedback record this install shared, via the
+  // worker's self-service POST /v1/delete (rate-limited 1/hr per installId).
+  | { type: 'DELETE_SHARED_FEEDBACK' }
   // Content sanitizer: batch-classify embedded videos & SERP result cards.
   | { type: 'EVAL_SUBITEMS'; items: SubItemEvalRequest[] };
 
@@ -57,6 +64,20 @@ export interface CompanionStatusResponse {
   /** Whether "Allow in Incognito" is on for the extension — off means
    *  Incognito windows bypass all blocking (warned about in the options UI). */
   incognitoAllowed?: boolean;
+  error?: string;
+}
+
+export interface SharedFeedbackInfoResponse {
+  ok: boolean;
+  /** Random UUID minted at first share, or null when nothing was ever shared. */
+  installId?: string | null;
+  error?: string;
+}
+
+export interface DeleteSharedFeedbackResponse {
+  ok: boolean;
+  /** Rows the worker reported deleted (0 is normal if nothing was shared). */
+  deleted?: number;
   error?: string;
 }
 

@@ -24,6 +24,44 @@ async function getInstallId(): Promise<string> {
   return fresh;
 }
 
+/** Read-only variant for the options UI (#32 P3): does NOT mint an id, so
+ *  installs that never shared corrections honestly render "no id yet". */
+export async function getExistingInstallId(): Promise<string | null> {
+  const { installId } = await api.storage.local.get('installId');
+  return typeof installId === 'string' && installId ? installId : null;
+}
+
+/** Self-service erasure (#32 P3): ask the worker to delete every record this
+ *  install shared. Mirrors the worker's honest-auth design: no per-install
+ *  secret exists (the bundle is public), so the route is rate-limited to
+ *  1/hr per installId, fully logged, and consequence-bounded — documented in
+ *  PRIVACY.md "Data retention". A 429 surfaces as an error string so the UI
+ *  can say "try again later" instead of pretending the wipe failed worse. */
+export async function deleteSharedFeedback(): Promise<{
+  ok: boolean;
+  deleted?: number;
+  error?: string;
+}> {
+  if (!FEEDBACK_ENDPOINT) return { ok: false, error: 'feedback endpoint not configured' };
+  const installId = await getExistingInstallId();
+  // Nothing was ever uploaded from this install — there is nothing to delete
+  // server-side, and minting an id just to DELETE 0 rows would be noise.
+  if (!installId) return { ok: true, deleted: 0 };
+  try {
+    const res = await fetch(`${FEEDBACK_ENDPOINT.replace(/\/$/, '')}/v1/delete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ installId }),
+    });
+    if (res.status === 429) return { ok: false, error: 'rate-limited — try again in an hour' };
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const body = (await res.json().catch(() => ({}))) as { deleted?: number };
+    return { ok: true, deleted: typeof body.deleted === 'number' ? body.deleted : 0 };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
 async function uploadPending(): Promise<void> {
   if (!FEEDBACK_ENDPOINT) return;
   const { shareFeedback } = await getSettings();

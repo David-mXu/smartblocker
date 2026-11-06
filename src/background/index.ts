@@ -9,7 +9,9 @@ import { cleanTitle } from '../shared/titles';
 import { hostnameOf } from '../shared/url-signals';
 import type {
   CompanionStatusResponse,
+  DeleteSharedFeedbackResponse,
   Request,
+  SharedFeedbackInfoResponse,
   SubItemsResponse,
   TestPairResponse,
 } from '../shared/messages';
@@ -17,7 +19,7 @@ import { classify } from './classifier';
 import { consumeOverrideToken } from './override-tokens';
 import { evaluateSubItems, initBlocker } from './blocker';
 import { getCompanionSnapshot, initCompanionBridge } from './companion';
-import { initFeedbackUploader } from './feedback-uploader';
+import { deleteSharedFeedback, getExistingInstallId, initFeedbackUploader } from './feedback-uploader';
 import { initLockEnforcer } from './lock-enforcer';
 import { scanHistory } from './history-ingester';
 
@@ -49,7 +51,14 @@ api.runtime.onMessage.addListener(
   (
     msg: Request,
     sender,
-    sendResponse: (r: TestPairResponse | CompanionStatusResponse | SubItemsResponse) => void,
+    sendResponse: (
+      r:
+        | TestPairResponse
+        | CompanionStatusResponse
+        | SubItemsResponse
+        | SharedFeedbackInfoResponse
+        | DeleteSharedFeedbackResponse,
+    ) => void,
   ) => {
     // Defense-in-depth (red-team #34): only this extension's own contexts
     // (options/popup/content scripts) may invoke these handlers. Web pages
@@ -152,6 +161,22 @@ api.runtime.onMessage.addListener(
           .catch(() => true);
         sendResponse({ ok: true, snapshot, incognitoAllowed });
       })().catch((e) => sendResponse({ ok: false, error: String(e) }));
+      return true;
+    }
+    if (msg?.type === 'GET_SHARED_FEEDBACK_INFO') {
+      // Options page installId reveal (#32 P3) — read-only, never mints.
+      getExistingInstallId()
+        .then((installId) => sendResponse({ ok: true, installId }))
+        .catch((e) => sendResponse({ ok: false, error: String(e) }));
+      return true;
+    }
+    if (msg?.type === 'DELETE_SHARED_FEEDBACK') {
+      // Options page self-service erasure (#32 P3). No lock guard: erasing
+      // one's own shared records is a privacy right, not a bypass vector —
+      // it weakens nothing the lock protects.
+      deleteSharedFeedback()
+        .then((r) => sendResponse(r))
+        .catch((e) => sendResponse({ ok: false, error: String(e) }));
       return true;
     }
     if (msg?.type === 'CLOSE_TAB') {

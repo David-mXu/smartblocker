@@ -84,9 +84,11 @@ expire.
 **Deleting sooner.** You can erase everything your install has shared by
 POSTing `{ "installId": "<your install id>" }` to `/v1/delete` on the feedback
 endpoint. Your install id is the random UUID mentioned above; it lives in
-extension storage (`storage.local`, key `installId`) — there is currently no
-UI that displays it, but clearing the extension's storage or reinstalling both
-removes your local copy and makes the already-shared rows unlinkable going
+extension storage (`storage.local`, key `installId`). The options page shows
+it under "Your shared feedback data" (masked by default — Reveal + Copy),
+together with a "Delete shared data" button that calls `/v1/delete` for you;
+clearing the extension's storage or reinstalling also removes your local copy
+and makes the already-shared rows unlinkable going
 forward (see below). The delete route has an honest, documented limitation:
 the extension is a public bundle, so the server holds no per-install secret
 that could prove ownership of an id. Deletions are therefore rate-limited to

@@ -82,6 +82,11 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   `EMBED_MODEL_REVISION` cold-starts the download again, and a suite's first
   classify-dependent assertions can time out mid-download; just re-run once
   (the pin-warm cache persists).
+- `SB_FIREFOX=/path/to/firefox node scripts/verify-firefox-dnr.mjs` — live
+  Firefox DNR check (red-team #4): packs dist/firefox, drives raw marionette
+  (both WebDriver flavors refuse moz-extension:// navigation), asserts the
+  Frozen Turkey force-redirect to `blocked.html`, the live session rule, and
+  rule drain on unlock. Self-contained, no npm deps.
 - `node feedback-worker/test/local-test.mjs` — feedback ingestion worker
   tests against a stubbed D1 (no Cloudflare account needed).
 - `cd companion && cargo test && cargo clippy --all-targets -- -D warnings &&

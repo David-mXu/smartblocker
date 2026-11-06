@@ -99,6 +99,28 @@ try {
   console.log(`${cached ? 'PASS' : 'FAIL'} model cache present:`, cacheNames);
   if (!cached) process.exitCode = 1;
 
+  // 3b. #32 P3: options page exposes the self-service erasure card. In this
+  // dev build FEEDBACK_ENDPOINT is '', so the installId never exists and the
+  // delete button is disabled with the "not configured" note — exactly the
+  // honest state. Renders via GET_SHARED_FEEDBACK_INFO through the SW.
+  {
+    const opts = await context.newPage();
+    await opts.goto(`chrome-extension://${extensionId}/options.html`);
+    await opts.waitForSelector('text=Your shared feedback data', { timeout: 15_000 });
+    const noId = await opts.locator('text=none yet — created the first time you share').count();
+    const notConfigured = await opts
+      .locator('text=Feedback sharing is not configured in this build')
+      .count();
+    const deleteBtn = opts.locator('button:has-text("Delete shared data")');
+    const btnDisabled = await deleteBtn.isDisabled().catch(() => false);
+    const infoOk = noId > 0 && notConfigured > 0 && btnDisabled;
+    console.log(
+      `${infoOk ? 'PASS' : 'FAIL'} options self-service erasure card renders honest no-endpoint state (installId-none: ${noId}, note: ${notConfigured}, btn-disabled: ${btnDisabled})`,
+    );
+    if (!infoOk) process.exitCode = 1;
+    await opts.close();
+  }
+
   // Clear overrides from previous runs so they don't break the blocklist test
   await sw.evaluate(async () => {
     await chrome.storage.local.remove('overrides');
