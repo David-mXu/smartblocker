@@ -40,6 +40,27 @@ export interface Settings {
    * migrateLabels() doesn't silently re-add them on extension updates.
    */
   deletedBuiltinLabels: string[];
+  /**
+   * Optional free-text description of what the user is currently working on
+   * (e.g. "Studying React hooks and TypeScript", "Filing taxes"). Empty by
+   * default — when set, it feeds the context-aware disambiguation pass.
+   */
+  focusGoal: string;
+  /**
+   * Opt-in: let the context pass look at currently open productive tabs (plus
+   * `focusGoal`) to disambiguate gray-zone pages. OFF by default — reading
+   * open tabs is a stronger privacy step than classifying the single page.
+   */
+  useTabContext: boolean;
+  /**
+   * Opt-in: resolve titles of embedded YouTube videos/SERP cards through
+   * YouTube's oEmbed endpoint when the page DOM gives no usable title.
+   * OFF by default (red-team P1 #9): each lookup sends the YouTube video ID
+   * to www.youtube.com, which is browsing-metadata egress. Never fires for
+   * youtube-nocookie or privacy-facade embeds even when enabled. See the
+   * "Network requests" section of PRIVACY.md.
+   */
+  resolveEmbedTitles: boolean;
 }
 
 export const DEFAULTS: Settings = {
@@ -52,6 +73,9 @@ export const DEFAULTS: Settings = {
   blocklist: [],
   shareFeedback: false,
   deletedBuiltinLabels: [],
+  focusGoal: '',
+  useTabContext: false,
+  resolveEmbedTitles: false,
 };
 
 const STORAGE_KEY = 'settings';

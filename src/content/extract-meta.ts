@@ -13,13 +13,14 @@
  * All selectors are tried defensively; partial results are fine.
  * Never throws — always returns at least {}.
  */
-export function extractMeta(): { channel?: string; context?: string } {
+export function extractMeta(): { channel?: string; context?: string; fallbackTitle?: string } {
   // NOTE: this function body is serialised by executeScript — keep it
   // fully self-contained.  The `export` keyword is stripped at call time
   // (TypeScript emits the body; the TS compiler removes the keyword when
   // the caller passes the function reference directly).
 
   const SNIPPET_LEN = 200;
+  const TITLE_LEN = 120;
 
   function trimTo(s: string, len: number): string {
     s = s.trim();
@@ -46,19 +47,23 @@ export function extractMeta(): { channel?: string; context?: string } {
   try {
     const url = location.href;
 
-    // ── YouTube watch pages ──────────────────────────────────────────────────
-    const isYouTube = /youtube\.com\/(watch|shorts\/)/i.test(url);
+    // ── YouTube watch, shorts, and embed pages ───────────────────────────────
+    const isYouTube =
+      /(?:youtube\.com|youtube-nocookie\.com)\/(?:watch|shorts\/|embed\/|live\/|v\/)/i.test(url);
     if (isYouTube) {
       let channel = '';
 
-      // Try selectors in order of reliability.
+      // Try selectors in order of reliability (watch pages + embed player chrome).
       const channelSelectors = [
         'ytd-channel-name a',
         'ytd-video-owner-renderer yt-formatted-string a',
         'ytd-video-owner-renderer a',
         '#channel-name a',
-        // Links to channel pages: /@ChannelHandle
+        '.ytp-title-channel-name',
+        '.ytp-ce-channel-title',
+        // Links to channel pages: /@ChannelHandle or /channel/ID
         'a[href*="/@"]',
+        'a[href*="/channel/"]',
       ];
       for (const sel of channelSelectors) {
         const el = document.querySelector(sel);
@@ -66,6 +71,14 @@ export function extractMeta(): { channel?: string; context?: string } {
         if (text) {
           channel = text;
           break;
+        }
+      }
+
+      // Fallback for embed player channel logo aria-label: "Photo image of <Channel>"
+      if (!channel) {
+        const logoAria = attr(document.querySelector('a.ytp-title-channel-logo'), 'aria-label');
+        if (logoAria) {
+          channel = logoAria.replace(/^Photo(?:\s+image)?\s+of\s+/i, '').trim();
         }
       }
 
@@ -88,12 +101,38 @@ export function extractMeta(): { channel?: string; context?: string } {
           break;
         }
       }
-      // Last resort: <meta name="description">
+      // Last resort: <meta name="description"> or synthesized embed context
       if (!context) context = trimTo(metaContent('description'), SNIPPET_LEN);
+      if (!context && /\/embed\//i.test(url)) {
+        context = channel ? `YouTube video by ${channel}.` : 'Embedded YouTube video.';
+      }
 
-      const result: { channel?: string; context?: string } = {};
+      const rawDocTitle = (document.title ?? '')
+        .replace(/^(?:\(\d+\)\s*|(?:🐴|🔊|▶️?)\s*)+/u, '')
+        .replace(/\s*[-|–]\s*YouTube$/i, '')
+        .trim();
+      const usableDocTitle =
+        rawDocTitle && !/^(?:youtube|youtube video player)$/i.test(rawDocTitle)
+          ? rawDocTitle
+          : '';
+
+      const fallbackTitle = trimTo(
+        textOf(document.querySelector('.ytp-title-link')) ||
+          textOf(document.querySelector('#title h1 yt-formatted-string')) ||
+          textOf(document.querySelector('h1.ytd-watch-metadata')) ||
+          textOf(document.querySelector('.ytp-title-expanded-title a')) ||
+          textOf(document.querySelector('.ytp-title-text a')) ||
+          metaContent('title') ||
+          metaContent('og:title') ||
+          usableDocTitle ||
+          textOf(document.querySelector('h1')),
+        TITLE_LEN,
+      );
+
+      const result: { channel?: string; context?: string; fallbackTitle?: string } = {};
       if (channel) result.channel = channel;
       if (context) result.context = context;
+      if (fallbackTitle) result.fallbackTitle = fallbackTitle;
       return result;
     }
 
@@ -154,9 +193,95 @@ export function extractMeta(): { channel?: string; context?: string } {
       // Last resort: meta description (Reddit usually puts post text there).
       if (!context) context = trimTo(metaContent('description'), SNIPPET_LEN);
 
-      const result: { channel?: string; context?: string } = {};
+      const fallbackTitle = trimTo(
+        attr(document.querySelector('shreddit-post'), 'post-title') ||
+          textOf(document.querySelector('h1')) ||
+          metaContent('og:title'),
+        TITLE_LEN,
+      );
+
+      const result: { channel?: string; context?: string; fallbackTitle?: string } = {};
       if (channel) result.channel = channel;
       if (context) result.context = context;
+      if (fallbackTitle) result.fallbackTitle = fallbackTitle;
+      return result;
+    }
+
+    // ── Search Engine Results Pages (Google / Bing / DuckDuckGo / Brave / Baidu / Yandex / Naver) ──
+    // SERPs ship no <meta name="description">, their first <h1> is often a
+    // hidden accessibility header ("Accessibility Links"), and their <nav> tab
+    // bar ("Images · Videos · Shopping · News") is identical on every search.
+    // Extract the Knowledge Graph subtitle, embedded SERP widgets (playable
+    // Doodle games, shopping carousels, inline video players), and top organic
+    // result snippets instead.
+    const hostLower = location.hostname.toLowerCase();
+    const isSerpHost =
+      /^(?:(?:www|cn|m|html|lite|search|images|video|videos|shopping)\.)?(?:google\.[a-z]{2,3}(?:\.[a-z]{2})?|bing\.com|duckduckgo\.com|brave\.com|yahoo\.[a-z]{2,3}(?:\.[a-z]{2})?|baidu\.com|yandex\.[a-z]{2,3}|naver\.com|ecosia\.org)$/i.test(
+        hostLower,
+      );
+    if (isSerpHost && (location.search.length > 1 || /^\/(?:search|s|videos|shopping|shop|images)/i.test(location.pathname))) {
+      const channel = hostLower.replace(/^www\./, '');
+      const qInput = document.querySelector(
+        'textarea[name="q"], input[name="q"], input[name="wd"], input[name="p"], input[name="query"], input[name="text"]',
+      ) as HTMLInputElement | HTMLTextAreaElement | null;
+      const fallbackTitle = trimTo((qInput?.value ?? '').trim(), TITLE_LEN);
+
+      const parts: string[] = [];
+      const hasGamesHeading = Array.from(
+        document.querySelectorAll('#rso h2, #rso h3, #rso [role="heading"]'),
+      ).some((el) => /^games from google$/i.test(textOf(el)));
+      // 1. Embedded playable game canvas / launcher or shopping vertical on SERP
+      if (
+        hasGamesHeading ||
+        document.querySelector(
+          '#rso canvas, [data-ly*="game"], [data-attrid*="game"], a[href*="/fbx?fbx="]',
+        )
+      ) {
+        parts.push('Video game page.');
+      } else if (
+        document.querySelector('.sh-dgr__content') ||
+        /[?&](?:udm=28|tbm=shop|ia=shopping)\b/i.test(location.search) ||
+        /^\/(?:shopping|shop)\b/i.test(location.pathname)
+      ) {
+        parts.push('Online store product page.');
+      }
+
+      // 2. Knowledge Graph / entity subtitle (e.g. "Video game", "Television series")
+      const kgTitle = textOf(
+        document.querySelector('[data-attrid="title"], .qrShPb, .b_entityTitle'),
+      );
+      const kgSub = textOf(
+        document.querySelector('[data-attrid="subtitle"], .wwUB2c, .b_entitySubTitle'),
+      );
+      if (kgTitle && kgSub) parts.push(`${kgTitle} (${kgSub})`);
+      else if (kgSub) parts.push(kgSub);
+
+      // 3. Top organic result headings + snippets from #rso (Google), #b_results (Bing), DDG, Baidu
+      // Exclude injected ad/carousel shelves (#tads, #tvcap, .ULSxyf, .pla-unit, .b_ad, .b_vidAns)
+      // because sanitizePage masks those shelves in-place and they should not poison
+      // page-level classification on productive queries.
+      const snippetEls = document.querySelectorAll(
+        '#rso h3, #rso .VwiC3b, #b_results > li.b_algo h2, #b_results > li.b_algo .b_caption p, [data-testid="result"] h2, [data-testid="result-snippet"], #content_left h3',
+      );
+      for (let i = 0; i < snippetEls.length && parts.join(' · ').length < SNIPPET_LEN; i++) {
+        const el = snippetEls[i];
+        if (
+          el.closest(
+            '#tads, #tvcap, #bottomads, .ULSxyf, .pla-unit, [data-merchant-id], g-scrolling-carousel, .b_ad, .b_vidAns',
+          )
+        ) {
+          continue;
+        }
+        const t = textOf(el).replace(/\s+/g, ' ');
+        if (t && t.length > 3 && parts.indexOf(t) === -1) {
+          parts.push(t);
+        }
+      }
+
+      const context = trimTo(parts.join(' · '), SNIPPET_LEN);
+      const result: { channel?: string; context?: string; fallbackTitle?: string } = { channel };
+      if (context) result.context = context;
+      if (fallbackTitle) result.fallbackTitle = fallbackTitle;
       return result;
     }
 
@@ -256,9 +381,16 @@ export function extractMeta(): { channel?: string; context?: string } {
     const signIn = document.querySelector('input[type="password"]') ? 'Account sign-in page.' : '';
     const hint = pageKindHint();
     const context = trimTo([signIn, hint, body].filter(Boolean).join(' '), SNIPPET_LEN);
-    const result: { channel?: string; context?: string } = {};
+    const fallbackTitle = trimTo(
+      metaContent('og:title') ||
+        metaContent('twitter:title') ||
+        textOf(document.querySelector('h1')),
+      TITLE_LEN,
+    );
+    const result: { channel?: string; context?: string; fallbackTitle?: string } = {};
     if (channel) result.channel = channel;
     if (context) result.context = context;
+    if (fallbackTitle) result.fallbackTitle = fallbackTitle;
     return result;
   } catch {
     return {};

@@ -26,11 +26,12 @@ import { buildClassifierText } from '../../src/shared/build-input.ts';
 import {
   centroidSpecs,
   classifyBySimilarity,
+  effectiveBlockScore,
   isNeutralLabel,
   meanNormalize,
 } from '../../src/shared/prototypes.ts';
-import { isWhitelisted, matchedBlocklistEntry } from '../../src/shared/titles.ts';
-import { applyUrlSignals } from '../../src/shared/url-signals.ts';
+import { cleanTitle, isWhitelisted, matchedBlocklistEntry } from '../../src/shared/titles.ts';
+import { applyUrlSignals, urlFallbackTitle } from '../../src/shared/url-signals.ts';
 
 export { BLOCKED_LABELS, BLOCK_THRESHOLD, EMBED_MODEL_ID, LABELS, SOFTMAX_TEMPERATURE };
 
@@ -75,11 +76,13 @@ export function signalsFor(c) {
 
 /**
  * Build the exact string the classifier sees, through the same path as
- * blocker.ts onTitle: DOM/captured meta -> applyUrlSignals (hostname fallback
- * + path hint) -> buildClassifierText.
+ * blocker.ts onTitle: cleanTitle (with URL fallback when empty/placeholder) ->
+ * DOM/captured meta -> applyUrlSignals (hostname fallback + path hint) ->
+ * buildClassifierText.
  */
 export function classifierInputFor(c) {
-  const { title, channel, context } = signalsFor(c);
+  const { title: rawTitle, channel, context } = signalsFor(c);
+  const title = cleanTitle(rawTitle) ?? (c.url ? (urlFallbackTitle(c.url) ?? '') : '');
   const withUrl = c.url ? applyUrlSignals(c.url, { channel, context }) : { channel, context };
   return buildClassifierText({ title, channel: withUrl.channel, context: withUrl.context });
 }
@@ -117,8 +120,9 @@ export function decideBlock(c, verdict, settings = EVAL_SETTINGS, threshold = se
   // Neutral centroids carry NEUTRAL_PREFIX and can never appear in
   // blockedLabels; the explicit guard documents that invariant.
   if (isNeutralLabel(verdict.label)) return { decision: 'allow', reason: 'neutral' };
+  const effScore = effectiveBlockScore(verdict, settings.blockedLabels);
   const blocked =
-    settings.blockedLabels.includes(verdict.label) && verdict.score >= threshold;
+    settings.blockedLabels.includes(verdict.label) && effScore >= threshold;
   return { decision: blocked ? 'block' : 'allow', reason: 'classifier' };
 }
 
@@ -151,12 +155,43 @@ export async function buildEmbedClassifier({
   for (const spec of specs) {
     const vecs = [];
     for (const text of spec.texts) vecs.push(await embed(text));
-    centroids.push({ name: spec.name, vec: meanNormalize(vecs) });
+    centroids.push({ name: spec.name, vec: meanNormalize(vecs), seedVecs: vecs });
   }
   log(`centroids built in ${((performance.now() - t0) / 1000).toFixed(1)}s`);
-  return async (text) => {
-    const { label, score } = classifyBySimilarity(await embed(text), centroids, temperature);
-    return { label, score };
+  const focusCache = new Map();
+  async function resolveFocus(fc) {
+    if (!fc) return { vec: null, seedVecs: [], hasExplicitGoal: false };
+    const goal = (fc.focusGoal ?? '').trim();
+    const tabs = (fc.openTabTitles ?? []).map((t) => t.trim()).filter(Boolean).slice(0, 6);
+    if (!goal && tabs.length === 0) return { vec: null, seedVecs: [], hasExplicitGoal: false };
+    const key = `${goal.toLowerCase()}\x1f${tabs.map((t) => t.toLowerCase()).join('\x1e')}`;
+    if (focusCache.has(key)) return focusCache.get(key);
+    const vecs = [];
+    if (goal) vecs.push(await embed(goal));
+    for (const t of tabs) vecs.push(await embed(t));
+    let combined;
+    let seedVecs;
+    if (goal && tabs.length > 0) {
+      const goalVec = vecs[0];
+      const tabsMean = meanNormalize(vecs.slice(1));
+      combined = meanNormalize([goalVec, goalVec, tabsMean]);
+      seedVecs = [goalVec, goalVec, ...vecs.slice(1)];
+    } else {
+      combined = meanNormalize(vecs);
+      seedVecs = vecs;
+    }
+    const res = { vec: combined, seedVecs, hasExplicitGoal: Boolean(goal) };
+    focusCache.set(key, res);
+    return res;
+  }
+  return async (text, focusContext) => {
+    const [textVec, focus] = await Promise.all([embed(text), resolveFocus(focusContext)]);
+    const { label, score, all } = classifyBySimilarity(textVec, centroids, temperature, {
+      focusVec: focus.vec,
+      focusSeedVecs: focus.seedVecs,
+      hasExplicitGoal: focus.hasExplicitGoal,
+    });
+    return { label, score, all };
   };
 }
 
@@ -183,8 +218,13 @@ export async function runCases(cases, classify, settings = EVAL_SETTINGS) {
   const records = [];
   for (const c of cases) {
     const text = classifierInputFor(c);
+    const fc =
+      c.focusContext ??
+      (c.focusGoal || c.openTabTitles
+        ? { focusGoal: c.focusGoal, openTabTitles: c.openTabTitles }
+        : undefined);
     const t = performance.now();
-    const verdict = await classify(text);
+    const verdict = await classify(text, fc);
     const ms = performance.now() - t;
     const { decision, reason } = decideBlock(c, verdict, settings);
     records.push({
@@ -194,6 +234,7 @@ export async function runCases(cases, classify, settings = EVAL_SETTINGS) {
       expected: c.expected,
       label: verdict.label,
       score: verdict.score,
+      all: verdict.all,
       decision,
       reason,
       expectedDecision: expectedDecision(c),
@@ -210,7 +251,8 @@ const pctNum = (n, d) => (d === 0 ? null : (100 * n) / d);
  * benchmark's sweep can reuse this without re-running inference.
  */
 export function scoreRecords(records, settings = EVAL_SETTINGS, threshold = settings.blockThreshold) {
-  const at = (r) => decideBlock(r.case, { label: r.label, score: r.score }, settings, threshold).decision;
+  const at = (r) =>
+    decideBlock(r.case, { label: r.label, score: r.score, all: r.all }, settings, threshold).decision;
 
   const labeled = records.filter((r) => Array.isArray(r.expected));
   const productive = records.filter((r) => r.expected === 'productive');

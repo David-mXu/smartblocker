@@ -1,6 +1,6 @@
 // popup/options/offscreen <-> background message contract.
 import type { CompanionSnapshot } from './companion-protocol';
-import type { Settings } from './settings';
+import type { SubItemEvalRequest, SubItemEvalResult } from '../content/sanitize-page';
 
 /** Classifier input. Phase 2 widens it from a bare title to richer page
  *  signals (channel, description/post-body snippet) — see build-input.ts. */
@@ -8,6 +8,11 @@ export interface ClassifyInput {
   title: string;
   channel?: string;
   context?: string;
+  /** Optional explicit focus goal + open-tab context for gray-zone disambiguation. */
+  focusContext?: {
+    focusGoal?: string;
+    openTabTitles?: string[];
+  };
 }
 
 /** A user correction: a title the user forced through the block screen. */
@@ -19,34 +24,39 @@ export interface Override {
 export type Request =
   | { type: 'TEST_PAIR' }
   | { type: 'SCAN_HISTORY' }
-  | { type: 'GET_SETTINGS' }
-  | { type: 'SET_SETTINGS'; patch: Partial<Settings> }
   // Offscreen-document RPC: pure inference primitives, so the offscreen worker
   // stays decoupled from settings + text assembly (those live SW-side).
   | { type: 'CLASSIFY'; text: string; labels: string[] }
   | { type: 'EMBED'; texts: string[] }
   // label/score = the verdict being corrected, so the false-positive feedback
   // record captures what the model actually said at decision time.
-  | { type: 'OVERRIDE'; title: string; url?: string; label?: string; score?: number }
+  // nonce = one-time token minted by the SW when it injected the block
+  // screen; the OVERRIDE handler drops messages without a valid one.
+  | { type: 'OVERRIDE'; title: string; url?: string; label?: string; score?: number; nonce?: string }
   // Popup "this page should have been blocked" report (false negative).
   | { type: 'REPORT_FN'; title: string; url: string; correctedLabel: string }
   | { type: 'CLOSE_TAB' }
   // Options page: state of the Native Messaging bridge to the desktop
   // companion (silently 'not-installed' for free-tier users without it).
-  | { type: 'GET_COMPANION_STATUS' };
+  | { type: 'GET_COMPANION_STATUS' }
+  // Content sanitizer: batch-classify embedded videos & SERP result cards.
+  | { type: 'EVAL_SUBITEMS'; items: SubItemEvalRequest[] };
+
+export interface SubItemsResponse {
+  ok: boolean;
+  results?: SubItemEvalResult[];
+  error?: string;
+}
 
 export type EventMessage =
   | { type: 'MODEL_PROGRESS'; file?: string; progress?: number; status: string };
 
-export interface SettingsResponse {
-  ok: boolean;
-  settings?: Settings;
-  error?: string;
-}
-
 export interface CompanionStatusResponse {
   ok: boolean;
   snapshot?: CompanionSnapshot;
+  /** Whether "Allow in Incognito" is on for the extension — off means
+   *  Incognito windows bypass all blocking (warned about in the options UI). */
+  incognitoAllowed?: boolean;
   error?: string;
 }
 
