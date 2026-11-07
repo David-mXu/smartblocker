@@ -35,6 +35,7 @@
     "declarativeNetRequest",
     "history",
     "nativeMessaging",
+    "notifications",
     "offscreen",
     "scripting",
     "storage",

@@ -11,6 +11,7 @@ import {
   LEGACY_SEARCH_WHITELIST,
 } from './config';
 import { getLockStatus } from './lock';
+import { clampResumeAt } from './resume';
 
 export interface Settings {
   /** Candidate categories the zero-shot model scores against. */
@@ -37,6 +38,24 @@ export interface Settings {
    * Empty by default — opt-in, unlike the model-driven category blocking.
    */
   blocklist: string[];
+  /**
+   * Deterministic TITLE-only block rules (CT "window titles"): each rule is a
+   * case-insensitive substring matched against the cleaned page title, with
+   * optional `*` multi-char wildcards (see shared/rules.ts). A match blocks
+   * immediately, at the same ladder position as `blocklist` (after the
+   * whitelist, before the classifier). Empty by default — opt-in.
+   */
+  titleRules: string[];
+  /**
+   * Channel rules (Phase 5), matched against the channel extractMeta()
+   * scrapes (lowercase handle form, "mrbeast" — see rules.ts matchChannel).
+   * channelBlocklist blocks deterministically between the blocklist and the
+   * classifier (classifier skipped, reason "channel block"); channelAllowlist
+   * rescues ONLY a classifier block verdict, never a blocklist/
+   * channelBlocklist hit. Both empty by default.
+   */
+  channelBlocklist: string[];
+  channelAllowlist: string[];
   /**
    * Opt-in: share anonymized misclassification feedback (see PRIVACY.md) to
    * improve the model. OFF by default — SmartBlocker is telemetry-free unless
@@ -69,6 +88,35 @@ export interface Settings {
    * "Network requests" section of PRIVACY.md.
    */
   resolveEmbedTitles: boolean;
+  /**
+   * Opt-in: deterministic adult-site blocking. OFF by default. When on,
+   * either signal blocks instantly (after the whitelist, with the URL
+   * blocklist, before the classifier — reason label `adult`): (1) the page
+   * self-declares an adult rating via <meta name="rating"> ("adult" or the
+   * RTA tag — extract-meta.ts probeAdultMeta), or (2) the host is inside the
+   * .xxx TLD (shared/rules.ts isAdultHost). Fully on-device; see PRIVACY.md.
+   */
+  blockAdult: boolean;
+  /**
+   * Auto-resume (Phase 5 "autostart-resume"): while this is non-'off' AND
+   * blocking is DISABLED, the background resume-enforcer turns `enabled`
+   * back on automatically — on browser startup, at the next scheduled-block
+   * start, or at `resumeAt`. Closes the "forgot to re-enable" relapse path
+   * (CT "Autostart Blocks"). Turning the toggle back on clears any armed
+   * resume (resumeAt → null) but keeps the mode for next time.
+   */
+  resumeMode: 'off' | 'startup' | 'schedule' | 'time';
+  /**
+   * Epoch ms of the chosen resume instant; only meaningful when
+   * `resumeMode === 'time'`. setSettings clamps writes to now+24h max
+   * (MAX_RESUME_AHEAD_MS in resume.ts) and invalid values to null.
+   */
+  resumeAt: number | null;
+  /**
+   * Proactively mask distracting modules (videos, carousels, games,
+   * news, shopping) and off-topic result cards on search engines. Default true.
+   */
+  maskSearchElements: boolean;
 }
 
 /** v1: original list (search engines whitelisted). v2 (2026-11-07): search
@@ -84,11 +132,18 @@ export const DEFAULTS: Settings = {
   whitelist: [...DEFAULT_WHITELIST],
   whitelistVersion: WHITELIST_VERSION,
   blocklist: [],
+  titleRules: [],
+  channelBlocklist: [],
+  channelAllowlist: [],
   shareFeedback: false,
   deletedBuiltinLabels: [],
   focusGoal: '',
   useTabContext: false,
   resolveEmbedTitles: false,
+  blockAdult: false,
+  resumeMode: 'off',
+  resumeAt: null,
+  maskSearchElements: true,
 };
 
 const STORAGE_KEY = 'settings';
@@ -190,6 +245,12 @@ export async function setSettings(patch: Partial<Settings>): Promise<Settings> {
     );
   }
   const next = { ...(await getSettings()), ...patch };
+  // Centralized write clamp for the auto-resume instant (24h horizon, invalid
+  // → null — see resume.ts). Central here so every writer (options page,
+  // popup, background) is covered identically.
+  if ('resumeAt' in patch) {
+    next.resumeAt = clampResumeAt(patch.resumeAt, Date.now());
+  }
   cache = next;
   await api.storage.local.set({ [STORAGE_KEY]: next });
   return next;

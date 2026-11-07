@@ -6,9 +6,13 @@
 /**
  * Extract richer page signals from the live DOM.
  *
- * Returns { channel?, context? } where:
+ * Returns { channel?, context?, adultContent? } where:
  *   channel — uploader/subreddit name
  *   context — description/post-body snippet (first ~200 chars)
+ *   adultContent — present (true) only when the page self-declares an adult
+ *     rating via <meta name="rating"> (see probeAdultMeta below). Ignored
+ *     entirely unless Settings.blockAdult is on, so classifier input is
+ *     byte-identical when the switch is off.
  *
  * All selectors are tried defensively; partial results are fine.
  * Never throws — always returns at least {}.
@@ -18,6 +22,7 @@ export function extractMeta(): {
   context?: string;
   fallbackTitle?: string;
   metaStale?: boolean;
+  adultContent?: boolean;
 } {
   // NOTE: this function body is serialised by executeScript — keep it
   // fully self-contained.  The `export` keyword is stripped at call time
@@ -49,8 +54,25 @@ export function extractMeta(): {
     return attr(el, 'content');
   }
 
+  // Self-declared adult rating (opt-in Settings.blockAdult signal #1).
+  // Mirrors Cold Turkey's checkBlockAdult trigger (docs/audits/
+  // 2026-11-07-cold-turkey-blocker-landscape-audit.md §1.1): the page carries
+  //   <meta name="rating" content="adult">            — or the RTA label —
+  //   <meta name="rating" content="RTA-5042-1996-1400-1577-RTA">
+  // The `i` selector flag makes the attribute VALUE match case-insensitive;
+  // the content is then compared trimmed + lowercased against exactly these
+  // two lowercase strings. A page without the tag is simply not self-declared
+  // (signal #2, the .xxx TLD, is checked on the host in shared/rules.ts).
+  function probeAdultMeta(): boolean {
+    const el = document.querySelector('meta[name="rating" i]');
+    if (!el) return false;
+    const content = attr(el, 'content').toLowerCase();
+    return content === 'adult' || content === 'rta-5042-1996-1400-1577-rta';
+  }
+
   try {
     const url = location.href;
+    const adultContent = probeAdultMeta();
 
     // ── YouTube pages (watch, shorts, embed, and SPA browsing surfaces) ──────
     // On YouTube's Polymer SPA, <meta> tags in <head> NEVER update after the
@@ -63,11 +85,17 @@ export function extractMeta(): {
       isYouTubeHost && /^\/(?:watch|shorts\/|embed\/|live\/|v\/)/i.test(location.pathname);
 
     if (isYouTubeHost && !isYouTubeVideo) {
-      const result: { channel?: string; context?: string; fallbackTitle?: string } = {};
+      const result: {
+        channel?: string;
+        context?: string;
+        fallbackTitle?: string;
+        adultContent?: boolean;
+      } = {};
       if (/^\/results\b/i.test(location.pathname)) {
         const q = (new URLSearchParams(location.search).get('search_query') ?? '').trim();
         if (q) result.fallbackTitle = trimTo(q, TITLE_LEN);
       }
+      if (adultContent) result.adultContent = true;
       return result;
     }
 
@@ -251,11 +279,13 @@ export function extractMeta(): {
         context?: string;
         fallbackTitle?: string;
         metaStale?: boolean;
+        adultContent?: boolean;
       } = {};
       if (channel) result.channel = channel;
       if (context) result.context = context;
       if (fallbackTitle) result.fallbackTitle = fallbackTitle;
       if (metaStale) result.metaStale = true;
+      if (adultContent) result.adultContent = true;
       return result;
     }
 
@@ -323,10 +353,16 @@ export function extractMeta(): {
         TITLE_LEN,
       );
 
-      const result: { channel?: string; context?: string; fallbackTitle?: string } = {};
+      const result: {
+        channel?: string;
+        context?: string;
+        fallbackTitle?: string;
+        adultContent?: boolean;
+      } = {};
       if (channel) result.channel = channel;
       if (context) result.context = context;
       if (fallbackTitle) result.fallbackTitle = fallbackTitle;
+      if (adultContent) result.adultContent = true;
       return result;
     }
 
@@ -402,9 +438,15 @@ export function extractMeta(): {
       }
 
       const context = trimTo(parts.join(' · '), SNIPPET_LEN);
-      const result: { channel?: string; context?: string; fallbackTitle?: string } = { channel };
+      const result: {
+        channel?: string;
+        context?: string;
+        fallbackTitle?: string;
+        adultContent?: boolean;
+      } = { channel };
       if (context) result.context = context;
       if (fallbackTitle) result.fallbackTitle = fallbackTitle;
+      if (adultContent) result.adultContent = true;
       return result;
     }
 
@@ -510,10 +552,16 @@ export function extractMeta(): {
         textOf(document.querySelector('h1')),
       TITLE_LEN,
     );
-    const result: { channel?: string; context?: string; fallbackTitle?: string } = {};
+    const result: {
+      channel?: string;
+      context?: string;
+      fallbackTitle?: string;
+      adultContent?: boolean;
+    } = {};
     if (channel) result.channel = channel;
     if (context) result.context = context;
     if (fallbackTitle) result.fallbackTitle = fallbackTitle;
+    if (adultContent) result.adultContent = true;
     return result;
   } catch {
     return {};

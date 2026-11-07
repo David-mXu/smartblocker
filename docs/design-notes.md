@@ -197,10 +197,16 @@ Tint recipe for callouts: `bg-<hue>/10 border-<hue>/30 text-<hue>-soft`.
   row. Hash routing; unknown hash → Blocking; legacy hashes (`#categories`,
   `#history`, `#commitment`, `#schedules`) redirect. Focus moves to the page
   heading on navigation.
-- **Pages:** Blocking `#blocking` (master switch, strictness presets
+- **Pages:** Blocking `#blocking` (master switch with "Turn blocking back
+  on" right under it — Never / when the browser restarts / when focus hours
+  begin / at a set time — "Hide distractions in search results",
+  strictness presets
   Relaxed 0.65 / Balanced 0.5 / Strict 0.4 — other values read "Custom",
-  categories, "Find your distractions" history review) · Sites `#sites`
-  (`ListEditor` Always allow / Always block) · Focus `#focus` (goal, open-tab
+  categories + "Also block adults-only sites instantly" (RTA label / .xxx)
+  directly under the category list, "Find your distractions" history
+  review) · Sites `#sites` (`ListEditor` Always allow / Always block; a
+  collapsed **More rules** disclosure holds Title patterns (`*` wildcard)
+  and YouTube channels — always block / never block for their topic) · Focus `#focus` (goal, open-tab
   context, start a focus session) · Locks `#locks` (timer, password,
   incognito warning) · Focus hours `#schedule` (summary cards, S–M–T–W–T–F–S
   day chips, overnight note, presets "Weekdays 9–5" / "Every evening 7–10 PM")
@@ -222,6 +228,91 @@ Tint recipe for callouts: `bg-<hue>/10 border-<hue>/30 text-<hue>-soft`.
 - **Locked:** editing controls disabled with the reason "Locked until
   3:40 PM"; the timer and password controls stay usable (extend / unlock).
 
+### Popup (`src/popup/`, 380px) — "This page" first
+Data is loaded BEFORE first render (`popup.ts`, 250ms cap) and every
+unlocked state is the same height (516px), so nothing jumps. Order:
+1. Header: wordmark · `#popup-enabled-toggle` ("Blocking on") ·
+   `#open-options` gear.
+2. `#lock-line` amber when locked: "Locked: focus session — 3h 12m left
+   (until 4:28 PM)".
+3. **This page** card (focal; `ThisPageCard.tsx`, logic in
+   `popup-model.ts`): host in mono + a status dot + one sentence, e.g.
+   "Allowed — looks like programming…", "Blocked — likely video games",
+   "Blocked by your rule “/cart”", "Matches your channel rule @…",
+   "Always allowed — it's on your allowed sites", "Blocking is paused" +
+   "Turn blocking on", "SmartBlocker doesn't check this kind of page",
+   "Not checked yet". Scores become words: ≥0.85 "very likely", ≥0.65
+   "likely", else "possibly" — never a raw %. Actions: "Should've been
+   blocked" (reveals category + Report), "Always allow this site" /
+   "Remove from allowed". Source: the background's per-tab record
+   (`src/shared/tab-status.ts`, `storage.session`) plus local derivation
+   (allowed list, paused, unsupported URL).
+4. **What are you working on?** focus goal + open-tab context.
+5. **Focus session** (`FocusSession.tsx`): 1h / 4h / 8h radio chips +
+   amber "Start focus session" with the consequence inline ("Blocks
+   distractions until 2:16 PM. You can undo for 1 minute, then it can't be
+   cancelled."). Pending → "Locks in 0:42" + Undo; active → "Running until
+   4:28 PM".
+No diagnostics, model names or telemetry in the popup (they live on options
+→ Advanced).
+
+### Focus session undo window (`src/shared/focus-session.ts`)
+User-facing name for Frozen Turkey (`lockState.frozenUntil`). The 60-second
+undo is a **deferred commit**, not a cancellable lock: Start stores
+`pendingFocusSession { until, commitAt }` + a one-shot alarm; the background
+commits via `startFrozenTurkey(until - now)` when the window closes (also on
+SW start and popup open — idempotent). Undo deletes the pending record. The
+lock store and the companion merge stay strictly monotonic and never see an
+uncommitted session. Normal blocking is already on during the window; only
+the lock is deferred — copy says "Locks in 0:42", never "Starts in".
+
+### Block screen (`blockscreen.ts` injected + `blockscreen-ui.ts` → `blocked.html`)
+Full-bleed obsidian, **no card**, centered column ≤ 520px:
+wordmark (faint) → eyebrow `Blocked · <category>` → headline **"This one can
+wait."** (34/600) → quoted page title (muted) → **Threshold Meter**
+("87% confidence", tick at threshold) → buttons: **Stay focused (close tab)**
+primary ivory, *This is actually productive — let me through* outline,
+Dismiss text → meta "Checked on-device in 12ms" (faint).
+Locked: amber seal note "Smart Blocker is locked — bypass is disabled" +
+Stay focused only. Fail-closed: amber warning variant, no score, no meter.
+Inline styles must use the hexes in §3 (host pages have no extension CSS);
+`blockscreen.ts` stays import-free.
+
+---
+
+## 6. Rules
+
+**Do**
+- Semantic tokens only (`bg-card`, `text-muted-foreground`, `text-faint`,
+  `border-border`, `bg-accent/10`…). Change color in `tokens.css`, nowhere else.
+- One primary (ivory) button per view. Amber only for commitment/focus.
+- Plain-language copy, sentence case, verb + object buttons ("Arm password
+  lock", "Add schedule").
+- Compose `SettingsSection` → `SettingsGroup` → `SettingRow`; don't hand-roll rows.
+
+**Don't**
+- No raw palette classes or hexes in `.tsx`:
+  `grep -rnE "zinc-[0-9]|emerald-[0-9]|amber-[0-9]|red-[0-9]|#[0-9a-fA-F]{6}" src/ site/ --include="*.tsx"` must be empty.
+- No cards inside cards, no shadows/blur/glow on product surfaces, no
+  decorative badges, no mono-uppercase "telemetry" labels, no emoji.
+- No entrance animations in popup/options; no GSAP outside `site/`.
+- No marketing sections in `src/options/` (they live in `site/`).
+
+**Where a new setting goes (options):** put it in the group of the thing it
+modifies (a pause-related option sits under the master switch; a
+category-related option under the category list) — never a new top-level
+section by default. Rare power-user rules go inside the Sites page's
+**More rules** disclosure (auto-open when non-empty). Name settings by the
+outcome the user gets ("Hide distractions in search results"), not the
+mechanism ("search element masking", "RTA meta tag", "classifier").
+
+**Naming:** users see **"Focus session"**; "Frozen Turkey" survives only in
+code identifiers (`startFrozenTurkey`, `frozenUntil`) and internal docs.
+
+---
+
+## 7. Extension contract (tests depend on these — never rename)
+
 ### Popup
 `#lock-line` (hidden unless locked; text starts "Locked:"), `#popup-enabled-toggle`,
 `#open-options`, `#focus-goal`, `#save-focus-goal`, `#use-tab-context`,
@@ -233,10 +324,14 @@ Tint recipe for callouts: `bg-<hue>/10 border-<hue>/30 text-<hue>-soft`.
 ### Options (navigate to `options.html#<page>` — only the active page renders)
 Global: `#banner`, `#lock-status` (visible only when locked, contains
 "Locked"), `#save-msg`, `#model-progress`. `#save-btn` no longer exists.
-- `#blocking`: `#enabled-toggle`, `#label-list` (`li`, `.delete-label-btn`),
+- `#blocking`: `#enabled-toggle`, `#resume-mode`, `#resume-at`,
+  `#mask-search-elements-toggle`, `#block-adult-toggle`, `#label-list` (`li`,
+  `.delete-label-btn`),
   `#custom-category-input`, `#add-category-btn`, `#scan-btn`,
   `#block-top-btn`, `#scan-status`, `#scan-out`.
-- `#sites`: `#whitelist`, `#blocklist` (`ListEditor` roots; `-input`,
+- `#sites`: `#whitelist`, `#blocklist`, and inside the `#more-rules`
+  `<details>` (auto-open when it holds rules): `#title-rules`,
+  `#channel-blocklist`, `#channel-allowlist` (`ListEditor` roots; `-input`,
   `.list-row`, `.list-remove`, `-text`).
 - `#focus`: `#focus-goal`, `#use-tab-context`, `#focus-session-start`,
   `#focus-session-undo`.

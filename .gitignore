@@ -2,6 +2,8 @@ node_modules/
 dist/
 dist-site/
 .e2e-profile/
+.dev-profile/
+.dev-profile-*/
 .e2e-profile-p1/
 .e2e-profile-p2/
 .e2e-profile-security/

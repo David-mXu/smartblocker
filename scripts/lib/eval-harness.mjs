@@ -31,7 +31,8 @@ import {
   meanNormalize,
 } from '../../src/shared/prototypes.ts';
 import { cleanTitle, isWhitelisted, matchedBlocklistEntry } from '../../src/shared/titles.ts';
-import { applyUrlSignals, urlFallbackTitle } from '../../src/shared/url-signals.ts';
+import { isAdultHost, matchChannel, matchTitleRule } from '../../src/shared/rules.ts';
+import { applyUrlSignals, hostnameOf, urlFallbackTitle } from '../../src/shared/url-signals.ts';
 
 export { BLOCKED_LABELS, BLOCK_THRESHOLD, EMBED_MODEL_ID, LABELS, SOFTMAX_TEMPERATURE };
 
@@ -47,6 +48,12 @@ export const EVAL_SETTINGS = {
   blockThreshold: BLOCK_THRESHOLD,
   whitelist: [...DEFAULT_WHITELIST],
   blocklist: [],
+  // Matches settings.ts DEFAULTS (opt-in, OFF). Kept false here so the adult
+  // gates inside decideBlock are a no-op for the committed dataset.
+  blockAdult: false,
+  titleRules: [],
+  channelBlocklist: [],
+  channelAllowlist: [],
 };
 
 // ── Dataset ─────────────────────────────────────────────────────────────────
@@ -65,13 +72,14 @@ export function signalsFor(c) {
   if (c.captured) {
     return {
       title: c.captured.title ?? (typeof c.input === 'string' ? c.input : c.input?.title ?? ''),
-      channel: c.captured.channel,
+      channel: c.captured.channel ?? c.channel,
       context: c.captured.context,
+      adultContent: c.captured.adultContent,
       source: 'captured',
     };
   }
-  if (typeof c.input === 'string') return { title: c.input, source: 'title-only' };
-  return { ...c.input, source: 'authored' };
+  if (typeof c.input === 'string') return { title: c.input, channel: c.channel, source: 'title-only' };
+  return { ...c.input, channel: c.input?.channel ?? c.channel, source: 'authored' };
 }
 
 /**
@@ -104,25 +112,61 @@ export function expectedDecision(c) {
 
 /**
  * The shipped block decision, mirroring blocker.ts onTitle's ladder:
- * whitelist exemption -> deterministic blocklist -> classifier verdict.
- * Cases without a `url` skip the first two gates, exactly as a case with no
- * URL context would. Returns { decision, reason }.
+ * whitelist exemption -> deterministic checks (URL blocklist, title rules,
+ * opt-in adult signals) -> channel rules -> classifier verdict. Cases without
+ * a `url` skip the URL-dependent gates, exactly as a case with no URL context
+ * would. Returns { decision, reason }.
  */
 export function decideBlock(c, verdict, settings = EVAL_SETTINGS, threshold = settings.blockThreshold) {
   if (c.url && isWhitelisted(c.url, settings.whitelist)) {
     return { decision: 'allow', reason: 'whitelist' };
   }
+  const { title, channel, context } = signalsFor(c);
+  // Channel rules see the same channel the classifier saw: with a URL, the
+  // applyUrlSignals hostname fallback fills a missing channel exactly as in
+  // blocker.ts.
+  const rulesChannel = c.url ? applyUrlSignals(c.url, { channel, context }).channel : channel;
   if (c.url) {
-    const { title } = signalsFor(c);
     const hit = matchedBlocklistEntry(c.url, title, settings.blocklist);
     if (hit) return { decision: 'block', reason: `blocklist:${hit}` };
+    // Title rules match the CLEANED title with the URL-fallback path — the
+    // same string the classifier-side of the ladder sees.
+    const titleHit = matchTitleRule(
+      cleanTitle(title) ?? (urlFallbackTitle(c.url) ?? ''),
+      settings.titleRules,
+    );
+    if (titleHit) return { decision: 'block', reason: `title-rule:${titleHit}` };
+    // Opt-in adult blocking (settings.blockAdult, default OFF) — signal #2:
+    // any host inside the .xxx TLD blocks deterministically. Positioned with
+    // the URL blocklist: after the whitelist (a deliberate whitelist entry
+    // for a .xxx domain still wins) and before the classifier — with the
+    // user-authored rules taking reason precedence on a double match,
+    // exactly as blocker.ts's label chain does.
+    // No-op whenever blockAdult is off — including every committed case.
+    if (settings.blockAdult && isAdultHost(hostnameOf(c.url))) {
+      return { decision: 'block', reason: 'adult' };
+    }
   }
+  // Opt-in adult blocking — signal #1: the page self-declared an adult
+  // rating via <meta name="rating">, surfaced by the real extractMeta into
+  // captured/authored inputs.
+  if (settings.blockAdult && signalsFor(c).adultContent === true) {
+    return { decision: 'block', reason: 'adult' };
+  }
+  // Channel rules (Phase 5): channelBlocklist blocks deterministically
+  // between the deterministic URL/title/adult gates and the classifier.
+  const channelBlockHit = matchChannel(rulesChannel ?? null, settings.channelBlocklist ?? []);
+  if (channelBlockHit) return { decision: 'block', reason: `channel-block:${channelBlockHit}` };
   // Neutral centroids carry NEUTRAL_PREFIX and can never appear in
   // blockedLabels; the explicit guard documents that invariant.
   if (isNeutralLabel(verdict.label)) return { decision: 'allow', reason: 'neutral' };
   const effScore = effectiveBlockScore(verdict, settings.blockedLabels);
   const blocked =
     settings.blockedLabels.includes(verdict.label) && effScore >= threshold;
+  // channelAllowlist rescues ONLY a classifier verdict, never a rule hit.
+  if (blocked && matchChannel(rulesChannel ?? null, settings.channelAllowlist ?? [])) {
+    return { decision: 'allow', reason: 'channel-allow' };
+  }
   return { decision: blocked ? 'block' : 'allow', reason: 'classifier' };
 }
 

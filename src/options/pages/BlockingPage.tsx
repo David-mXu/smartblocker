@@ -3,8 +3,11 @@ import { Plus, X } from '@phosphor-icons/react';
 import { api } from '../../shared/api';
 import { LABELS } from '../../shared/config';
 import type { HistoryScanState } from '../../shared/messages';
+import { MAX_RESUME_AHEAD_MS } from '../../shared/resume';
+import type { Settings } from '../../shared/settings';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
+import { Select } from '../../components/ui/select';
 import { Switch } from '../../components/ui/switch';
 import { Checkbox } from '../../components/ui/checkbox';
 import { Badge } from '../../components/ui/badge';
@@ -36,6 +39,13 @@ export function presetFor(threshold: number) {
 
 const NEUTRAL_PREFIX = 'neutral: ';
 
+/** Epoch ms → `datetime-local` input value, in the device's local zone. */
+function localInputValue(ts: number): string {
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 /** History-scan label → plain words. */
 function scanLabelName(label: string): string {
   if (label.startsWith(NEUTRAL_PREFIX)) return displayLabel(label.slice(NEUTRAL_PREFIX.length));
@@ -45,7 +55,7 @@ function scanLabelName(label: string): string {
 }
 
 export function BlockingPage({ state }: { state: OptionsState }) {
-  const { settings, lock, save } = state;
+  const { settings, lock, save, now } = state;
   const locked = lock.locked;
 
   const [customCategory, setCustomCategory] = useState('');
@@ -168,6 +178,92 @@ export function BlockingPage({ state }: { state: OptionsState }) {
               />
             }
           />
+          <SettingRow
+            label="Turn blocking back on"
+            description={
+              locked ? (
+                <LockedNote reason={lock.reason} className="mt-0.5" />
+              ) : !settings.enabled && settings.resumeMode !== 'off' ? (
+                <span className="text-accent-soft">
+                  Blocking is paused — it turns back on{' '}
+                  {settings.resumeMode === 'startup'
+                    ? 'next time the browser starts'
+                    : settings.resumeMode === 'schedule'
+                      ? 'when your next focus hours begin'
+                      : settings.resumeAt !== null
+                        ? `at ${new Date(settings.resumeAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`
+                        : 'at the time you pick'}
+                  .
+                </span>
+              ) : (
+                'If you pause blocking, SmartBlocker can switch it back on for you — so a quick break doesn’t become the whole afternoon.'
+              )
+            }
+            htmlFor="resume-mode"
+            control={
+              <Select
+                id="resume-mode"
+                value={settings.resumeMode}
+                disabled={locked}
+                onChange={(e) => {
+                  const mode = e.target.value as Settings['resumeMode'];
+                  void save({
+                    resumeMode: mode,
+                    // Pre-fill a sane instant the first time a time-based
+                    // mode is picked (setSettings clamps it to 24h).
+                    ...(mode === 'time' && (settings.resumeAt === null || settings.resumeAt <= now)
+                      ? { resumeAt: now + 3_600_000 }
+                      : {}),
+                  });
+                }}
+              >
+                <option value="off">Never</option>
+                <option value="startup">When the browser restarts</option>
+                <option value="schedule">When focus hours begin</option>
+                <option value="time">At a set time</option>
+              </Select>
+            }
+          />
+          {settings.resumeMode === 'time' && (
+            <SettingRow
+              label="Turn back on at"
+              description="Any time in the next 24 hours."
+              htmlFor="resume-at"
+              control={
+                <Input
+                  id="resume-at"
+                  type="datetime-local"
+                  disabled={locked}
+                  min={localInputValue(now)}
+                  max={localInputValue(now + MAX_RESUME_AHEAD_MS)}
+                  value={settings.resumeAt !== null ? localInputValue(settings.resumeAt) : ''}
+                  onChange={(e) => {
+                    const t = new Date(e.target.value).getTime();
+                    if (Number.isFinite(t)) void save({ resumeAt: t });
+                  }}
+                />
+              }
+            />
+          )}
+          <SettingRow
+            label="Hide distractions in search results"
+            description={
+              locked ? (
+                <LockedNote reason={lock.reason} className="mt-0.5" />
+              ) : (
+                'Folds away video carousels, games and shopping boxes on Google, Bing and other search engines, so a search doesn’t turn into a detour.'
+              )
+            }
+            htmlFor="mask-search-elements-toggle"
+            control={
+              <Switch
+                id="mask-search-elements-toggle"
+                checked={settings.maskSearchElements}
+                disabled={locked}
+                onChange={(e) => void save({ maskSearchElements: e.target.checked })}
+              />
+            }
+          />
           <div className="flex flex-col gap-3 px-4 py-3.5">
             <div className="flex flex-col gap-0.5">
               <span id="strictness-label" className="text-sm font-medium text-foreground">
@@ -230,6 +326,7 @@ export function BlockingPage({ state }: { state: OptionsState }) {
             )}
           </div>
         </SettingsGroup>
+
       </SettingsSection>
 
       <SettingsSection
@@ -280,6 +377,25 @@ export function BlockingPage({ state }: { state: OptionsState }) {
               );
             })}
           </ul>
+          <SettingRow
+            label="Also block adults-only sites instantly"
+            description={
+              locked ? (
+                <LockedNote reason={lock.reason} className="mt-0.5" />
+              ) : (
+                'Sites that label themselves adults-only, and every .xxx address, are blocked before the page is even checked.'
+              )
+            }
+            htmlFor="block-adult-toggle"
+            control={
+              <Switch
+                id="block-adult-toggle"
+                checked={settings.blockAdult}
+                disabled={locked}
+                onChange={(e) => void save({ blockAdult: e.target.checked })}
+              />
+            }
+          />
           <div className="flex flex-col gap-2 px-4 py-3.5">
             <label htmlFor="custom-category-input" className="text-sm font-medium text-foreground">
               Add your own category

@@ -34,7 +34,8 @@ export interface TabStatus {
   label?: string;
   /** Top score 0..1 — absent for rules. */
   score?: number;
-  /** The "Always block" entry that matched, for kind === 'blocked-rule'. */
+  /** The "Always block" entry or title rule that matched, for kind === 'blocked-rule'.
+   *  Channel-rule hits are rendered as `channel @<handle>`. */
   rule?: string;
   ts: number;
 }

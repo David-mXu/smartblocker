@@ -37,6 +37,7 @@
     "declarativeNetRequest",
     "history",
     "nativeMessaging",
+    "notifications",
     "scripting",
     "storage",
     "unlimitedStorage",

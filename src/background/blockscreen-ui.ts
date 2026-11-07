@@ -122,7 +122,7 @@ export function renderBlockedPage(
     (failClosed ? 'color:#f2cd8b' : 'color:#a29a89');
   eyebrow.textContent = failClosed
     ? 'Classifier unavailable — fail-closed'
-    : /^blocked rule/i.test(spec.label)
+    : /^(?:blocked|title) rule/i.test(spec.label)
       ? niceLabel
       : 'Blocked · ' + niceLabel;
 

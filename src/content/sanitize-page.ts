@@ -23,6 +23,7 @@ export interface SanitizePageOptions {
   blockedLabels: string[];
   blocklist: string[];
   settingsLocked: boolean;
+  maskSearchElements?: boolean;
 }
 
 export interface SubItemEvalRequest {
@@ -664,7 +665,18 @@ export function sanitizePage(opts: SanitizePageOptions): {
       );
 
     if (isSerpHost) {
-      const isVideoVertical =
+      if (activeOpts.maskSearchElements === false) {
+        // Search element masking disabled by setting: reveal any previously masked SERP elements
+        const maskedSerpEls = document.querySelectorAll(
+          '[data-smartblocker-masked="serp-shelf"], [data-smartblocker-masked="serp-card"]',
+        );
+        for (let i = 0; i < maskedSerpEls.length; i++) {
+          const el = maskedSerpEls[i];
+          el.setAttribute('data-smartblocker-masked', 'revealed');
+          el.querySelector(':scope > .smartblocker-mask-bar')?.remove();
+        }
+      } else {
+        const isVideoVertical =
         /[?&](?:tbm=vid|udm=(?:7|vids))\b/i.test(location.search) ||
         /^\/(?:videos?|videohub)\b/i.test(location.pathname) ||
         /\/videos\/search\b/i.test(location.pathname) ||
@@ -1116,6 +1128,7 @@ export function sanitizePage(opts: SanitizePageOptions): {
         const tile = sweepTile(a);
         if (tile.closest('[data-smartblocker-masked]')) continue;
         if (maskElement(tile, 'serp-card', reason)) maskedCards++;
+      }
       }
     }
 

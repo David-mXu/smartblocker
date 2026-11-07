@@ -412,6 +412,69 @@ lock; the companion is the paid hard enforcer.
 
 ---
 
+## Phase 5 — Cold Turkey parity+ (from the 2026-11-07 blocker audit)
+
+Full evidence base: `docs/audits/2026-11-07-cold-turkey-blocker-landscape-audit.md`
+(gap matrix + P0/P1/P2) and `docs/audits/2026-11-07-blocker-ui-ux-and-news.md`
+(UI teardown + category news). The audit's conclusion: nobody ships **local ML
+classification + OS enforcement**; the phases below close CT's feature leads
+without giving up our architectural ones.
+
+### Batch 1 — quick deterministic wins (extension-only, no lock-schema changes)
+
+1. **Title rules.** Case-insensitive substring rules against the cleaned page
+   title, evaluated beside the URL `blocklist` (skip inference on hit, same
+   block path). CT sells this as Pro "window titles" blocking.
+2. **YouTube channel rules.** `channelBlocklist` forces a block,
+   `channelAllowlist` rescues from *classification* (not from URL blocklist);
+   handles normalized (`@name`, case-insensitive). Channel extraction already
+   exists in `extract-meta.ts`; CT's whole channel feature is this list.
+3. **RTA adult-site signal.** Opt-in `blockAdult` (default off): `<meta
+   name="rating">` = `adult`/RTA tag → deterministic block; `*.xxx` TLD
+   covered by the same switch. Matches CT's entire adult feature with one
+   meta probe.
+4. **Autostart resume.** Optional auto-resume when blocking is disabled:
+   on browser startup, at next scheduled-block start, or at a chosen
+   datetime (`resumeAt`, alarm-driven). Closes CT's "forgot to re-enable"
+   relapse path.
+
+### Batch 2 — commitment UX v2 (touches lock schema + Rust mirror; own phase)
+
+5. **Breaks v1: delay break + random-text break** (`lock.ts` holds the only
+   legal transition: a break *schedules re-block*, never shortens the stored
+   lock; unlock gates live in shared/lock-math so extension and daemon agree).
+6. **New lock types: delay + random-text** (delay 1 min–40 days, text
+   1–5,000 chars — service-side-equivalent gating, per the audit: the page
+   never decides). Update `lock-math.ts` + `merge.rs` + shared fixtures
+   together.
+7. **Typed-surrender quit wall** on non-hard overrides (effort + delay, no
+   guilt copy — per the PNAS finding; FocusMe's typo-restart trick).
+8. **Visible extension-loss grace countdown** (companion + popup: "browser
+   closes in 60 s unless the extension returns", re-check every 10 s).
+
+### Batch 3 — retention + admin (bigger surfaces)
+
+9. **Idle-aware usage statistics + dashboard** (per-day per-site/category
+   counters + "pages silenced this week" + override-rate; JSON export;
+   computed from tab events, not `chrome.history`, so incognito-inclusive
+   and history-clear-independent — CT parity).
+10. **Breaks v2: Allowance / Reward / Sessions / Pomodoro** (escalating
+    cost per use — Opal Waiting-Room pattern).
+11. **Multi-browser onboarding + "Fix extensions" surface** (companion
+    detects installed browsers, per-browser install/fix flow).
+12. **Windows companion verification pass** (service-name randomization,
+    exe file-locks during blocks, Task-Manager protection — CT's own
+    settings schema is the checklist; see audit §3.2) → flip
+    `policy_enforce` after the Phase 3 store listing.
+13. **Wildcard list grammar** (`*` anywhere in blocklist/whitelist rules —
+    CT-compatible) + **CLI on the daemon socket** (`block start|stop|toggle`,
+    `lock`, partner codes) for automation tools.
+14. **Per-category schedules** (then per-list after the multi-list UI
+    redesign) and **accountability-partner unlock codes** (offline-signed,
+    24 h partner-activation delay).
+
+---
+
 ## Engineering ground rules (carried across phases)
 
 These keep the extension from breaking; full detail in `CLAUDE.md`.

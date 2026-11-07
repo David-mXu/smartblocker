@@ -114,6 +114,20 @@ the day those switches flip.
 Prefer not to flip the toggle but still want to help? Use **Export as JSON**
 and attach the file to a GitHub issue.
 
+## Adult-site blocking (opt-in, default OFF)
+
+The *"Adult sites"* switch (options → Blocking) blocks pages that declare an
+adult rating in their own HTML (`<meta name="rating">`, e.g. the RTA tag) and
+all `.xxx` domains. Detection is a local meta-tag/TLD check done entirely
+on-device — no list is downloaded and nothing is sent anywhere.
+
+## Notifications (local only)
+
+The `"notifications"` permission exists for one purpose: a quiet local toast
+("Blocking resumed automatically") when the auto-resume feature turns
+blocking back on. It shows no content from your browsing and makes no
+network requests.
+
 ## Desktop companion (SmartBlocker Companion)
 
 The optional desktop companion (`companion/`) has **zero network code**. It

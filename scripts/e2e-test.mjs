@@ -525,6 +525,30 @@ try {
   );
   if (!serpMaskOk) process.exitCode = 1;
 
+  // Toggle maskSearchElements: false -> open search page unmasks and sweeps open tabs
+  await sw.evaluate(async () => {
+    const { settings = {} } = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({ settings: { ...settings, maskSearchElements: false } });
+  });
+  await tab.waitForTimeout(1_500);
+  const unmaskedState = await tab.evaluate(() => ({
+    tadsMasked: document.getElementById('tads')?.getAttribute('data-smartblocker-masked') === 'serp-shelf',
+    videosMasked: document.getElementById('shelf-videos')?.getAttribute('data-smartblocker-masked') === 'serp-shelf',
+    bestbuyMasked: document.getElementById('card-bestbuy')?.getAttribute('data-smartblocker-masked') === 'serp-card',
+  }));
+  const unmaskOk = !unmaskedState.tadsMasked && !unmaskedState.videosMasked && !unmaskedState.bestbuyMasked;
+  console.log(
+    `${unmaskOk ? 'PASS' : 'FAIL'} maskSearchElements toggle: turning toggle OFF unmasks SERP shelves/cards:`,
+    unmaskedState,
+  );
+  if (!unmaskOk) process.exitCode = 1;
+
+  // Restore maskSearchElements: true
+  await sw.evaluate(async () => {
+    const { settings = {} } = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({ settings: { ...settings, maskSearchElements: true } });
+  });
+
   await tab.goto('https://www.google.com/search?q=play+minesweeper');
   let minesweeperBlocked = false;
   try {

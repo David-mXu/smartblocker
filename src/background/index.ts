@@ -21,6 +21,7 @@ import { evaluateSubItems, initBlocker, sweepOpenTabs } from './blocker';
 import { getCompanionSnapshot, initCompanionBridge } from './companion';
 import { deleteSharedFeedback, getExistingInstallId, initFeedbackUploader } from './feedback-uploader';
 import { initLockEnforcer } from './lock-enforcer';
+import { initResumeEnforcer } from './resume-enforcer';
 import { scanHistory } from './history-ingester';
 import { initFocusSessionCommitter } from '../shared/focus-session';
 import { recordTabStatus } from '../shared/tab-status';
@@ -42,6 +43,7 @@ function domainOf(url: string | undefined): string {
 initBlocker();
 initFeedbackUploader();
 initLockEnforcer();
+initResumeEnforcer(); // registers runtime.onStartup here (auto-resume, constraint #4)
 initCompanionBridge();
 initFocusSessionCommitter();
 

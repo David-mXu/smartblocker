@@ -211,9 +211,11 @@ export function derivePageView(data: PopupData): PageView {
       detail:
         reason === 'classifier-unavailable'
           ? 'Blocked because SmartBlocker couldn’t check it during a lock.'
-          : label
-            ? `${sentenceCase(likelihood(score))} ${label}.`
-            : 'Blocked during your focus session.',
+          : label.startsWith('channel block: ')
+            ? `Matches your channel rule ${label.slice('channel block: '.length)}.`
+            : label
+              ? `${sentenceCase(likelihood(score))} ${label}.`
+              : 'Blocked during your focus session.',
     };
   }
 

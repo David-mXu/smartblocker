@@ -178,7 +178,7 @@ export function showBlockScreen(
   pill.style.cssText =
     (isCompact ? 'font-size:11px;margin-bottom:4px;' : 'font-size:13px;margin-bottom:14px;') +
     'font-weight:500;color:#a29a89;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-  pill.textContent = /^blocked rule/i.test(label) ? niceLabel : 'Blocked · ' + niceLabel;
+  pill.textContent = /^(?:blocked|title) rule/i.test(label) ? niceLabel : 'Blocked · ' + niceLabel;
 
   // --- Headline ---
   const headline = document.createElement('div');

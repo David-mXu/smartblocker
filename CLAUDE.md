@@ -11,7 +11,10 @@ productive Google subdomains (`GOOGLE_PRODUCTIVE_HOSTS`) are listed, and
 existing stored lists migrate once via `settings.ts` `whitelistVersion`. It also supports an
 **opt-in deterministic blocklist** (`config.ts`/`settings.ts` `blocklist`,
 empty by default): substring matches against the URL + title skip the ML
-classifier entirely and block instantly. **The full multi-phase roadmap lives
+classifier entirely and block instantly. A sibling **title rules** list
+(`settings.ts` `titleRules`, `shared/rules.ts`, empty by default) does
+title-only substring matching with optional `*` wildcards at the same ladder
+position, labeled `title rule: "…"`. **The full multi-phase roadmap lives
 in `ROADMAP.md`.** Implemented through Phase 2.9: user-configurable categories
 + onboarding, richer page signals, the **embedding-prototype classifier**
 (2026-07 bake-off winner — see Model facts), a block screen with a "this is
@@ -47,7 +50,7 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
 - `npm run eval` (`scripts/eval.mjs`) — **THE regression gate.** Runs the
   SHIPPED config over `scripts/eval-dataset.json` (**15,874 cases** across
   slices `v1`–`v8`), scores the real block/allow decision (whitelist →
-  blocklist → threshold, not just classifier top-1), and diffs every case
+  blocklist → title rules → threshold, not just classifier top-1), and diffs every case
   against the committed `scripts/eval-baseline.json`. Prints what FIXED and
   what REGRESSED by name; **exits non-zero on any regression**. Accept new
   results with `--update-baseline` — the git history of `eval-baseline.json`
@@ -76,6 +79,17 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
 - `node scripts/lock-math-test.mjs` — pure-math unit tests for the lock
   system's schedule/expiry derivations (`src/shared/lock-math.ts`, imported
   directly via Node type stripping — keep that file erasable-syntax-only).
+- `node scripts/resume-test.mjs` — pure-math unit tests for the auto-resume
+  derivations (`src/shared/resume.ts` — also erasable-syntax-only and
+  Node-imported; its runtime import of lock-math carries an explicit `.ts`
+  extension, enabled by tsconfig `allowImportingTsExtensions`).
+- `node scripts/rules-test.mjs` — pure unit tests for the deterministic rule
+  core: title-rule compiler/matcher + channel rules (`src/shared/rules.ts`,
+  same type-stripping constraints).
+- `node scripts/rta-test.mjs` — pure unit tests for the opt-in adult-site
+  deterministic rule (`src/shared/rules.ts` `isAdultHost`, same
+  erasable-syntax-only constraint) plus a source tripwire for the in-page
+  `<meta name="rating">` probe's accepted strings.
 - `node scripts/e2e-test.mjs` — full e2e in a real Chromium (Playwright):
   boots the SW, runs Test Pair, fakes YouTube pages via network interception
   to verify block/allow + latency + feedback capture, seeds and runs the
@@ -153,10 +167,17 @@ Commit and push when appropriate.
     idle. ES-module bundle + local `wasmPaths` override (see constraint #7).
   - `blocker.ts` — SPA-aware nav/title listener; arms ANY `http(s)` tab
     (`isClassifiableUrl`), exempts whitelisted hosts (`isWhitelisted`), then
-    checks the deterministic blocklist (`matchedBlocklistEntry`) — a hit skips
-    straight to the block screen with no inference. Otherwise gathers richer
-    signals (`extractMeta`), classifies, checks settings + overrides, injects
-    `blockscreen.ts`.
+    checks the deterministic blocklist (`matchedBlocklistEntry`) and title
+    rules (`matchTitleRule` from `shared/rules.ts`) — a hit skips straight
+    to the block screen with no inference. Only when the opt-in
+    `settings.blockAdult` is on, two more deterministic checks sit with the
+    blocklist (reason label `adult`): the `.xxx` TLD (`rules.ts isAdultHost`)
+    and, after meta gathering, the page's self-declared `<meta name="rating">`.
+    After meta gathering, channel rules (`rules.ts matchChannel`, Phase 5):
+    `channelBlocklist` blocks deterministically (no inference),
+    `channelAllowlist` rescues ONLY a classifier verdict, never a rule hit.
+    Otherwise gathers richer signals (`extractMeta`), classifies, checks
+    settings + overrides, injects `blockscreen.ts`.
   - `blockscreen.ts` — injected full block screen; the override button sends
     `OVERRIDE` with title + label + score (→ override store + a rich
     false-positive feedback record). Takes a `locked` flag: when a lock is
@@ -182,6 +203,17 @@ Commit and push when appropriate.
     ratchets can't accumulate; and runs a **Firefox MV3 keepalive
     alarm** so event-page suspension can't stall lock enforcement or look
     like a dead extension to the companion watchdog.
+  - `resume-enforcer.ts` — **auto-resume** (Phase 5 batch 1,
+    autostart-resume): while `settings.resumeMode !== 'off'` and blocking is
+    disabled, turns the master toggle back on — on browser startup
+    (`runtime.onStartup` + a `storage.session` cold-boot marker that tells
+    real browser starts from mere SW reaps), at the next scheduled-block
+    start, or at `resumeAt` (one-shot `resume-at` alarm, SW-start re-check
+    with missed-while-asleep semantics). Never fires while a lock is active
+    (timed locks defer, password lock drops); a manual re-enable clears
+    `resumeAt` but keeps the mode. Promptness-only alarm; posts a quiet
+    notification (the manifests carry the `"notifications"` permission,
+    added with this feature).
   - `feedback-uploader.ts` — daily `alarms`-driven opt-in uploader: only when
     `settings.shareFeedback` (default OFF) AND `config.ts FEEDBACK_ENDPOINT`
     (empty = disabled) are set; batches unsent records + random resettable
@@ -242,7 +274,10 @@ Commit and push when appropriate.
   generic sites it also derives a **page-kind hint** from `og:type` + JSON-LD
   `@type` ("Online store product page.", "Movie or TV show page.", …)
   prepended to the context (so it survives the 200-char trim), and uses the
-  `<h1>` as context when the page has no description meta.
+  `<h1>` as context when the page has no description meta. Its `adultContent`
+  probe (`<meta name="rating">` "adult" / RTA tag) rides alongside passively —
+  read only when `settings.blockAdult` is on (opt-in, default OFF), so it
+  never changes classifier input on its own.
 - `src/shared/` — `config.ts` (DEFAULTS: backend, model ids + pinned
   `MODEL_REVISION`/`EMBED_MODEL_REVISION` commit SHAs passed at every
   pipeline load, softmax
@@ -262,7 +297,14 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   contract), `titles.ts` (URL gates + `cleanTitle`), `url-signals.ts`
   (`hostnameOf` + `urlPathHint` + `applyUrlSignals` — URL-derived hints; in
   shared/ NOT background/ so the offline evaluator builds classifier input
-  through the same code the blocker uses), `lock-math.ts` (pure
+  through the same code the blocker uses), `rules.ts` (the deterministic
+  rule core: title-rule wildcard compile + match, channel normalize + match,
+  and `isAdultHost` for the opt-in `settings.blockAdult` — pure,
+  erasable-syntax-only, Node-tested by `scripts/rules-test.mjs` +
+  `scripts/rta-test.mjs`), `resume.ts` (pure auto-resume derivations —
+  mode normalization, the 24h `resumeAt` clamp, and `nextScheduleStart`
+  built ONLY on lock-math's public builders; erasable-syntax-only, tested
+  by `scripts/resume-test.mjs`), `lock-math.ts` (pure
   lock/schedule time math — no browser APIs, Node-testable; also
   `mergeLockStates` + `sanitizeLockState`, MIRRORED in the companion's
   `merge.rs`/`lock_math.rs` — change both together, parity enforced by

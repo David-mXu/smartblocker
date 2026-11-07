@@ -165,3 +165,54 @@ user-visible result.
 - Not verified: the live Edge session (extension not installed there), and
   Firefox (no Firefox run in this pass; `storage.session` fallback is
   code-reviewed only).
+
+## 7. Follow-up: keeping the IA simple as features keep arriving
+
+**Symptom.** A few hours after the overhaul shipped, another session added
+five features straight into the new pages (adult-only sites, search-result
+masking, auto-resume, title rules, YouTube channel rules). A fresh-eyes QA
+pass (re-running the builders' screenshot scripts against the current tree)
+showed the regressions the overhaul had removed: jargon ("RTA meta tag",
+"Deterministic rules", "smart classifier", "stored lowercase"), a separate
+"Auto-resume — the #1 relapse path" box, and a Sites page that had grown to
+four stacked lists (~2,000px on a phone).
+
+**Root cause.** Nothing in the codebase tells a feature author *where* a new
+control belongs; each feature was appended as its own section. That is the
+normal way IA decays.
+
+**Fix (user-approved, layout + copy only — no storage/logic changed):**
+- *Put a setting next to the thing it modifies.* Auto-resume only matters
+  when you pause, so it became "Turn blocking back on" directly under the
+  master switch, with a live sentence when armed ("Blocking is paused — it
+  turns back on at Sat 7:33 PM"). Adult-only blocking moved under the
+  category list beside "Adult content".
+- *Progressive disclosure for power-user rules.* Title patterns and YouTube
+  channels live in a native `<details id="more-rules">` with a rule count.
+  It auto-opens on first load whenever it already holds rules, so nothing a
+  user configured is ever hidden — the classic failure of collapsed UIs.
+  (Settings load asynchronously, so the auto-open runs once in an effect
+  rather than from `useState`'s initial value, which would see 0 rules.)
+- *Name things by outcome.* "Search element masking" → "Hide distractions
+  in search results"; "Never let the classifier block these channels" →
+  "Never block these channels for their topic".
+- The placement rule is now written into `docs/design-notes.md` §5 so the
+  next feature has a home.
+
+**Verification:** Playwright screenshots of Blocking (normal, paused with a
+resume time, 390px) and Sites (collapsed, auto-opened with rules, 390px) —
+all new ids present, no horizontal overflow, no console errors. Gate results
+for committing the bundled features are in the commit message.
+
+**A doc bug this pass caught (in my own earlier commit `4c4f38c`).** When
+rewriting `design-notes.md` §5/§7 I located sections with
+`line.startswith('### Popup')`. The new §5 heading "### Popup (`src/popup/`…"
+matched first, so the slice ran from §5's popup spec to §7's "Block screens"
+and silently deleted the §5 Popup + Focus-session + Block-screen specs, all
+of **§6 Rules** (including the token hex-grep rule) and the §7 heading. A
+later insertion that anchored on "## 6. Rules" then no-op'd because
+`str.replace` doesn't complain when the anchor is missing. Fixed by restoring
+the Block-screen spec and Rules from `abddfc7` and re-inserting the popup /
+focus-session text, then verifying the heading order with EXACT matches.
+Lesson: anchor edits on exact full lines, and assert every replacement hit
+exactly once *before* writing the file.

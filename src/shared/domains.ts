@@ -8,7 +8,10 @@
  * - Always-block entries are SUBSTRINGS of URL + title
  *   (titles.ts matchedBlocklistEntry, which lowercases), so they are only
  *   trimmed + lowercased — "/cart" and "black friday" are valid entries.
+ * - Channel entries (the YouTube channel rules) are HANDLES: the leading @ is
+ *   optional, stored lowercase (rules.ts normalizeChannelHandle).
  */
+import { normalizeChannelHandle } from './rules';
 
 export type NormalizeResult = { ok: true; value: string } | { ok: false; error: string };
 
@@ -44,11 +47,12 @@ export function normalizeKeyword(input: string): NormalizeResult {
 
 /**
  * Split pasted/typed text into candidate entries: newlines and commas always
- * separate; for domain lists whitespace does too (domains never contain it),
- * while keyword lists keep inner spaces ("black friday").
+ * separate; for domain and channel lists whitespace does too (domains and
+ * handles never contain it), while keyword lists keep inner spaces
+ * ("black friday").
  */
-export function splitEntries(text: string, mode: 'domain' | 'keyword'): string[] {
-  const sep = mode === 'domain' ? /[\n,;\s]+/ : /[\n,;]+/;
+export function splitEntries(text: string, mode: 'domain' | 'keyword' | 'channel'): string[] {
+  const sep = mode === 'keyword' ? /[\n,;]+/ : /[\n,;\s]+/;
   return text
     .split(sep)
     .map((s) => s.trim())
@@ -63,8 +67,13 @@ export interface MergeResult {
 }
 
 /** Normalize + dedupe `inputs` into `existing` (order kept, new entries appended). */
-export function mergeEntries(existing: string[], inputs: string[], mode: 'domain' | 'keyword'): MergeResult {
-  const norm = mode === 'domain' ? normalizeDomain : normalizeKeyword;
+export function mergeEntries(
+  existing: string[],
+  inputs: string[],
+  mode: 'domain' | 'keyword' | 'channel',
+): MergeResult {
+  const norm =
+    mode === 'domain' ? normalizeDomain : mode === 'channel' ? normalizeChannelHandle : normalizeKeyword;
   const seen = new Set(existing.map((e) => e.toLowerCase()));
   const items = [...existing];
   const added: string[] = [];

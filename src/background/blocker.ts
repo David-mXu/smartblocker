@@ -7,6 +7,7 @@ import { isOverridden } from '../shared/overrides';
 import { clearTabStatus, recordTabStatus } from '../shared/tab-status';
 import type { ClassifyInput, ClassifyOutcome, LatencySample } from '../shared/messages';
 import { cleanTitle, isClassifiableUrl, isWhitelisted, matchedBlocklistEntry } from '../shared/titles';
+import { isAdultHost, matchChannel, matchTitleRule } from '../shared/rules';
 import { applyUrlSignals, hostnameOf, urlFallbackTitle } from '../shared/url-signals';
 import { extractMeta } from '../content/extract-meta';
 import {
@@ -252,6 +253,7 @@ async function runPageSanitizer(tabId: number): Promise<void> {
           blockedLabels: settings.blockedLabels,
           blocklist: settings.blocklist,
           settingsLocked: lock.settingsLocked,
+          maskSearchElements: settings.maskSearchElements,
         },
       ],
     });
@@ -295,6 +297,16 @@ export async function evaluateSubItems(
 
   const results: SubItemEvalResult[] = [];
   for (const item of items.slice(0, 20)) {
+    if (item.kind === 'serp-card' && settings.maskSearchElements === false) {
+      results.push({
+        id: item.id,
+        blocked: false,
+        label: 'search masking disabled',
+        score: 0,
+      });
+      continue;
+    }
+
     let title = cleanTitle(item.title) ?? item.title?.trim() ?? '';
     let channel = item.channel ?? hostnameOf(item.url);
     let context = item.context ?? '';
@@ -597,13 +609,25 @@ async function logSample(sample: LatencySample) {
 async function gatherMeta(
   tabId: number,
   frameId?: number,
-): Promise<{ channel?: string; context?: string; fallbackTitle?: string; metaStale?: boolean }> {
+): Promise<{
+  channel?: string;
+  context?: string;
+  fallbackTitle?: string;
+  metaStale?: boolean;
+  adultContent?: boolean;
+}> {
   try {
     const target = frameId !== undefined ? { tabId, frameIds: [frameId] } : { tabId };
     const [inj] = await api.scripting.executeScript({ target, func: extractMeta });
     return (
       (inj?.result as
-        | { channel?: string; context?: string; fallbackTitle?: string; metaStale?: boolean }
+        | {
+            channel?: string;
+            context?: string;
+            fallbackTitle?: string;
+            metaStale?: boolean;
+            adultContent?: boolean;
+          }
         | undefined) ?? {}
     );
   } catch {
@@ -985,11 +1009,26 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
 
     // Deterministic blocklist check with the initial clean title (or null if generic/empty)
     let blocklistHit = matchedBlocklistEntry(url, initialTitle, settings.blocklist);
+    // Deterministic TITLE-only rules — same ladder position as the blocklist
+    // (matchTitleRule takes a null title as "no match", so generic/empty
+    // initial titles just fall through to the resolved-title check below).
+    let titleRuleHit = matchTitleRule(initialTitle, settings.titleRules);
+
+    // Opt-in adult-site blocking (settings.blockAdult, default OFF) — signal
+    // #2: any host inside the .xxx TLD is a deterministic block. Positioned
+    // with the URL blocklist in the decision ladder: AFTER the whitelist (the
+    // exemption above already returned, so a deliberate whitelist entry for a
+    // .xxx domain still wins) and BEFORE the classifier. Signal #1 (the
+    // page's own <meta name="rating"> declaration) needs the DOM, so it is
+    // checked after gatherMeta below.
+    const adultHost = settings.blockAdult && isAdultHost(hostnameOf(url));
 
     // Allow YouTube browsing/discovery surfaces (homepage, channel pages, feeds,
-    // search results) unless explicitly matched by a deterministic blocklist rule,
-    // so users can search/browse YouTube and only get blocked on distracting videos.
-    if (!blocklistHit && isYouTubeBrowsingSurface(url)) {
+    // search results) unless explicitly matched by a deterministic blocklist or
+    // title rule (or the opt-in adult signal), so users can search/browse
+    // YouTube and only get blocked on distracting videos. An explicit user
+    // rule trumps this convenience.
+    if (!blocklistHit && !titleRuleHit && !adultHost && isYouTubeBrowsingSurface(url)) {
       armedAt.delete(tabId);
       lastClassified.set(tabId, `${url}|${initialTitle ?? 'youtube'}`);
       void recordTabStatus(tabId, { url, title: initialTitle ?? '', kind: 'browsing', ts: Date.now() });
@@ -1011,6 +1050,10 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
     // True once the fail-closed loud screen has been injected for this
     // evaluation — the normal verdict screen must NOT replace it.
     let classifyFailedClosed = false;
+    // The channelBlocklist entry that matched this page's extracted channel,
+    // when one did — set only in the classifier branch below, so the popup
+    // status can render it as a rule hit ("channel @…") like a blocklist one.
+    let channelBlockHit: string | null = null;
 
     // ── P2 DNR force redirect (red-team #1/#4, main frames only) ─────────
     // Under a force-blocking lock the block screen is the extension-owned
@@ -1050,11 +1093,15 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
       return forceRedirectPromise;
     };
 
-    if (blocklistHit) {
+    if (blocklistHit || titleRuleHit || adultHost) {
       title = initialTitle ?? urlFallbackTitle(url) ?? '';
       if (title) lastClassified.set(tabId, `${url}|${title}`);
       result = {
-        label: `blocked rule: "${blocklistHit}"`,
+        label: blocklistHit
+          ? `blocked rule: "${blocklistHit}"`
+          : titleRuleHit
+            ? `title rule: "${titleRuleHit}"`
+            : 'adult',
         score: 1,
         cached: false,
         loadMs: 0,
@@ -1145,9 +1192,20 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
       }
 
       blocklistHit = matchedBlocklistEntry(url, title, settings.blocklist);
-      if (blocklistHit) {
+      // Title rules re-checked with the fully-resolved title (initialTitle ??
+      // dom fallback ?? URL fallback) — the same string the classifier sees —
+      // before any inference runs. Skipped once a blocklist hit exists.
+      if (!blocklistHit) titleRuleHit = matchTitleRule(title, settings.titleRules);
+      // Opt-in adult-site blocking — signal #1: the page self-declared an
+      // adult rating (<meta name="rating">, probeAdultMeta in extract-meta.ts).
+      const adultMeta = settings.blockAdult && meta.adultContent === true;
+      if (blocklistHit || titleRuleHit || adultMeta) {
         result = {
-          label: `blocked rule: "${blocklistHit}"`,
+          label: blocklistHit
+            ? `blocked rule: "${blocklistHit}"`
+            : titleRuleHit
+              ? `title rule: "${titleRuleHit}"`
+              : 'adult',
           score: 1,
           cached: false,
           loadMs: 0,
@@ -1157,68 +1215,16 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
       } else {
         const { channel, context } = applyUrlSignals(url, meta);
 
-        let focusContext: ClassifyInput['focusContext'];
-        if (settings.focusGoal.trim() || settings.useTabContext) {
-          let openTabTitles: string[] = [];
-          try {
-            const openTabs = await api.tabs.query({ currentWindow: true });
-            for (const t of openTabs) {
-              if (t.id !== tabId && isClassifiableUrl(t.url)) {
-                const ct = cleanTitle(t.title);
-                if (ct) {
-                  openTabTitles.push(ct);
-                  if (openTabTitles.length >= 6) break;
-                }
-              }
-            }
-          } catch {
-            // ignore tab query failure
-          }
-          focusContext = {
-            focusGoal: settings.focusGoal.trim() || undefined,
-            openTabTitles,
-          };
-        }
-
-        const outcome = await classifyWithHardLockRetry(
-          {
-            title: title ?? '',
-            channel,
-            context,
-            focusContext,
-          },
-          isHardLocked(lock),
-          () => navGeneration.get(tabId) === myGeneration,
-          () => {
-            classifyFailedClosed = true;
-            if (lock.forceBlocking) {
-              // P2: under a force-blocking lock the fail-closed screen IS the
-              // extension-owned blocked page — redirect instead of injecting
-              // the loud overlay. Password-locked and normal modes keep the
-              // injected screen byte-identical; a DNR failure here only means
-              // the final verdict branch re-ensures the loud screen.
-              void requestForceRedirect({
-                title: title ?? '',
-                label: 'classifier unavailable (locked)',
-                score: 1,
-                ms: 0,
-                reason: 'classifier-unavailable',
-              }).catch(() => false);
-            } else {
-              void api.scripting
-                .executeScript({
-                  target: { tabId },
-                  func: showClassifierUnavailableScreen,
-                  args: [title ?? ''],
-                })
-                .catch(() => {});
-            }
-          },
-        );
-        if (outcome.kind === 'stale') return;
-        if (outcome.kind === 'failed') {
+        // Channel rules (rules.ts, Phase 5) sit between the blocklist and the
+        // classifier: a channelBlocklist hit blocks deterministically — the
+        // classifier, its latency, and the fail-closed machinery never run —
+        // with its own reason label. The channelAllowlist further below
+        // rescues ONLY a classifier verdict, never a blocklist/
+        // channelBlocklist hit.
+        channelBlockHit = matchChannel(channel ?? null, settings.channelBlocklist);
+        if (channelBlockHit) {
           result = {
-            label: 'classifier unavailable (locked)',
+            label: `channel block: "${channelBlockHit}"`,
             score: 1,
             cached: false,
             loadMs: 0,
@@ -1226,22 +1232,98 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
           };
           blocked = true;
         } else {
-          result = outcome.result;
-          const effScore = effectiveBlockScore(result, settings.blockedLabels);
-          blocked =
-            settings.blockedLabels.includes(result.label) && effScore >= settings.blockThreshold;
-          if (!blocked && classifyFailedClosed) {
-            // Recovered during backoff with an allow verdict — the loud
-            // fail-closed screen comes down (a block verdict overwrites it).
-            classifyFailedClosed = false;
-            void api.scripting
-              .executeScript({ target: { tabId }, func: clearBlockScreen })
-              .catch(() => {});
-            // P2: if the tab picked up a fail-closed force redirect during
-            // the backoff, release its session rule so this URL can load
-            // again. (The blocked page itself stays displayed until the user
-            // navigates — intentionally fail-closed; documented residual.)
-            if (lock.forceBlocking) void clearForceRedirectRule(tabId, url);
+          let focusContext: ClassifyInput['focusContext'];
+          if (settings.focusGoal.trim() || settings.useTabContext) {
+            let openTabTitles: string[] = [];
+            try {
+              const openTabs = await api.tabs.query({ currentWindow: true });
+              for (const t of openTabs) {
+                if (t.id !== tabId && isClassifiableUrl(t.url)) {
+                  const ct = cleanTitle(t.title);
+                  if (ct) {
+                    openTabTitles.push(ct);
+                    if (openTabTitles.length >= 6) break;
+                  }
+                }
+              }
+            } catch {
+              // ignore tab query failure
+            }
+            focusContext = {
+              focusGoal: settings.focusGoal.trim() || undefined,
+              openTabTitles,
+            };
+          }
+
+          const outcome = await classifyWithHardLockRetry(
+            {
+              title: title ?? '',
+              channel,
+              context,
+              focusContext,
+            },
+            isHardLocked(lock),
+            () => navGeneration.get(tabId) === myGeneration,
+            () => {
+              classifyFailedClosed = true;
+              if (lock.forceBlocking) {
+                // P2: under a force-blocking lock the fail-closed screen IS the
+                // extension-owned blocked page — redirect instead of injecting
+                // the loud overlay. Password-locked and normal modes keep the
+                // injected screen byte-identical; a DNR failure here only means
+                // the final verdict branch re-ensures the loud screen.
+                void requestForceRedirect({
+                  title: title ?? '',
+                  label: 'classifier unavailable (locked)',
+                  score: 1,
+                  ms: 0,
+                  reason: 'classifier-unavailable',
+                }).catch(() => false);
+              } else {
+                void api.scripting
+                  .executeScript({
+                    target: { tabId },
+                    func: showClassifierUnavailableScreen,
+                    args: [title ?? ''],
+                  })
+                  .catch(() => {});
+              }
+            },
+          );
+          if (outcome.kind === 'stale') return;
+          if (outcome.kind === 'failed') {
+            result = {
+              label: 'classifier unavailable (locked)',
+              score: 1,
+              cached: false,
+              loadMs: 0,
+              inferMs: 0,
+            };
+            blocked = true;
+          } else {
+            result = outcome.result;
+            const effScore = effectiveBlockScore(result, settings.blockedLabels);
+            blocked =
+              settings.blockedLabels.includes(result.label) && effScore >= settings.blockThreshold;
+            // Channel allowlist: rescue the page ONLY when the classifier
+            // verdict alone blocks it — the blocklist and channelBlocklist
+            // branches above never reach this check.
+            if (blocked && matchChannel(channel ?? null, settings.channelAllowlist)) {
+              blocked = false;
+            }
+            if (!blocked && classifyFailedClosed) {
+              // Recovered during backoff with an allow verdict — the loud
+              // fail-closed screen comes down (a block verdict overwrites it).
+              classifyFailedClosed = false;
+              void api.scripting
+                .executeScript({ target: { tabId }, func: clearBlockScreen })
+                .catch(() => {});
+              // P2: if the tab picked up a fail-closed force redirect during
+              // the backoff, release its session rule so this URL can load
+              // again. (The blocked page itself stays displayed until the user
+              // navigates — intentionally fail-closed; documented residual.)
+              if (lock.forceBlocking) void clearForceRedirectRule(tabId, url);
+            }
           }
         }
       }
@@ -1272,14 +1354,18 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
 
     // Popup "This page" card (shared/tab-status.ts). Skipped for stale
     // verdicts whose tab already moved to another URL.
+    // Popup "This page" card rule source: blocklist > title rule > channel
+    // (channel rendered as "channel @<handle>", like the other rule labels).
+    const matchedRule =
+      blocklistHit ?? titleRuleHit ?? (channelBlockHit ? `channel @${channelBlockHit}` : null);
     if (navGeneration.get(tabId) === myGeneration || armedUrl.get(tabId) === url) {
       void recordTabStatus(tabId, {
         url,
         title: title ?? '',
-        kind: blocklistHit
+        kind: matchedRule
           ? overridden ? 'overridden' : 'blocked-rule'
           : overridden ? 'overridden' : blocked ? 'blocked' : 'allowed',
-        ...(blocklistHit ? { rule: blocklistHit } : { label: result.label, score: result.score }),
+        ...(matchedRule ? { rule: matchedRule } : { label: result.label, score: result.score }),
         ts: Date.now(),
       });
     }
@@ -1415,9 +1501,12 @@ const SETTINGS_SWEEP_KEYS: (keyof Settings)[] = [
   'blockedLabels',
   'blockThreshold',
   'blocklist',
+  'titleRules',
   'whitelist',
   'focusGoal',
   'useTabContext',
+  'blockAdult',
+  'maskSearchElements',
 ];
 
 let settingsSweepTimer: ReturnType<typeof setTimeout> | undefined;

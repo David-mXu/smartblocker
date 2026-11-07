@@ -9,6 +9,7 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
     "types": ["chrome"]
   },
