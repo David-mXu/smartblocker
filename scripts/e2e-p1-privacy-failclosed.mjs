@@ -185,6 +185,8 @@ try {
   if (!noRemoteUi) process.exitCode = 1;
 
   // Model warm-up (first run downloads ~35MB — cached profile makes this ~1s).
+  // Diagnostics live on options → Advanced since the 2026-11-07 UX overhaul.
+  await popup.goto(`chrome-extension://${extensionId}/options.html#advanced`);
   await popup.click('#test-pair');
   await popup.waitForFunction(
     () => {

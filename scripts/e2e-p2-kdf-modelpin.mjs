@@ -87,7 +87,7 @@ try {
 
   const opts = await context.newPage();
   const openOptions = async () => {
-    await opts.goto(`chrome-extension://${extensionId}/options.html`);
+    await opts.goto(`chrome-extension://${extensionId}/options.html#locks`);
     await opts.waitForSelector('#lock-password');
     await opts.waitForTimeout(1_200); // applyLockUI runs at load + 1s tick
   };
@@ -335,7 +335,7 @@ try {
   // route inconsistently; CacheStorage is per-extension-origin, so the popup
   // page can read entries written by the offscreen document.)
   const page = await context.newPage();
-  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await page.goto(`chrome-extension://${extensionId}/options.html#advanced`);
   await page.click('#test-pair');
   console.log('… waiting for classification (first run downloads the model)');
   await page.waitForFunction(

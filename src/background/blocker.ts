@@ -4,6 +4,7 @@ import { getSettings, type Settings } from '../shared/settings';
 import { getLockStatus } from '../shared/lock';
 import type { LockStatus } from '../shared/lock-math';
 import { isOverridden } from '../shared/overrides';
+import { clearTabStatus, recordTabStatus } from '../shared/tab-status';
 import type { ClassifyInput, ClassifyOutcome, LatencySample } from '../shared/messages';
 import { cleanTitle, isClassifiableUrl, isWhitelisted, matchedBlocklistEntry } from '../shared/titles';
 import { applyUrlSignals, hostnameOf, urlFallbackTitle } from '../shared/url-signals';
@@ -991,6 +992,7 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
     if (!blocklistHit && isYouTubeBrowsingSurface(url)) {
       armedAt.delete(tabId);
       lastClassified.set(tabId, `${url}|${initialTitle ?? 'youtube'}`);
+      void recordTabStatus(tabId, { url, title: initialTitle ?? '', kind: 'browsing', ts: Date.now() });
       clearCurtain(tabId);
       clearOverlay(tabId);
       void clearForceRedirectRule(tabId, url);
@@ -1249,8 +1251,10 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
     // (and over a blocklist match, so overrides always have the final say) —
     // EXCEPT during a forced-blocking lock, whose whole point is that past
     // exceptions stop applying. Scoped to this page's hostname (red-team #14).
+    let overridden = false;
     if (blocked && !lock.forceBlocking && (await isOverridden(title ?? '', hostnameOf(url)))) {
       blocked = false;
+      overridden = true;
     }
 
     // The user may have navigated again (e.g. pressed back) while classify()
@@ -1264,6 +1268,20 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
       if (latestUrl && latestUrl !== url) {
         blocked = false;
       }
+    }
+
+    // Popup "This page" card (shared/tab-status.ts). Skipped for stale
+    // verdicts whose tab already moved to another URL.
+    if (navGeneration.get(tabId) === myGeneration || armedUrl.get(tabId) === url) {
+      void recordTabStatus(tabId, {
+        url,
+        title: title ?? '',
+        kind: blocklistHit
+          ? overridden ? 'overridden' : 'blocked-rule'
+          : overridden ? 'overridden' : blocked ? 'blocked' : 'allowed',
+        ...(blocklistHit ? { rule: blocklistHit } : { label: result.label, score: result.score }),
+        ts: Date.now(),
+      });
     }
 
     let injectMs = 0;
@@ -1475,5 +1493,6 @@ export function initBlocker() {
     inFlightKey.delete(tabId);
     navGeneration.delete(tabId);
     clearSubFrameStateForTab(tabId);
+    void clearTabStatus(tabId);
   });
 }

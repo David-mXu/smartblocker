@@ -192,7 +192,7 @@ try {
 
   // (a) Options page shows the live companion connection.
   const opts = await context.newPage();
-  await opts.goto(`chrome-extension://${EXTENSION_ID}/options.html`);
+  await opts.goto(`chrome-extension://${EXTENSION_ID}/options.html#companion`);
   const connectedOk = await poll(
     async () => /hardcore mode active/i.test((await opts.locator('#companion-status').textContent()) ?? ''),
     15_000,

@@ -22,6 +22,8 @@ import { getCompanionSnapshot, initCompanionBridge } from './companion';
 import { deleteSharedFeedback, getExistingInstallId, initFeedbackUploader } from './feedback-uploader';
 import { initLockEnforcer } from './lock-enforcer';
 import { scanHistory } from './history-ingester';
+import { initFocusSessionCommitter } from '../shared/focus-session';
+import { recordTabStatus } from '../shared/tab-status';
 
 console.log('[SmartBlocker] background started');
 
@@ -41,10 +43,13 @@ initBlocker();
 initFeedbackUploader();
 initLockEnforcer();
 initCompanionBridge();
+initFocusSessionCommitter();
 
-// First-run onboarding: open the settings page so the user picks what to block.
+// First-run onboarding: open the 3-step welcome wizard (options.html#welcome)
+// so the user picks what to block. Plain options.html never forces the
+// wizard — it shows a "Finish setup" banner instead (e2e opens it fresh).
 api.runtime.onInstalled.addListener(({ reason }) => {
-  if (reason === 'install') api.runtime.openOptionsPage();
+  if (reason === 'install') void api.tabs.create({ url: api.runtime.getURL('options.html#welcome') });
 });
 
 api.runtime.onMessage.addListener(
@@ -98,6 +103,17 @@ api.runtime.onMessage.addListener(
         // OVERRIDE messages can't write overrides or feedback.
         if (!(await consumeOverrideToken(msg.nonce))) return;
         await addOverride(msg.title, hostnameOf(sender.tab?.url ?? msg.url ?? ''));
+        // Popup "This page" card: reflect the override immediately.
+        if (sender.tab?.id !== undefined && sender.tab.url) {
+          void recordTabStatus(sender.tab.id, {
+            url: sender.tab.url,
+            title: msg.title,
+            kind: 'overridden',
+            label: msg.label,
+            score: msg.score,
+            ts: Date.now(),
+          });
+        }
         await addFeedback({
           kind: 'false_positive',
           title: msg.title,
@@ -133,13 +149,19 @@ api.runtime.onMessage.addListener(
           return;
         }
         const title = cleanTitle(msg.title) || msg.title;
-        const outcome = await classify({ title });
+        // The correction itself is the user's correctedLabel; the model's
+        // current verdict is context only. Never let a cold/stalled model
+        // download hang the popup's "Report" button — record without it.
+        const outcome = await Promise.race([
+          classify({ title }).catch(() => null),
+          new Promise<null>((r) => setTimeout(() => r(null), 8_000)),
+        ]);
         await addFeedback({
           kind: 'false_negative',
           title,
           domain: domainOf(msg.url),
-          modelLabel: outcome.label,
-          score: outcome.score,
+          modelLabel: outcome?.label ?? '',
+          score: outcome?.score ?? 0,
           correctedLabel: msg.correctedLabel,
           modelId: ACTIVE_MODEL_ID,
           extVersion: api.runtime.getManifest().version,

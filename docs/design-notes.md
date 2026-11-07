@@ -41,6 +41,16 @@
 
 ---
 
+- **UX overhaul references (2026-11-07, second pass — structure & flow):**
+  Lazyweb board <https://www.lazyweb.com/agentic-search/9ec1ed31-bb59-477b-bb92-95bce0261180>
+  (Opal session setup / onboarding / blocks, Linear settings sidebar, Alma
+  commit, Sleep Cycle + Motion schedules, Threads/Dealfront list editors,
+  Bing presets) plus sourced web research (Chrome/Firefox extension UX,
+  NN/g, Primer save patterns, GOV.UK input, Apple ML + Google PAIR on
+  explaining verdicts, WCAG 2.2). Full reports:
+  `docs/ux-research/2026-11-07/lazyweb-references.md` and
+  `docs/ux-research/2026-11-07/web-ux-research.md`.
+
 ## 1. Audit of the previous UI (why it read as slop)
 
 Rendered with Playwright at 1280px / 390px / popup 392px (`.design-work/before/`,
@@ -76,7 +86,7 @@ gitignored). Findings, most severe first:
   something distracting — or who opens settings rarely (first run, then a
   tweak a week later). They are *not* debugging a model.
 - **What they must do:** popup → see whether protection is on and *commit*
-  (focus goal, Frozen Turkey). Options → decide what gets blocked and how
+  (focus goal, focus session). Options → decide what gets blocked and how
   hard it is to undo. Block screen → choose to go back to work.
 - **Feel:** a desk lamp at night in a quiet reading room. Warm, low,
   focused; nothing shouts. Commitment feels like signing your name, not like
@@ -94,11 +104,11 @@ bulb (destructive).
    control (where the tick is *set*) and on the block screen (where the page
    *landed* relative to it). Explains a block in one glance; no jargon.
 2. **Lamplight = commitment.** Amber appears **only** for focus and
-   commitment (locks, Frozen Turkey, focus goal, schedules in effect). Locked
+   commitment (locks, focus sessions, focus goal, schedules in effect). Locked
    state = amber seal line + tabular countdown — never red.
 
 **Defaults rejected:** card-per-section with icon+title → one surface of
-grouped rows with a sticky section nav · mono uppercase labels → plain
+grouped rows, one page at a time behind a sidebar · mono uppercase labels → plain
 language, mono only for numbers/domains/code · accent on every control →
 neutral controls, amber reserved · bypass as primary → "Stay focused" primary.
 
@@ -130,7 +140,7 @@ family (H ≈ 72–87°); elevation steps only in lightness.
 | Token | Hex | Meaning — and only this |
 | :-- | :-- | :-- |
 | `--primary` / `-foreground` | `#efe8d8` / `#1c1405` | The one primary action per view. Switch "on". |
-| `--accent` / `-soft` / `-foreground` | `#e8a33d` / `#f2cd8b` / `#1c1405` | **Commitment & focus only** (lock, Frozen Turkey, focus goal, schedule active, meter tick). Also focus ring. |
+| `--accent` / `-soft` / `-foreground` | `#e8a33d` / `#f2cd8b` / `#1c1405` | **Commitment & focus only** (lock, focus session, focus goal, schedule active, meter tick). Also focus ring. |
 | `--success` / `-soft` | `#5cb98a` / `#93d5b5` | Saved, connected, protection on (status dot). |
 | `--warning` / `-soft` | `#e8c356` / `#f0d489` | Something weakens protection (incognito access off). |
 | `--destructive` / `-soft` | `#e0655a` / `#f2a192` | Data deletion, blocked-content verdict, errors. |
@@ -175,86 +185,77 @@ Tint recipe for callouts: `bg-<hue>/10 border-<hue>/30 text-<hue>-soft`.
 
 ## 5. Surface specs
 
-### Options (`src/options/OptionsApp.tsx`)
-- Slim sticky header: wordmark · status (dot + "Blocking on" / "Paused" /
-  amber "Locked · 3h 12m") · save message · **Save** (only needed for the
-  site lists; everything else autosaves).
-- Body: `md:` two columns — **180px sticky section nav** + content column
-  (max 680px). Below `md` the nav is hidden and sections stack.
-- Section order (importance): **Blocking** (enable, sensitivity meter) →
-  **Categories** → **Focus** → **Sites** → **Commitment** (timer, password,
-  schedules) → **Desktop companion** → **History review** → **Learning &
-  privacy**.
-- Locked: amber `#lock-status` seal line at top; every control disabled.
-- First run: `#banner` welcome strip above sections; Save reads "Finish setup".
-
-### Popup (`src/popup/PopupApp.tsx`, 392px)
-Focal element = **protection status**. Order: header (wordmark, settings
-icon) → status row (dot + "Blocking on", enable switch; or amber lock line
-with countdown) → **Focus** (goal input + Set) → **Frozen Turkey**
-(segmented 1h/4h/8h, amber confirm) → **Missed one?** (category + Report) →
-quiet **Diagnostics** footer (ghost buttons; `#out` only shows when it has
-content).
-
-### Block screen (`blockscreen.ts` injected + `blockscreen-ui.ts` → `blocked.html`)
-Full-bleed obsidian, **no card**, centered column ≤ 520px:
-wordmark (faint) → eyebrow `Blocked · <category>` → headline **"This one can
-wait."** (34/600) → quoted page title (muted) → **Threshold Meter**
-("87% confidence", tick at threshold) → buttons: **Stay focused (close tab)**
-primary ivory, *This is actually productive — let me through* outline,
-Dismiss text → meta "Checked on-device in 12ms" (faint).
-Locked: amber seal note "Smart Blocker is locked — bypass is disabled" +
-Stay focused only. Fail-closed: amber warning variant, no score, no meter.
-Inline styles must use the hexes in §3 (host pages have no extension CSS);
-`blockscreen.ts` stays import-free.
-
----
-
-## 6. Rules
-
-**Do**
-- Semantic tokens only (`bg-card`, `text-muted-foreground`, `text-faint`,
-  `border-border`, `bg-accent/10`…). Change color in `tokens.css`, nowhere else.
-- One primary (ivory) button per view. Amber only for commitment/focus.
-- Plain-language copy, sentence case, verb + object buttons ("Arm password
-  lock", "Add schedule").
-- Compose `SettingsSection` → `SettingsGroup` → `SettingRow`; don't hand-roll rows.
-
-**Don't**
-- No raw palette classes or hexes in `.tsx`:
-  `grep -rnE "zinc-[0-9]|emerald-[0-9]|amber-[0-9]|red-[0-9]|#[0-9a-fA-F]{6}" src/ site/ --include="*.tsx"` must be empty.
-- No cards inside cards, no shadows/blur/glow on product surfaces, no
-  decorative badges, no mono-uppercase "telemetry" labels, no emoji.
-- No entrance animations in popup/options; no GSAP outside `site/`.
-- No marketing sections in `src/options/` (they live in `site/`).
-
----
-
-## 7. Extension contract (tests depend on these — never rename)
+### Options (`src/options/`) — sidebar, one page at a time (UX overhaul 2026-11-07)
+- **Shell** `OptionsApp.tsx`: slim sticky header (wordmark · status pill
+  "Blocking on" / "Paused" / amber "Locked · 3h 12m" · `#save-msg` "Saved" ·
+  `#model-progress` only while downloading) → `#lock-status` amber seal line
+  when locked → `#banner` "Finish setting up SmartBlocker" + "Start setup"
+  link when `!onboarded`. State lives in `useOptionsState.ts`; formatting in
+  `format.ts`; one file per page in `pages/`.
+- **Navigation:** 180px sticky sidebar of real links (`href="#sites"`,
+  `aria-current="page"`); below `md` it becomes a horizontally scrollable pill
+  row. Hash routing; unknown hash → Blocking; legacy hashes (`#categories`,
+  `#history`, `#commitment`, `#schedules`) redirect. Focus moves to the page
+  heading on navigation.
+- **Pages:** Blocking `#blocking` (master switch, strictness presets
+  Relaxed 0.65 / Balanced 0.5 / Strict 0.4 — other values read "Custom",
+  categories, "Find your distractions" history review) · Sites `#sites`
+  (`ListEditor` Always allow / Always block) · Focus `#focus` (goal, open-tab
+  context, start a focus session) · Locks `#locks` (timer, password,
+  incognito warning) · Focus hours `#schedule` (summary cards, S–M–T–W–T–F–S
+  day chips, overnight note, presets "Weekdays 9–5" / "Every evening 7–10 PM")
+  · Desktop app `#companion` · Privacy & data `#privacy` (danger zone last) ·
+  Advanced `#advanced` (exact sensitivity slider; Diagnostics: Test
+  classifier, Scan history, Latency log, `#out`).
+- **Welcome wizard** `#welcome` (`welcome/`): full page, no sidebar, ≤560px
+  column, "Step N of 3" bar. 1 "What pulls you off track?" (category rows
+  with examples, "Block all of these", live "N selected") → 2 "What should
+  always stay open?" (focus goal + Always-allow `ListEditor`) → 3 "You're all
+  set" (summary with Change links, how it works, incognito check, pin hint,
+  "Start blocking"). Each step persists on Continue; "Set up later" leaves
+  `onboarded` false so the banner stays. First install opens
+  `options.html#welcome`; plain `options.html` never forces the wizard.
+- **Saving:** everything autosaves (switches, presets, categories, list rows
+  via `ListEditor.onChange`) and confirms in `#save-msg`. The only explicit
+  saves are multi-field forms: "Edit as text" (Save list / Cancel) and
+  "Save focus hours". There is no global Save button.
+- **Locked:** editing controls disabled with the reason "Locked until
+  3:40 PM"; the timer and password controls stay usable (extend / unlock).
 
 ### Popup
 `#lock-line` (hidden unless locked; text starts "Locked:"), `#popup-enabled-toggle`,
-`#focus-goal`, `#save-focus-goal`, `#use-tab-context`, `.frozen-btn[data-mins=60|240|480]`
-(two-click confirm), `#report-category`, `#report-fn`, `#test-pair`,
-`#scan-history`, `#latency-log` (must stay **visible/clickable**),
-`#open-options`, `#status`, `#out` (`->` result format, `Scan done` text).
+`#open-options`, `#focus-goal`, `#save-focus-goal`, `#use-tab-context`,
+`.frozen-btn[data-mins=60|240|480]` (radio chips), `#start-focus-session`,
+`#undo-focus-session`, `#always-allow-site`, `#remove-allowed-site`,
+`#should-have-blocked` → `#report-category` + `#report-fn`, `#page-host`,
+`#page-verdict`, `#turn-on-blocking`, `#status`. **No diagnostics ids.**
 
-### Options
-`#banner`, `#enabled-toggle`, `#label-list` (`li`, `.delete-label-btn`),
-`#custom-category-input`, `#add-category-btn`, `#threshold` (range 0.3–0.9
-step 0.05), `#threshold-val`, `#focus-goal`, `#use-tab-context`, `#whitelist`,
-`#blocklist`, `#lock-status`, `#lock-duration`, `#lock-unit`, `#lock-timer-btn`,
-`#lock-password`, `#lock-password-btn`, `#lock-password-msg` ("Wrong
-password", "at least 8"), `#schedule-list` (`.schedule-row`, `.day-label`,
-`.schedule-remove`), `#schedule-add`, `#schedule-save`, `#schedule-msg`,
-`#companion-status` ("Get SmartBlocker Companion — coming with the Pro
-release" / "Connected — hardcore mode active…"), `#companion-enforcement`,
-`#incognito-warning`, `#scan-btn`, `#block-top-btn`, `#scan-status`,
-`#scan-out`, `#feedback-count`, `#feedback-export`, `#feedback-clear`,
-`#share-toggle`, `#oembed-toggle`, button text "Delete shared data", strings
-"none yet — created the first time you share a correction", "Feedback
-sharing is not configured in this build", `#save-btn` (disabled when
-locked), `#save-msg`, `#model-progress`.
+### Options (navigate to `options.html#<page>` — only the active page renders)
+Global: `#banner`, `#lock-status` (visible only when locked, contains
+"Locked"), `#save-msg`, `#model-progress`. `#save-btn` no longer exists.
+- `#blocking`: `#enabled-toggle`, `#label-list` (`li`, `.delete-label-btn`),
+  `#custom-category-input`, `#add-category-btn`, `#scan-btn`,
+  `#block-top-btn`, `#scan-status`, `#scan-out`.
+- `#sites`: `#whitelist`, `#blocklist` (`ListEditor` roots; `-input`,
+  `.list-row`, `.list-remove`, `-text`).
+- `#focus`: `#focus-goal`, `#use-tab-context`, `#focus-session-start`,
+  `#focus-session-undo`.
+- `#locks`: `#lock-duration`, `#lock-unit`, `#lock-timer-btn`,
+  `#lock-password`, `#lock-password-btn`, `#lock-password-msg` ("Wrong
+  password", "at least 8"), `#incognito-warning`.
+- `#schedule`: `#schedule-list` (`.schedule-row`, `.day-label`,
+  `.schedule-remove`), `#schedule-add`, `#schedule-save`, `#schedule-msg`.
+- `#companion`: `#companion-status` ("Get SmartBlocker Companion — coming
+  with the Pro release" / "Connected — hardcore mode active…"),
+  `#companion-enforcement`.
+- `#privacy`: `#feedback-count`, `#feedback-export`, `#feedback-clear`,
+  `#share-toggle`, `#oembed-toggle`, "Your shared feedback data", button
+  "Delete shared data", "none yet — created the first time you share a
+  correction", "Feedback sharing is not configured in this build".
+- `#advanced`: `#threshold` (0.3–0.9 step 0.05), `#threshold-val`,
+  `#test-pair`, `#scan-history`, `#latency-log`, `#status`, `#out` (`->`
+  result format, `Scan done` text).
+- `#welcome`: `#welcome-wizard`, `#welcome-whitelist`.
 
 ### Block screens
 - `blockscreen.ts`: self-contained functions, zero imports/module closures.

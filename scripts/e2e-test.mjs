@@ -63,12 +63,14 @@ try {
     chrome.storage.local.remove(['overrides', 'feedback', 'latencySamples', 'historyScan', 'lockState']),
   );
 
-  // 2. Popup loads and Test Pair round-trips through the SW + model.
+  // 2. Options → Advanced → Diagnostics: "Test classifier" round-trips
+  // through the SW + model. (Diagnostics moved out of the popup in the
+  // 2026-11-07 UX overhaul.)
   const page = await context.newPage();
   page.on('console', (msg) => {
-    if (msg.type() === 'error') console.log('  [popup:error]', msg.text());
+    if (msg.type() === 'error') console.log('  [options:error]', msg.text());
   });
-  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await page.goto(`chrome-extension://${extensionId}/options.html#advanced`);
   await page.click('#test-pair');
   console.log('… waiting for classification (first run downloads the model)');
 
@@ -80,7 +82,7 @@ try {
     { timeout: MODEL_TIMEOUT_MS },
   );
   const out = await page.locator('#out').textContent();
-  console.log('--- popup output ---\n' + out + '\n--------------------');
+  console.log('--- diagnostics output ---\n' + out + '\n--------------------');
 
   if (out.startsWith('Error')) {
     console.log('FAIL Test Pair returned an error');
@@ -109,7 +111,7 @@ try {
       readFileSync(new URL('../src/shared/config.ts', import.meta.url), 'utf8'),
     );
     const opts = await context.newPage();
-    await opts.goto(`chrome-extension://${extensionId}/options.html`);
+    await opts.goto(`chrome-extension://${extensionId}/options.html#privacy`);
     await opts.waitForSelector('text=Your shared feedback data', { timeout: 15_000 });
     const noId = await opts.locator('text=none yet — created the first time you share').count();
     const notConfigured = await opts
@@ -342,11 +344,13 @@ try {
 
   // Options page freezes while locked.
   const opts = await context.newPage();
-  await opts.goto(`chrome-extension://${extensionId}/options.html`);
-  await opts.waitForTimeout(1_500); // applyLockUI runs at load + 1s tick
-  const saveDisabled = await opts.locator('#save-btn').isDisabled();
+  await opts.goto(`chrome-extension://${extensionId}/options.html#blocking`);
+  await opts.waitForTimeout(1_500); // lock status polls at load + 1s tick
+  // Everything autosaves now (no Save button): the master switch is the
+  // canonical control that must be frozen while locked.
+  const toggleDisabled = await opts.locator('#enabled-toggle').isDisabled();
   const bannerText = (await opts.locator('#lock-status').textContent()) ?? '';
-  const optionsLocked = saveDisabled && /locked/i.test(bannerText);
+  const optionsLocked = toggleDisabled && /locked/i.test(bannerText);
   console.log(
     `${optionsLocked ? 'PASS' : 'FAIL'} options page frozen while locked ` +
       `("${bannerText.trim()}")`,
@@ -355,6 +359,8 @@ try {
 
   // 7. Companion bridge: this profile has no Native Messaging host, so the
   // snapshot must settle on 'not-installed' and the section must say so.
+  await opts.goto(`chrome-extension://${extensionId}/options.html#companion`);
+  await opts.waitForSelector('#companion-status');
   const companionText = (await opts.locator('#companion-status').textContent()) ?? '';
   const companionOk = /coming with the pro release/i.test(companionText);
   console.log(

@@ -205,22 +205,32 @@ Commit and push when appropriate.
   deliberately UNLAYERED: Chrome injects an unlayered extension-page
   stylesheet that beats Tailwind's `@layer base` (that silently forced the
   system font at 12px until 2026-11-07).
-- `src/popup/` (`PopupApp.tsx`, `popup.ts`, `popup.html`) — React + Tailwind CSS v4 +
-  `shadcn/ui` (`src/components/ui/`) status-first popup (no entrance
-  animation): protection status, focus goal, Frozen Turkey presets,
-  **"Should've been blocked"** report (`REPORT_FN`), and a quiet diagnostics
-  footer (Test Pair, History Scan, Latency Log → `#out`).
-  Surfaces an **incognito-access warning** when the extension lacks
-  private-window access — without it, private windows are an enforcement
-  blind spot (the companion also flags private launches, but an extension
-  that can see them blocks far earlier).
-- `src/options/` (`OptionsApp.tsx`, `options.ts`, `options.html`) — settings
-  page as ONE surface (`src/components/ui/settings.tsx`: Section → Group →
-  Row; no nested cards) with a sticky scroll-spy section nav: blocking +
-  sensitivity, categories, focus, sites, commitment locks, focus hours,
-  companion, history review, learning & privacy. No GSAP/marketing content — the
-  editorial showcase moved to `site/` on 2026-11-07. Preserves all E2E DOM IDs
-  and lock-state disabling rules.
+- `src/popup/` (`PopupApp.tsx`, `popup.ts`, `popup-model.ts`,
+  `ThisPageCard.tsx`, `FocusSession.tsx`) — 380px popup, data loaded BEFORE
+  first render (fixed 516px unlocked height, no jumps): header master switch
+  + settings gear, `#lock-line`, the focal **"This page" card** (verdict for
+  the active tab in plain words — "Blocked — likely video games" — from the
+  background's per-tab record `src/shared/tab-status.ts` in
+  `storage.session`, plus local allowed-list/paused/unsupported derivation;
+  actions "Should've been blocked" → `REPORT_FN`, "Always allow this site"),
+  focus goal, and **Focus session** start (user-facing name for Frozen
+  Turkey) with a 60-second undo (`src/shared/focus-session.ts` — a DEFERRED
+  COMMIT: the lock is only written after the window, so `lock.ts`/companion
+  merge stay monotonic). No diagnostics in the popup.
+- `src/options/` (`OptionsApp.tsx` shell, `useOptionsState.ts`, `format.ts`,
+  `pages/*`, `welcome/*`) — sidebar settings, ONE page at a time via hash
+  routes: `#blocking` (switch, strictness presets, categories, history
+  review), `#sites` (`ListEditor` Always allow / Always block), `#focus`,
+  `#locks` (+ incognito-access warning), `#schedule` (focus hours),
+  `#companion`, `#privacy`, `#advanced` (exact threshold slider +
+  diagnostics: Test classifier / Scan history / Latency log → `#out`), and
+  `#welcome` — the 3-step first-run wizard (`onInstalled` opens it; plain
+  `options.html` only shows a "Finish setup" banner). Everything autosaves
+  (no Save button). E2E suites navigate to `options.html#<page>` because
+  only the active page renders. Layout primitives:
+  `src/components/ui/settings.tsx` (Section → Group → Row). No
+  GSAP/marketing content — that lives in `site/`. Full spec + test-id
+  contract: `docs/design-notes.md` §5/§7.
 - `site/` — standalone public marketing landing page (Vite + React + Tailwind +
   GSAP). Hosts the ported AIDA editorial showcase from the former options page
   (hero, marquee, scrubbed manifesto, pinned chapters, 3-stage accordion) with
