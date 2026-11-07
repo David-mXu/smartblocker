@@ -1,94 +1,289 @@
-# SmartBlocker Design Notes & UI/UX Architecture
+# SmartBlocker Design System — "Lamplight"
 
-## 1. Empirical Reference Research (Lazyweb MCP)
-
-**Finalized Lazyweb Agentic Search Resource:**
-- URL: https://www.lazyweb.com/agentic-search/7420c370-d6a5-41f9-b755-cf08e676eece
-- Search ID: `7420c370-d6a5-41f9-b755-cf08e676eece`
-
-### Reference Takeaways Applied to SmartBlocker
-1. **Opal (`screens:e4e1dd0560ad6cb81f6a6a60`, `screens:ff76db1b48890d32afc706db`)**
-   - **Pattern:** Deep obsidian surfaces (`#09090b` to `#121215`) paired with high-contrast ivory typography (`#fafafa`) and warm amber/emerald commitment indicators.
-   - **Application:** Used for the Commitment Lock ("Frozen Turkey", timer lock, password lock, and recurring schedule windows) so irreversible commitment states feel deliberate and architectural rather than punitive.
-2. **Endel (`screens:c50a3efc251b38e7c61008ef`, `screens:818056ee8f79becd52772d78`, `flows:a6ca0a8b5438cb3313cc5f42`)**
-   - **Pattern:** Monochromatic dark precision with ambient radial lighting, expressive editorial headlines, and calm full-screen takeover interstitials.
-   - **Application:** Applied to the Options Command Center hero, onboarding banner, and the injected `blockscreen.ts` overlay so blocked pages interrupt impulsive browsing with an atmospheric, high-contrast editorial pause screen.
-3. **Linear (`screens:7463e0a2461687b16b38174a`) & Depot (`screens:9915d76937f29f973a78ada4`)**
-   - **Pattern:** Hairline `1px` borders (`rgba(255,255,255,0.08)`), dense scannable control cards, tabular numerals (`font-variant-numeric: tabular-nums`), and monospace telemetry blocks.
-   - **Application:** Applied across the 5-card Gapless Bento Grid in `options.html` and the compact diagnostic HUD in `popup.html` (Test Pair, History Scan, and Latency Log).
-4. **Focus Four (`screens:bc628c922c1d0c1a5d6e9eef`)**
-   - **Pattern:** Explicit separation between active task intention ("Current Focus Goal") and background rule configuration.
-   - **Application:** Elevates SmartBlocker's System 1.5 Focus Context (`focusGoal` + `useTabContext`) into a primary interactive module in both the Popup HUD and the Options Command Center.
+> **Read this before touching any UI** (`src/popup/`, `src/options/`,
+> `src/blocked/`, `src/background/blockscreen*.ts`, `src/components/ui/`,
+> `src/styles/`). It is the single source of design decisions. The landing
+> site (`site/`) shares the tokens but follows its own editorial spec (§9).
+>
+> History: 2026-11-07 (a) moved the marketing showcase to `site/` and
+> introduced the Warm Obsidian + Amber tokens; (b) **this rewrite** replaced
+> the card-heavy "HUD" look with the Lamplight system below, after a
+> rendered audit (§1) showed the extension UI read as generic.
 
 ---
 
-## 2. `@gpt-taste` Design System Specification
+## 0. How this doc was made (provenance)
 
-### Python-Driven Deterministic Selection
-Derived from prompt character count (`len(prompt) = 335`):
-- **Hero Architecture:** `1` — Cinematic Center (`max-w-6xl w-full` centered H1, strictly 2-3 lines via `clamp(2.75rem, 4.8vw, 5.25rem)`, inline pill-shaped photographic window inside the headline, two high-contrast CTAs, and a full-bleed atmospheric backdrop with dark radial wash).
-- **Typography Stack:** `Outfit` (Primary geometric display & UI sans) paired with `Geist Mono` / `JetBrains Mono` for telemetry, latency breakdowns, and domain rule lists. Loaded cleanly with local/system geometric fallbacks. Never `Inter`.
-- **Component Arsenal (3 Selected):**
-  1. **Inline Typography Images:** Pill-shaped filtered imagery embedded inline inside display headings.
-  2. **Horizontal Accordions:** Expandable vertical architectural slices detailing SmartBlocker's 3-stage local defense pipeline (Whitelist Gate, Deterministic Substring Blocklist, and BGE-Small Multi-Prototype Centroid Classifier).
-  3. **Infinite Marquee:** Continuous horizontal ticker showcasing local-AI guarantees, zero-telemetry architecture, and protected focus capabilities with `@phosphor-icons/react`.
-- **GSAP Motion Paradigms (2 Selected + Hover Physics):**
-  1. **Scrubbing Text Reveal:** Word-by-word opacity scrub (`0.12` to `1.0`) on the central manifesto statement driven by `ScrollTrigger`.
-  2. **Image Scale & Fade + Pinned Split Showcase:** Pinned architectural overview on the left while visual telemetry cards scale from `0.85` to `1.0` on entry in the right column.
-  3. **Hover Physics:** `group-hover:scale-105 transition-transform duration-700 ease-out` inside `overflow-hidden` containers across interactive cards and media surfaces.
-
-### Color & Surface Tokens (Dark-First Editorial)
-- **Background Primary:** `#070709` (Obsidian Void)
-- **Surface Card / Bento Cell:** `#0e0e12` / `rgba(18, 18, 24, 0.82)` with `backdrop-blur-xl`
-- **Surface Elevated / Input:** `#14141a`
-- **Border Hairline:** `rgba(255, 255, 255, 0.08)` (`border-zinc-800/80`), active hover `rgba(255, 255, 255, 0.18)`
-- **Text Primary:** `#fafafa` (Crisp Ivory)
-- **Text Secondary:** `#a1a1aa` (Zinc 400)
-- **Text Muted:** `#71717a` (Zinc 500)
-- **Accent Primary:** `#f4f4f5` (High-contrast white CTA fill with `#09090b` text)
-- **Semantic Status:**
-  - Productive / Connected: `#10b981` (Emerald 500)
-  - Commitment Lock / Warning: `#f59e0b` (Amber 500) / `#ef4444` (Crimson 500)
-
-### Strict Bans & Guardrails
-- **Zero Emojis:** No emojis in UI text, code, or comments across `popup`, `options`, or `blockscreen.ts`. Replaced with crisp vector SVG / `@phosphor-icons/react` iconography.
-- **Zero Cheap Meta-Labels:** No labels like `"SECTION 01"` or `"QUESTION 05"`. Section headers use semantic editorial titles.
-- **No Horizontal Overflow:** Root page wrapped in `<main className="overflow-x-hidden w-full max-w-full">`.
-- **Gapless Bento Math:** `grid-cols-1 md:grid-cols-12 grid-flow-dense` where every row sums to exactly 12 columns (`7 + 5 = 12`, `6 + 6 = 12`, `12 = 12`).
+- **Design skill (primary): `Dammyjay93/interface-design`.** Chosen via the
+  Lazyweb design-skill routing table (fetched through Lazyweb
+  `lazyweb_fetch_best_practice`): it is the pick for *product UI — dashboards,
+  settings pages, tools* and explicitly **not** for marketing pages. Drives:
+  intent-first brief, domain exploration, one focal point per view,
+  weight-over-size hierarchy, borders-only depth, the swap/squint/signature/
+  token checks (§8).
+- **Component rules: `shadcn-ui/ui` skill.** Semantic tokens only, variants
+  live in `cva`, `gap-*` not `space-y-*`, compose existing components first.
+- **Rejected for the extension UI:** `gpt-taste` (landing-page skill — its own
+  routing entry says "do not use for dashboards"; it is why the options page
+  previously looked like a brochure — it now lives only in `site/`) and
+  `ui-ux-pro-max` (greenfield system generator; we already had tokens and
+  needed hierarchy, not a palette lookup).
+- **Product references (Lazyweb):** board
+  <https://www.lazyweb.com/agentic-search/699981d4-0acf-4bf4-ae54-e28bdb662eaa>
+  | Ref | What we took |
+  | :-- | :-- |
+  | Linear settings `screens:7463e0a2461687b16b38174a`, `screens:151bec759a7c4533348290e3` | Settings = ONE surface: section heading → grouped rows; row = label + one-line description left, control right. No nested cards. |
+  | Notion settings `screens:8401db8a7bb5bec8c8e6a39b` | Sticky left nav + flat rows; every toggle on one right-hand rail. |
+  | Supercut settings `screens:65a6e853abb0210d70b55a6c` | Dark warm-neutral surfaces with a single quiet accent. |
+  | Opal Blocks / Clarity Mode `screens:708623e609f4349e404f086a`, `screens:c1adb689a999b7e2ae70d2a2` | Status first; time shown as relative chips ("Starting in 10h 52m"); exactly one primary action. |
+  | Opal interstitial `screens:8e205c9f0ec15656c593b1dc`, Endel session-over `screens:2b5f5da7c0c57517cfd64137` | Block/limit screens are near-empty, calm, one focal element, one action — not an error page. |
+  | Counter-example `screens:30beddaecf4445cf2e211401` | Card-grid "protection dashboard" with gradients — what we moved away from. |
 
 ---
 
-## 3. E2E & Extension Contract Preservation
+## 1. Audit of the previous UI (why it read as slop)
 
-SmartBlocker's automated Playwright test suites (`scripts/e2e-test.mjs` and `scripts/e2e-companion-test.mjs`) interact with specific DOM IDs, classes, and text patterns. All `shadcn/ui` React components in `popup` and `options` and the self-contained `blockscreen.ts` MUST preserve:
+Rendered with Playwright at 1280px / 390px / popup 392px (`.design-work/before/`,
+gitignored). Findings, most severe first:
 
-### Popup (`src/popup/`)
-- `#lock-line`: Hidden when unlocked; visible with `"Locked: ..."` when `settingsLocked` is true.
-- `#focus-goal`, `#save-focus-goal`, `#use-tab-context`: Focus context controls, disabled when locked.
-- `.frozen-btn` (`data-mins="60"`, `"240"`, `"480"`): Two-click confirmation before starting `startFrozenTurkey`.
-- `#test-pair`, `#scan-history`, `#latency-log`, `#open-options`: Diagnostic action buttons.
-- `#report-category`, `#report-fn`: False-negative reporting controls for the active tab.
-- `#status`, `#out`: Status feedback line and `<pre id="out">` output container preserving the exact `->` classification and `Scan done` formatting.
+1. **Wrong font everywhere (bug).** Chrome injects an *unlayered* stylesheet
+   into extension pages (`body { font-family: <system>; font-size: 75% }`).
+   Tailwind v4 puts our `html, body` rule in `@layer base`, and **unlayered
+   CSS beats any layer**, so popup/options rendered in DejaVu/system sans at
+   12px and Geist never loaded (`document.fonts` → `unloaded`). Fix: body
+   typography is declared **unlayered** in `src/styles/globals.css`.
+2. **Cards inside cards.** Every section was a shadowed, blurred card holding
+   more bordered cards. Nine sections at identical weight → no focal point.
+3. **Jargon as decoration.** "BGE-Small Local Centroid Engine", "SYSTEM 1.5",
+   "Inference & Telemetry Stream", "q8 / WASM", "Local ONNX verdict" — mono
+   uppercase labels used for texture, not meaning.
+4. **Amber everywhere.** Icons, toggles, badges, slider, status pill all
+   amber → the accent signified nothing.
+5. **Decorative badges** ("Active Goal", "Subdomain-aware", "Always Blocked").
+6. **Block screen promoted the bypass.** The ivory primary button was
+   "This is actually productive — let me through"; "Stay focused" was
+   secondary. The product's goal action must be the primary one.
+7. **Diagnostics first in the popup.** Test Pair / Latency Log took the
+   primary-button slot over the things a user actually opens the popup for.
+8. Title-cased category names ("Memes And Entertainment"), native white
+   checkboxes, red used for *commitment* (felt punitive).
 
-### Options (`src/options/`)
-- `#banner`: First-run onboarding banner (`display: none` once onboarded).
-- `#enabled-toggle`: Master blocking checkbox/switch input.
-- `#label-list`, `#custom-category-input`, `#add-category-btn`: Category toggle list (`li`, `.delete-label-btn`) and custom category input.
-- `#threshold`, `#threshold-val`: Confidence threshold slider (`0.3` to `0.9`, step `0.05`) and percentage readout.
-- `#focus-goal`, `#use-tab-context`: System 1.5 Focus Context inputs.
-- `#whitelist`, `#blocklist`: Domain whitelist and instant substring blocklist textareas.
-- `#lock-status`, `#lock-duration`, `#lock-unit`, `#lock-timer-btn`, `#lock-password`, `#lock-password-btn`, `#lock-password-msg`: Commitment lock controls.
-- `#schedule-list` (`.schedule-row`, `.day-label`, `.schedule-remove`), `#schedule-add`, `#schedule-save`, `#schedule-msg`: Scheduled block windows editor.
-- `#companion-status`, `#companion-enforcement`: Native Messaging companion status (must render `"Get SmartBlocker Companion — coming with the Pro release"` when `not-installed`, and `"Connected — hardcore mode active..."` when connected).
-- `#scan-btn`, `#block-top-btn`, `#scan-status`, `#scan-out`: Browsing history scanner and top-distraction auto-selector.
-- `#feedback-count`, `#feedback-export`, `#feedback-clear`, `#share-toggle`: On-device centroid learning feedback controls.
-- `#save-btn`, `#save-msg`, `#model-progress`: Primary save button (disabled when `settingsLocked` is true), save confirmation badge, and model download progress indicator.
+---
 
-### Block Screen (`src/background/blockscreen.ts`)
-- Must remain a **100% self-contained function** (`showBlockScreen`, `applyPreBlockCurtain`, `clearPreBlockCurtain`) with zero external imports or module-scope closures because it is serialized via `scripting.executeScript({ func })`.
-- Root overlay ID: `#smartblocker-overlay`.
-- Action buttons when unlocked:
-  - Override button containing text `"actually productive"` (`"This is actually productive — let me through"`).
-  - Close tab button containing text `"Stay focused"` (`"Stay focused (close tab)"`).
-  - Dismiss button with text `"Dismiss"`.
-- When `locked === true`: Override and Dismiss buttons are omitted; only the lock notice and `"Stay focused (close tab)"` button are rendered.
+## 2. Intent
+
+- **Who:** a student or knowledge worker, mid-task, who just tried to open
+  something distracting — or who opens settings rarely (first run, then a
+  tweak a week later). They are *not* debugging a model.
+- **What they must do:** popup → see whether protection is on and *commit*
+  (focus goal, Frozen Turkey). Options → decide what gets blocked and how
+  hard it is to undo. Block screen → choose to go back to work.
+- **Feel:** a desk lamp at night in a quiet reading room. Warm, low,
+  focused; nothing shouts. Commitment feels like signing your name, not like
+  being punished.
+
+**Domain:** attention, detour, threshold, verdict, commitment, seal, lamp,
+reading room, focus hours. **Color world:** walnut desk in shadow
+(obsidian), lamplight (amber), paper (ivory), graphite (muted text), brass
+(warning), library-green banker's lamp (success), the red "do not disturb"
+bulb (destructive).
+
+**Signatures (only this product has them):**
+1. **The Threshold Meter** — a 2px track showing a classifier score with an
+   amber tick at the user's threshold. Appears on the options Sensitivity
+   control (where the tick is *set*) and on the block screen (where the page
+   *landed* relative to it). Explains a block in one glance; no jargon.
+2. **Lamplight = commitment.** Amber appears **only** for focus and
+   commitment (locks, Frozen Turkey, focus goal, schedules in effect). Locked
+   state = amber seal line + tabular countdown — never red.
+
+**Defaults rejected:** card-per-section with icon+title → one surface of
+grouped rows with a sticky section nav · mono uppercase labels → plain
+language, mono only for numbers/domains/code · accent on every control →
+neutral controls, amber reserved · bypass as primary → "Stay focused" primary.
+
+---
+
+## 3. Tokens (`src/styles/tokens.css`)
+
+Single source of truth for the extension **and** `site/`. OKLCH, one warm hue
+family (H ≈ 72–87°); elevation steps only in lightness.
+
+### Surfaces (darkest → lightest)
+| Token | Hex | Use |
+| :-- | :-- | :-- |
+| `--background` | `#0e0c09` | Page canvas. Also **inputs** on cards (inset = darker). |
+| `--card` | `#17130e` | Settings groups, popup panels. |
+| `--muted` / `--popover` | `#1d1812` | Row hover, code wells, segmented control track. |
+| `--secondary` | `#241d14` | Secondary buttons, switch track (off). |
+| `--border` / `--input` | `#2e2718` | Hairlines and input strokes. |
+
+### Text (four tiers)
+| Token | Hex | Use |
+| :-- | :-- | :-- |
+| `--foreground` | `#f4efe4` | Primary: labels, values, headings. |
+| `--muted-foreground` | `#a29a89` | Secondary: descriptions. |
+| `--faint` | `#7d7768` | Tertiary: meta, timestamps, helper text. |
+| `opacity-45` on control | — | Disabled. |
+
+### Action & meaning
+| Token | Hex | Meaning — and only this |
+| :-- | :-- | :-- |
+| `--primary` / `-foreground` | `#efe8d8` / `#1c1405` | The one primary action per view. Switch "on". |
+| `--accent` / `-soft` / `-foreground` | `#e8a33d` / `#f2cd8b` / `#1c1405` | **Commitment & focus only** (lock, Frozen Turkey, focus goal, schedule active, meter tick). Also focus ring. |
+| `--success` / `-soft` | `#5cb98a` / `#93d5b5` | Saved, connected, protection on (status dot). |
+| `--warning` / `-soft` | `#e8c356` / `#f0d489` | Something weakens protection (incognito access off). |
+| `--destructive` / `-soft` | `#e0655a` / `#f2a192` | Data deletion, blocked-content verdict, errors. |
+
+Tint recipe for callouts: `bg-<hue>/10 border-<hue>/30 text-<hue>-soft`.
+
+### Shape, type, space
+- **Radius:** `6px` small controls/chips · `8px` buttons & inputs · `12px`
+  groups/panels · `9999px` switches, status dots. Nested: outer = inner + padding.
+- **Depth: borders-only + surface shifts.** No drop shadows, no
+  backdrop-blur, no glows, no gradients on product surfaces. (Block screen
+  may use one very faint radial lamp glow, ≤ 8% alpha.)
+- **Type:** Geist (UI) + Geist Mono (numbers, domains, code), self-hosted.
+  Scale (1.25 from 14): `11 meta · 12 caption · 13 small · 14 body ·
+  16 section title · 20 page title · 34 block headline`. Hierarchy via
+  **weight + color first**: label 500/foreground, description 400/muted,
+  meta 400/faint. Headings ≥ 20px get `tracking-tight`. All dynamic numbers
+  `tabular-nums`. Sentence case everywhere (incl. category names).
+- **Spacing (4px base):** row padding `14px 16px` · group gap `12px` ·
+  section gap `48px` (options) · popup gutter `16px`, block gap `16px`.
+- **Motion:** popup and options are opened many times a day → **no entrance
+  animations**. Interaction feedback only: color transitions 150ms,
+  `active:scale-[0.98]` on buttons, ease-out. Respect reduced-motion.
+
+---
+
+## 4. Components (`src/components/ui/`)
+
+| Component | Spec |
+| :-- | :-- |
+| `Button` | h-9 (sm h-8), 8px radius, 13–14px/500. Variants: `default` (ivory, the one primary), `secondary`, `outline`, `ghost`, `commit` (amber — only to *start/confirm a commitment*), `destructive` (tinted). No shadows. |
+| `Switch` | Real `<input type=checkbox>` (tests read `.checked`). On = ivory track + dark thumb; off = `secondary`. 36×20. |
+| `Checkbox` | Real input, `appearance-none`, 16px, 4px radius; checked = ivory fill + dark check. |
+| `Input` / `Textarea` / `Select` | `bg-background` (inset), `border-input`, 8px radius, amber focus ring. Mono for domain lists. |
+| `Badge` | Status only, never decoration. `dot` prop for live status. |
+| `SettingsSection` | `<section id>` + h2 (16/600) + one-line description (13/muted). |
+| `SettingsGroup` | `bg-card border rounded-xl divide-y` — the ONLY container on the options page. |
+| `SettingRow` | Label (14/500) + description (13/muted) left, control right (stacks under 520px). `stacked` variant for full-width content (textareas, lists). |
+| Threshold Meter | Signature. Editable: `.sb-range` in `globals.css` (2px track, ivory fill via `--fill`, ivory thumb, amber focus). Read-only: inline in `blockscreen.ts` / `blockscreen-ui.ts` — 2px track, ivory fill = score, 2×12px amber tick = threshold (tick only when the threshold is known; the `blocked.html` redirect URL doesn't carry it). |
+
+---
+
+## 5. Surface specs
+
+### Options (`src/options/OptionsApp.tsx`)
+- Slim sticky header: wordmark · status (dot + "Blocking on" / "Paused" /
+  amber "Locked · 3h 12m") · save message · **Save** (only needed for the
+  site lists; everything else autosaves).
+- Body: `md:` two columns — **180px sticky section nav** + content column
+  (max 680px). Below `md` the nav is hidden and sections stack.
+- Section order (importance): **Blocking** (enable, sensitivity meter) →
+  **Categories** → **Focus** → **Sites** → **Commitment** (timer, password,
+  schedules) → **Desktop companion** → **History review** → **Learning &
+  privacy**.
+- Locked: amber `#lock-status` seal line at top; every control disabled.
+- First run: `#banner` welcome strip above sections; Save reads "Finish setup".
+
+### Popup (`src/popup/PopupApp.tsx`, 392px)
+Focal element = **protection status**. Order: header (wordmark, settings
+icon) → status row (dot + "Blocking on", enable switch; or amber lock line
+with countdown) → **Focus** (goal input + Set) → **Frozen Turkey**
+(segmented 1h/4h/8h, amber confirm) → **Missed one?** (category + Report) →
+quiet **Diagnostics** footer (ghost buttons; `#out` only shows when it has
+content).
+
+### Block screen (`blockscreen.ts` injected + `blockscreen-ui.ts` → `blocked.html`)
+Full-bleed obsidian, **no card**, centered column ≤ 520px:
+wordmark (faint) → eyebrow `Blocked · <category>` → headline **"This one can
+wait."** (34/600) → quoted page title (muted) → **Threshold Meter**
+("87% confidence", tick at threshold) → buttons: **Stay focused (close tab)**
+primary ivory, *This is actually productive — let me through* outline,
+Dismiss text → meta "Checked on-device in 12ms" (faint).
+Locked: amber seal note "Smart Blocker is locked — bypass is disabled" +
+Stay focused only. Fail-closed: amber warning variant, no score, no meter.
+Inline styles must use the hexes in §3 (host pages have no extension CSS);
+`blockscreen.ts` stays import-free.
+
+---
+
+## 6. Rules
+
+**Do**
+- Semantic tokens only (`bg-card`, `text-muted-foreground`, `text-faint`,
+  `border-border`, `bg-accent/10`…). Change color in `tokens.css`, nowhere else.
+- One primary (ivory) button per view. Amber only for commitment/focus.
+- Plain-language copy, sentence case, verb + object buttons ("Arm password
+  lock", "Add schedule").
+- Compose `SettingsSection` → `SettingsGroup` → `SettingRow`; don't hand-roll rows.
+
+**Don't**
+- No raw palette classes or hexes in `.tsx`:
+  `grep -rnE "zinc-[0-9]|emerald-[0-9]|amber-[0-9]|red-[0-9]|#[0-9a-fA-F]{6}" src/ site/ --include="*.tsx"` must be empty.
+- No cards inside cards, no shadows/blur/glow on product surfaces, no
+  decorative badges, no mono-uppercase "telemetry" labels, no emoji.
+- No entrance animations in popup/options; no GSAP outside `site/`.
+- No marketing sections in `src/options/` (they live in `site/`).
+
+---
+
+## 7. Extension contract (tests depend on these — never rename)
+
+### Popup
+`#lock-line` (hidden unless locked; text starts "Locked:"), `#popup-enabled-toggle`,
+`#focus-goal`, `#save-focus-goal`, `#use-tab-context`, `.frozen-btn[data-mins=60|240|480]`
+(two-click confirm), `#report-category`, `#report-fn`, `#test-pair`,
+`#scan-history`, `#latency-log` (must stay **visible/clickable**),
+`#open-options`, `#status`, `#out` (`->` result format, `Scan done` text).
+
+### Options
+`#banner`, `#enabled-toggle`, `#label-list` (`li`, `.delete-label-btn`),
+`#custom-category-input`, `#add-category-btn`, `#threshold` (range 0.3–0.9
+step 0.05), `#threshold-val`, `#focus-goal`, `#use-tab-context`, `#whitelist`,
+`#blocklist`, `#lock-status`, `#lock-duration`, `#lock-unit`, `#lock-timer-btn`,
+`#lock-password`, `#lock-password-btn`, `#lock-password-msg` ("Wrong
+password", "at least 8"), `#schedule-list` (`.schedule-row`, `.day-label`,
+`.schedule-remove`), `#schedule-add`, `#schedule-save`, `#schedule-msg`,
+`#companion-status` ("Get SmartBlocker Companion — coming with the Pro
+release" / "Connected — hardcore mode active…"), `#companion-enforcement`,
+`#incognito-warning`, `#scan-btn`, `#block-top-btn`, `#scan-status`,
+`#scan-out`, `#feedback-count`, `#feedback-export`, `#feedback-clear`,
+`#share-toggle`, `#oembed-toggle`, button text "Delete shared data", strings
+"none yet — created the first time you share a correction", "Feedback
+sharing is not configured in this build", `#save-btn` (disabled when
+locked), `#save-msg`, `#model-progress`.
+
+### Block screens
+- `blockscreen.ts`: self-contained functions, zero imports/module closures.
+- Root ids `#smartblocker-overlay` (injected, shadow root) /
+  `#smartblocker-blocked` (blocked.html).
+- Unlocked buttons contain "actually productive", "Stay focused", "Dismiss";
+  locked: only "Stay focused" + note "Smart Blocker is locked — bypass is disabled".
+- Normal variant shows "% confidence"; fail-closed shows **no** "% confidence".
+- `blocked.html`: `document.title === 'Blocked — Smart Blocker'`, **zero `<h1>`**.
+
+---
+
+## 8. Checks before shipping UI
+
+1. `npm run typecheck && npm run build`, then screenshot popup / options
+   (1280 + 390) / block screens (`node .design-work/shoot.mjs <dir>` — local
+   helper, or the e2e suites) and **look at them**.
+2. **Swap test:** would swapping in Inter + a stock card template change
+   nothing? Then it's default — fix.
+3. **Squint test:** one focal element per view; nothing harsh.
+4. **Signature test:** meter + amber-means-commitment visible on every surface.
+5. **Token test:** the hex grep in §6 is empty.
+6. Contract IDs in §7 present; run `node scripts/e2e-test.mjs` and the
+   p1/p2 suites that touch the surface you changed.
+
+---
+
+## 9. Landing site (`site/`)
+
+Separate editorial surface (gpt-taste spec): shares `tokens.css`, may use
+GSAP ScrollTrigger, large type, the showcase SVGs, and marketing copy. None
+of that crosses back into the extension.

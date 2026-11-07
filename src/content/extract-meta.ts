@@ -13,7 +13,12 @@
  * All selectors are tried defensively; partial results are fine.
  * Never throws — always returns at least {}.
  */
-export function extractMeta(): { channel?: string; context?: string; fallbackTitle?: string } {
+export function extractMeta(): {
+  channel?: string;
+  context?: string;
+  fallbackTitle?: string;
+  metaStale?: boolean;
+} {
   // NOTE: this function body is serialised by executeScript — keep it
   // fully self-contained.  The `export` keyword is stripped at call time
   // (TypeScript emits the body; the TS compiler removes the keyword when
@@ -47,65 +52,36 @@ export function extractMeta(): { channel?: string; context?: string; fallbackTit
   try {
     const url = location.href;
 
-    // ── YouTube watch, shorts, and embed pages ───────────────────────────────
-    const isYouTube =
-      /(?:youtube\.com|youtube-nocookie\.com)\/(?:watch|shorts\/|embed\/|live\/|v\/)/i.test(url);
-    if (isYouTube) {
-      let channel = '';
+    // ── YouTube pages (watch, shorts, embed, and SPA browsing surfaces) ──────
+    // On YouTube's Polymer SPA, <meta> tags in <head> NEVER update after the
+    // initial page load, and inactive route views (e.g. ytd-watch-flexy[hidden])
+    // remain mounted in the DOM with the previous video's title/channel/description.
+    const isYouTubeHost = /(?:^|\.)(?:youtube\.com|youtube-nocookie\.com)$/i.test(
+      location.hostname,
+    );
+    const isYouTubeVideo =
+      isYouTubeHost && /^\/(?:watch|shorts\/|embed\/|live\/|v\/)/i.test(location.pathname);
 
-      // Try selectors in order of reliability (watch pages + embed player chrome).
-      const channelSelectors = [
-        'ytd-channel-name a',
-        'ytd-video-owner-renderer yt-formatted-string a',
-        'ytd-video-owner-renderer a',
-        '#channel-name a',
-        '.ytp-title-channel-name',
-        '.ytp-ce-channel-title',
-        // Links to channel pages: /@ChannelHandle or /channel/ID
-        'a[href*="/@"]',
-        'a[href*="/channel/"]',
-      ];
-      for (const sel of channelSelectors) {
-        const el = document.querySelector(sel);
-        const text = textOf(el);
-        if (text) {
-          channel = text;
-          break;
-        }
+    if (isYouTubeHost && !isYouTubeVideo) {
+      const result: { channel?: string; context?: string; fallbackTitle?: string } = {};
+      if (/^\/results\b/i.test(location.pathname)) {
+        const q = (new URLSearchParams(location.search).get('search_query') ?? '').trim();
+        if (q) result.fallbackTitle = trimTo(q, TITLE_LEN);
       }
+      return result;
+    }
 
-      // Fallback for embed player channel logo aria-label: "Photo image of <Channel>"
-      if (!channel) {
-        const logoAria = attr(document.querySelector('a.ytp-title-channel-logo'), 'aria-label');
-        if (logoAria) {
-          channel = logoAria.replace(/^Photo(?:\s+image)?\s+of\s+/i, '').trim();
-        }
-      }
-
-      // Fallback: og:channel_name or author meta
-      if (!channel) channel = metaContent('author');
-
-      let context = '';
-      const descSelectors = [
-        '#description ytd-text-inline-expander',
-        'ytd-text-inline-expander',
-        '#description-text',
-        '#description',
-        'ytd-expander #content',
-      ];
-      for (const sel of descSelectors) {
-        const el = document.querySelector(sel);
-        const text = textOf(el);
-        if (text) {
-          context = trimTo(text, SNIPPET_LEN);
-          break;
-        }
-      }
-      // Last resort: <meta name="description"> or synthesized embed context
-      if (!context) context = trimTo(metaContent('description'), SNIPPET_LEN);
-      if (!context && /\/embed\//i.test(url)) {
-        context = channel ? `YouTube video by ${channel}.` : 'Embedded YouTube video.';
-      }
+    if (isYouTubeVideo) {
+      const parsedUrl = new URL(url);
+      const vid =
+        parsedUrl.searchParams.get('v') ||
+        location.pathname.match(/^\/(?:shorts|embed|live|v)\/([^/?#]+)/i)?.[1] ||
+        '';
+      const isShorts = /^\/shorts\//i.test(location.pathname);
+      const isEmbed = /^\/embed\//i.test(location.pathname);
+      const hasYtdApp = Boolean(
+        document.querySelector('ytd-app, ytd-watch-flexy, ytd-shorts, ytd-reel-video-renderer'),
+      );
 
       const rawDocTitle = (document.title ?? '')
         .replace(/^(?:\(\d+\)\s*|(?:🐴|🔊|▶️?)\s*)+/u, '')
@@ -116,23 +92,170 @@ export function extractMeta(): { channel?: string; context?: string; fallbackTit
           ? rawDocTitle
           : '';
 
+      let scope: ParentNode | null = document;
+      let domMatchesVideo = !hasYtdApp;
+
+      if (hasYtdApp && !isEmbed) {
+        scope = null;
+        if (isShorts) {
+          const activeReel = document.querySelector(
+            'ytd-reel-video-renderer[is-active]:not([hidden])',
+          );
+          if (activeReel) {
+            scope = activeReel;
+            domMatchesVideo = true;
+          }
+        } else {
+          const flexy = document.querySelector('ytd-watch-flexy:not([hidden])');
+          if (flexy) {
+            const flexyVid = attr(flexy, 'video-id');
+            if (!vid || !flexyVid || flexyVid === vid) {
+              scope = flexy;
+              domMatchesVideo = Boolean(!vid || flexyVid === vid);
+            }
+          }
+        }
+      }
+
+      const canonicalHref = attr(document.querySelector('link[rel="canonical"]'), 'href');
+      const headMatchesVideo = !hasYtdApp || Boolean(vid && canonicalHref.includes(vid));
+
+      let channel = '';
+      if (scope) {
+        const channelSelectors = isShorts
+          ? [
+              'ytd-reel-player-header-renderer ytd-channel-name a',
+              'yt-reel-channel-bar-view-model a',
+              'ytd-channel-name a',
+              'a[href*="/@"]',
+            ]
+          : hasYtdApp
+            ? [
+                'ytd-watch-metadata #owner ytd-channel-name a',
+                'ytd-watch-metadata ytd-channel-name a',
+                'ytd-video-owner-renderer yt-formatted-string a',
+                'ytd-video-owner-renderer a',
+                '#owner #channel-name a',
+                '.ytp-title-channel-name',
+                '.ytp-ce-channel-title',
+              ]
+            : [
+                'ytd-channel-name a',
+                'ytd-video-owner-renderer yt-formatted-string a',
+                'ytd-video-owner-renderer a',
+                '#channel-name a',
+                '.ytp-title-channel-name',
+                '.ytp-ce-channel-title',
+                'a[href*="/@"]',
+                'a[href*="/channel/"]',
+              ];
+        for (const sel of channelSelectors) {
+          const el = scope.querySelector(sel);
+          if (el && el.closest('[hidden]')) continue;
+          const text = textOf(el);
+          if (text) {
+            channel = text;
+            break;
+          }
+        }
+        if (!channel) {
+          const logoAria = attr(scope.querySelector('a.ytp-title-channel-logo'), 'aria-label');
+          if (logoAria) {
+            channel = logoAria.replace(/^Photo(?:\s+image)?\s+of\s+/i, '').trim();
+          }
+        }
+      }
+
+      if (!channel && headMatchesVideo) {
+        channel = metaContent('author');
+      }
+
+      let context = '';
+      if (scope && !isShorts) {
+        const descSelectors = [
+          'ytd-watch-metadata #description-inline-expander #attributed-snippet-text',
+          'ytd-watch-metadata #description ytd-text-inline-expander',
+          '#description ytd-text-inline-expander',
+          'ytd-text-inline-expander',
+          '#description-text',
+          '#description',
+          'ytd-expander #content',
+        ];
+        for (const sel of descSelectors) {
+          const el = scope.querySelector(sel);
+          if (el && el.closest('[hidden]')) continue;
+          const rawText = textOf(el)
+            .replace(/\n\s*0:00\b[\s\S]*$/i, '')
+            .replace(/\s*(?:…|\.\.\.)?\s*(?:show\s+)?more\s*$/i, '')
+            .replace(/\s*(?:…|\.\.\.)?\s*more\s*$/i, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+          if (rawText) {
+            context = trimTo(rawText, SNIPPET_LEN);
+            break;
+          }
+        }
+      }
+      if (!context && headMatchesVideo) {
+        context = trimTo(metaContent('description'), SNIPPET_LEN);
+      }
+      if (!context && isEmbed) {
+        context = channel ? `YouTube video by ${channel}.` : 'Embedded YouTube video.';
+      }
+
+      // If Polymer's h1 still shows a previous video's title that disagrees
+      // with the live document.title, discard the scraped DOM channel/context
+      // and mark metaStale so blocker.ts re-checks once hydration settles.
+      const scopedH1 = scope
+        ? textOf(
+            scope.querySelector(
+              'ytd-watch-metadata h1 yt-formatted-string, h1.ytd-watch-metadata, #title h1 yt-formatted-string, h1',
+            ),
+          )
+        : '';
+      let metaStale = hasYtdApp && !isEmbed && !domMatchesVideo;
+      if (
+        hasYtdApp &&
+        usableDocTitle &&
+        scopedH1 &&
+        scopedH1.toLowerCase() !== usableDocTitle.toLowerCase()
+      ) {
+        channel = '';
+        context = '';
+        metaStale = true;
+      }
+
+      if (hasYtdApp && !isEmbed && (!channel || (!isShorts && !context))) {
+        metaStale = true;
+      }
+
+      if (channel && hasYtdApp && !/youtube\.com/i.test(channel)) {
+        channel = `${channel} (youtube.com)`;
+      }
+
       const fallbackTitle = trimTo(
-        textOf(document.querySelector('.ytp-title-link')) ||
-          textOf(document.querySelector('#title h1 yt-formatted-string')) ||
-          textOf(document.querySelector('h1.ytd-watch-metadata')) ||
-          textOf(document.querySelector('.ytp-title-expanded-title a')) ||
-          textOf(document.querySelector('.ytp-title-text a')) ||
-          metaContent('title') ||
-          metaContent('og:title') ||
+        (scope &&
+          (textOf(scope.querySelector('.ytp-title-link')) ||
+            textOf(scope.querySelector('#title h1 yt-formatted-string')) ||
+            textOf(scope.querySelector('h1.ytd-watch-metadata')) ||
+            textOf(scope.querySelector('.ytp-title-expanded-title a')) ||
+            textOf(scope.querySelector('.ytp-title-text a')))) ||
+          (headMatchesVideo && (metaContent('title') || metaContent('og:title'))) ||
           usableDocTitle ||
-          textOf(document.querySelector('h1')),
+          (scope ? textOf(scope.querySelector('h1')) : ''),
         TITLE_LEN,
       );
 
-      const result: { channel?: string; context?: string; fallbackTitle?: string } = {};
+      const result: {
+        channel?: string;
+        context?: string;
+        fallbackTitle?: string;
+        metaStale?: boolean;
+      } = {};
       if (channel) result.channel = channel;
       if (context) result.context = context;
       if (fallbackTitle) result.fallbackTitle = fallbackTitle;
+      if (metaStale) result.metaStale = true;
       return result;
     }
 

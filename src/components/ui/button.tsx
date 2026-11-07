@@ -2,29 +2,30 @@ import * as React from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '../../lib/utils';
 
+// Lamplight button (docs/design-notes.md §4). Depth is borders-only: no
+// shadows or glows. `default` is THE primary action of a view (one per view);
+// `commit` (amber) is reserved for starting/confirming a commitment.
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-300/60 disabled:pointer-events-none disabled:opacity-45 cursor-pointer select-none active:scale-[0.99]',
+  'inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-lg text-sm font-medium select-none cursor-pointer transition-[background-color,border-color,color,transform] duration-150 ease-out active:scale-[0.98] disabled:pointer-events-none disabled:opacity-45 [&_svg]:shrink-0',
   {
     variants: {
       variant: {
-        default:
-          'bg-zinc-100 text-zinc-950 font-semibold shadow-[0_1px_20px_rgba(255,255,255,0.12)] hover:bg-white',
+        default: 'bg-primary text-primary-foreground hover:bg-primary/90',
         secondary:
-          'bg-zinc-900/90 text-zinc-100 border border-zinc-800 hover:bg-zinc-800/90 hover:border-zinc-700',
+          'border border-border bg-secondary text-secondary-foreground hover:bg-muted hover:border-faint/50',
         outline:
-          'border border-zinc-700/80 bg-transparent text-zinc-100 hover:bg-zinc-900 hover:border-zinc-500',
+          'border border-border bg-transparent text-foreground hover:bg-muted hover:border-faint/50',
+        ghost: 'bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground',
+        commit: 'bg-accent text-accent-foreground hover:bg-accent/90',
         destructive:
-          'bg-red-500/15 text-red-200 border border-red-500/35 hover:bg-red-500/25 hover:border-red-400/50',
-        emerald:
-          'bg-emerald-500 text-zinc-950 font-semibold hover:bg-emerald-400 shadow-[0_0_24px_rgba(16,185,129,0.25)]',
-        ghost:
-          'bg-transparent text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900/70',
+          'border border-destructive/35 bg-destructive/10 text-destructive-soft hover:bg-destructive/20',
       },
       size: {
-        default: 'h-10 px-4 py-2',
-        sm: 'h-8 rounded-md px-3 text-xs',
-        lg: 'h-12 rounded-xl px-7 text-base',
-        icon: 'h-9 w-9',
+        default: 'h-9 px-4',
+        sm: 'h-8 rounded-md px-3 text-[13px]',
+        xs: 'h-7 rounded-md px-2.5 text-xs',
+        lg: 'h-11 px-6 text-[15px]',
+        icon: 'size-8 rounded-md',
       },
     },
     defaultVariants: {

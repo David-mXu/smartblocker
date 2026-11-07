@@ -1,23 +1,20 @@
 import * as React from 'react';
 import { cn } from '../../lib/utils';
 
-export interface SwitchProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type'> {
-  label?: string;
-}
+export type SwitchProps = Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type'>;
 
 /**
- * Accessible shadcn/ui Switch backed by a real <input type="checkbox"> so both
- * React state and Playwright DOM `.checked` / `.disabled` queries work natively.
+ * Switch backed by a real <input type="checkbox"> so React state and
+ * Playwright `.checked` / `.disabled` queries work natively. On = ivory track
+ * (neutral — amber is reserved for commitment), off = secondary.
  */
 export const Switch = React.forwardRef<HTMLInputElement, SwitchProps>(
   ({ className, checked, disabled, ...props }, ref) => {
     return (
       <label
         className={cn(
-          'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors duration-200',
-          checked
-            ? 'border-emerald-400/50 bg-emerald-500'
-            : 'border-zinc-700 bg-zinc-900',
+          'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors duration-150 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring/70',
+          checked ? 'border-primary bg-primary' : 'border-border bg-secondary',
           disabled ? 'cursor-not-allowed opacity-45' : 'cursor-pointer',
           className,
         )}
@@ -25,15 +22,17 @@ export const Switch = React.forwardRef<HTMLInputElement, SwitchProps>(
         <input
           ref={ref}
           type="checkbox"
+          role="switch"
           checked={checked}
           disabled={disabled}
           className="peer sr-only"
           {...props}
         />
         <span
+          aria-hidden
           className={cn(
-            'pointer-events-none block h-4 w-4 rounded-full bg-zinc-950 shadow-sm transition-transform duration-200',
-            checked ? 'translate-x-5 bg-zinc-950' : 'translate-x-1 bg-zinc-300',
+            'pointer-events-none block size-3.5 rounded-full transition-transform duration-150 ease-out',
+            checked ? 'translate-x-[18px] bg-primary-foreground' : 'translate-x-[2px] bg-muted-foreground',
           )}
         />
       </label>

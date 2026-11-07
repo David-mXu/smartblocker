@@ -1,27 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import gsap from 'gsap';
-import { ScrollTrigger } from 'gsap/ScrollTrigger';
-import { useGSAP } from '@gsap/react';
-import {
-  ShieldCheck,
-  LockKey,
-  Crosshair,
-  Sliders,
-  Plus,
-  Clock,
-  Desktop,
-  ClockCounterClockwise,
-  Brain,
-  CheckCircle,
-  XCircle,
-  ArrowUpRight,
-  Cpu,
-  Lightning,
-  Fingerprint,
-  EyeSlash,
-  Sparkle,
-  Warning,
-} from '@phosphor-icons/react';
+import { LockSimple, Plus, X, Warning, Check, Minus } from '@phosphor-icons/react';
 import { api } from '../shared/api';
 import { clearFeedback, getFeedback } from '../shared/feedback';
 import { FEEDBACK_ENDPOINT, LABELS } from '../shared/config';
@@ -43,26 +21,13 @@ import {
 } from '../shared/lock';
 import type { LockStatus, ScheduleRule } from '../shared/lock-math';
 import { Button } from '../components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
 import { Switch } from '../components/ui/switch';
 import { Select } from '../components/ui/select';
 import { Badge } from '../components/ui/badge';
-// Self-hosted showcase imagery (red-team P1 #17 — previously hotlinked to
-// picsum.photos on every options-page open). Bundled by Vite; render is
-// identical offline and the extension emits zero image requests.
-import heroPillImg from '../assets/showcase/hero-pill.svg';
-import monolithImg from '../assets/showcase/monolith.svg';
-import vaultImg from '../assets/showcase/vault.svg';
-import prismOneImg from '../assets/showcase/prism-one.svg';
-import prismTwoImg from '../assets/showcase/prism-two.svg';
-import prismThreeImg from '../assets/showcase/prism-three.svg';
-import ladderGateImg from '../assets/showcase/ladder-gate.svg';
-import ladderCorridorImg from '../assets/showcase/ladder-corridor.svg';
-import ladderLatticeImg from '../assets/showcase/ladder-lattice.svg';
-
-gsap.registerPlugin(ScrollTrigger, useGSAP);
+import { Checkbox } from '../components/ui/checkbox';
+import { Callout, SettingRow, SettingsGroup, SettingsSection } from '../components/ui/settings';
 
 const BUILTIN_LABELS = new Set<string>(LABELS);
 
@@ -134,6 +99,27 @@ function hhmmToMinutes(v: string): number {
   return h * 60 + m;
 }
 
+/** Sentence-case a stored lowercase label ("memes and entertainment" → "Memes and entertainment"). */
+function displayLabel(label: string): string {
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+const SECTIONS = [
+  { id: 'blocking', label: 'Blocking' },
+  { id: 'categories', label: 'Categories' },
+  { id: 'focus', label: 'Focus' },
+  { id: 'sites', label: 'Sites' },
+  { id: 'commitment', label: 'Commitment' },
+  { id: 'schedules', label: 'Focus hours' },
+  { id: 'companion', label: 'Desktop companion' },
+  { id: 'history', label: 'History review' },
+  { id: 'privacy', label: 'Learning & privacy' },
+] as const;
+
+function lockShortText(status: LockStatus): string {
+  return status.until ? `Locked · ${formatRemaining(status.until - Date.now())}` : 'Locked';
+}
+
 function lockBannerText(status: LockStatus): string {
   const reasons = status.reasons.map((r) => REASON_NAMES[r]).join(', ');
   const tail = status.until
@@ -142,60 +128,7 @@ function lockBannerText(status: LockStatus): string {
   return `Locked: ${reasons}${tail}`;
 }
 
-const MANIFESTO_TEXT =
-  'Legacy blockers amputate whole domains because they cannot read. SmartBlocker embeds every title locally in twelve milliseconds, separating deep engineering research from algorithmic rabbit holes without a single packet ever leaving your machine.';
-
-const ACCORDION_PANELS = [
-  {
-    title: 'Domain Whitelist & Pre-Curtain Gate',
-    subtitle: 'Zero-latency exemption and 180ms media suppression',
-    description:
-      'Whitelisted domains and subdomains bypass inference immediately. On mixed high-risk hosts like YouTube, Reddit, and Twitch, an immediate pre-classification curtain pauses active media before a single frame distracts you.',
-    image: ladderGateImg,
-  },
-  {
-    title: 'Deterministic Substring Blocklist',
-    subtitle: 'Instant URL and query interception',
-    description:
-      'Unambiguous patterns in the full URL or page title trigger the block screen in zero milliseconds without waking the neural pipeline—catching shopping carts, impulse queries, and distracting storefronts.',
-    image: ladderCorridorImg,
-  },
-  {
-    title: 'BGE-Small Multi-Prototype Centroids',
-    subtitle: '384-dimensional local vector geometry',
-    description:
-      'Each page is embedded once via ONNX WASM and scored against multi-cluster category prototypes, neutral productive anchors, and your active Focus Context vector—updating centroids on-device whenever you record a correction.',
-    image: ladderLatticeImg,
-  },
-] as const;
-
-const PINNED_CHAPTERS = [
-  {
-    title: 'Sub-15ms Offscreen WASM Inference',
-    detail:
-      'Hosted inside a persistent offscreen document so service-worker sleep cycles never force a cold model reload.',
-    image: prismOneImg,
-  },
-  {
-    title: 'Monotonic Commitment Convergence',
-    detail:
-      'Timer locks, password hashes, Frozen Turkey sessions, and recurring schedules merge monotonically across browser and native daemon.',
-    image: prismTwoImg,
-  },
-  {
-    title: 'On-Device Centroid Personalization',
-    detail:
-      'False positives and false negatives fold directly into local prototype centroids—adapting to your exact discipline without cloud training.',
-    image: prismThreeImg,
-  },
-] as const;
-
 export function OptionsApp() {
-  const mainRef = useRef<HTMLElement>(null);
-  const scrubRef = useRef<HTMLParagraphElement>(null);
-  const pinSectionRef = useRef<HTMLDivElement>(null);
-  const pinLeftRef = useRef<HTMLDivElement>(null);
-
   // Core Settings State
   const [isOnboarded, setIsOnboarded] = useState(true);
   const [enabled, setEnabled] = useState(true);
@@ -225,6 +158,8 @@ export function OptionsApp() {
   // Lock State
   const [locked, setLocked] = useState(false);
   const [lockStatusText, setLockStatusText] = useState('');
+  const [lockShort, setLockShort] = useState('');
+  const [activeSection, setActiveSection] = useState<string>(SECTIONS[0].id);
   const [passwordArmed, setPasswordArmed] = useState(false);
   const [lockDuration, setLockDuration] = useState('1');
   const [lockUnit, setLockUnit] = useState<'h' | 'd'>('h');
@@ -277,8 +212,10 @@ export function OptionsApp() {
     setPasswordArmed(Boolean(state.passwordHash));
     if (status.settingsLocked) {
       setLockStatusText(lockBannerText(status));
+      setLockShort(lockShortText(status));
     } else {
       setLockStatusText('');
+      setLockShort('');
     }
   };
 
@@ -424,6 +361,22 @@ export function OptionsApp() {
       if (area === 'local' && changes['lockState']) {
         void applyLockUI();
       }
+      if (area === 'local' && changes['settings']) {
+        void getSettings().then((s) => {
+          setEnabled(s.enabled);
+          setCurrentLabels([...s.labels]);
+          setCheckedBlocked(new Set(s.blockedLabels));
+          setDeletedBuiltins(new Set(s.deletedBuiltinLabels));
+          setThreshold(s.blockThreshold);
+          setShareFeedback(s.shareFeedback);
+          setUseTabContext(s.useTabContext);
+          setResolveEmbedTitles(s.resolveEmbedTitles);
+          if (s.onboarded) setIsOnboarded(true);
+          if (document.activeElement?.id !== 'focus-goal') {
+            setFocusGoal(s.focusGoal);
+          }
+        });
+      }
     };
     api.storage.onChanged.addListener(onStorageChanged);
 
@@ -435,11 +388,11 @@ export function OptionsApp() {
       if (message?.type === 'MODEL_PROGRESS') {
         setModelProgressVisible(true);
         if (message.status === 'init' || message.status === 'ready') {
-          setModelProgressText(`Model ${message.status}...`);
+          setModelProgressText('Initializing...');
         } else if (message.status === 'progress' && message.progress != null) {
-          setModelProgressText(`Downloading AI model: ${message.progress.toFixed(0)}%`);
+          setModelProgressText(`Downloading components: ${message.progress.toFixed(0)}%`);
         } else if (message.status === 'done') {
-          setModelProgressText('AI model ready');
+          setModelProgressText('Ready');
           setTimeout(() => {
             setModelProgressVisible(false);
           }, 5000);
@@ -457,83 +410,48 @@ export function OptionsApp() {
     };
   }, []);
 
-  // GSAP ScrollTrigger Animations
-  useGSAP(
-    () => {
-      // Hero entrance
-      gsap.from('.hero-reveal', {
-        y: 28,
-        opacity: 0,
-        duration: 0.9,
-        stagger: 0.12,
-        ease: 'power3.out',
+  // Section nav scroll-spy: highlight the section nearest the top.
+  useEffect(() => {
+    const els = SECTIONS.map((sec) => document.getElementById(sec.id)).filter(
+      (el): el is HTMLElement => el !== null,
+    );
+    const io = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (visible[0]) setActiveSection(visible[0].target.id);
+      },
+      { rootMargin: '-72px 0px -60% 0px' },
+    );
+    els.forEach((el) => io.observe(el));
+    return () => io.disconnect();
+  }, []);
+
+  const autoSaveSettings = (patch: Parameters<typeof setSettings>[0]) => {
+    void setSettings(patch)
+      .then(() => {
+        setSaveMsgText('Saved!');
+        setSaveMsgError(false);
+        setSaveMsgVisible(true);
+        setTimeout(() => setSaveMsgVisible(false), 2000);
+      })
+      .catch((e) => {
+        setSaveMsgText(e instanceof Error ? e.message : String(e));
+        setSaveMsgError(true);
+        setSaveMsgVisible(true);
+        setTimeout(() => setSaveMsgVisible(false), 4000);
       });
-
-      // Scrubbing text reveal on manifesto words
-      if (scrubRef.current) {
-        const words = scrubRef.current.querySelectorAll('.scrub-word');
-        if (words.length > 0) {
-          gsap.fromTo(
-            words,
-            { opacity: 0.12 },
-            {
-              opacity: 1,
-              stagger: 0.05,
-              ease: 'none',
-              scrollTrigger: {
-                trigger: scrubRef.current,
-                start: 'top 82%',
-                end: 'bottom 45%',
-                scrub: true,
-              },
-            },
-          );
-        }
-      }
-
-      // Pinning left column in Desire split showcase
-      if (pinSectionRef.current && pinLeftRef.current) {
-        ScrollTrigger.create({
-          trigger: pinSectionRef.current,
-          start: 'top 18%',
-          end: 'bottom 75%',
-          pin: pinLeftRef.current,
-          pinSpacing: false,
-        });
-      }
-
-      // Image Scale & Fade Scroll on showcase cards
-      const scaleCards = gsap.utils.toArray<HTMLElement>('.gsap-scale-card');
-      for (const card of scaleCards) {
-        gsap.fromTo(
-          card,
-          { scale: 0.84, opacity: 0.35 },
-          {
-            scale: 1,
-            opacity: 1,
-            ease: 'power2.out',
-            scrollTrigger: {
-              trigger: card,
-              start: 'top 88%',
-              end: 'top 35%',
-              scrub: true,
-            },
-          },
-        );
-      }
-    },
-    { scope: mainRef },
-  );
+  };
 
   // Category Handlers
   const toggleCategory = (label: string, checked: boolean) => {
     if (locked) return;
-    setCheckedBlocked((prev) => {
-      const next = new Set(prev);
-      if (checked) next.add(label);
-      else next.delete(label);
-      return next;
-    });
+    const next = new Set(checkedBlocked);
+    if (checked) next.add(label);
+    else next.delete(label);
+    setCheckedBlocked(next);
+    autoSaveSettings({ blockedLabels: [...next] });
   };
 
   const addCategory = (raw: string) => {
@@ -545,27 +463,38 @@ export function OptionsApp() {
       setTimeout(() => setCategoryPlaceholder('e.g. cooking and recipes'), 2000);
       return;
     }
-    setCurrentLabels((prev) => [...prev, label]);
-    setCheckedBlocked((prev) => new Set(prev).add(label));
-    setDeletedBuiltins((prev) => {
-      const next = new Set(prev);
-      next.delete(label);
-      return next;
-    });
+    const nextLabels = [...currentLabels, label];
+    const nextBlocked = new Set(checkedBlocked).add(label);
+    const nextDeleted = new Set(deletedBuiltins);
+    nextDeleted.delete(label);
+    setCurrentLabels(nextLabels);
+    setCheckedBlocked(nextBlocked);
+    setDeletedBuiltins(nextDeleted);
     setCustomCategory('');
+    autoSaveSettings({
+      labels: nextLabels,
+      blockedLabels: [...nextBlocked],
+      deletedBuiltinLabels: [...nextDeleted],
+    });
   };
 
   const removeCategory = (label: string) => {
     if (locked) return;
-    setCurrentLabels((prev) => prev.filter((l) => l !== label));
-    setCheckedBlocked((prev) => {
-      const next = new Set(prev);
-      next.delete(label);
-      return next;
-    });
+    const nextLabels = currentLabels.filter((l) => l !== label);
+    const nextBlocked = new Set(checkedBlocked);
+    nextBlocked.delete(label);
+    const nextDeleted = new Set(deletedBuiltins);
     if (BUILTIN_LABELS.has(label)) {
-      setDeletedBuiltins((prev) => new Set(prev).add(label));
+      nextDeleted.add(label);
     }
+    setCurrentLabels(nextLabels);
+    setCheckedBlocked(nextBlocked);
+    setDeletedBuiltins(nextDeleted);
+    autoSaveSettings({
+      labels: nextLabels,
+      blockedLabels: [...nextBlocked],
+      deletedBuiltinLabels: [...nextDeleted],
+    });
   };
 
   // Lock Handlers
@@ -728,11 +657,10 @@ export function OptionsApp() {
       .slice(0, 3)
       .map(([label]) => label);
 
-    setCheckedBlocked((prev) => {
-      const next = new Set(prev);
-      for (const label of topDistractions) next.add(label);
-      return next;
-    });
+    const next = new Set(checkedBlocked);
+    for (const label of topDistractions) next.add(label);
+    setCheckedBlocked(next);
+    autoSaveSettings({ blockedLabels: [...next] });
   };
 
   // Feedback Handlers
@@ -795,389 +723,411 @@ export function OptionsApp() {
     setTimeout(() => setSaveMsgVisible(false), 2000);
   };
 
-  const scrollToId = (id: string) => {
-    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
-  };
-
   return (
-    <main
-      ref={mainRef}
-      className="overflow-x-hidden w-full max-w-full min-h-screen bg-[#070709] text-zinc-50 relative"
-    >
-      {/* Background atmospheric mesh & architectural grid */}
-      <div className="pointer-events-none fixed inset-0 bg-editorial-grid opacity-55" />
-      <div className="pointer-events-none fixed -top-48 left-1/4 h-[520px] w-[720px] rounded-full bg-emerald-500/[0.06] blur-[150px]" />
-      <div className="pointer-events-none fixed bottom-0 right-1/4 h-[460px] w-[640px] rounded-full bg-zinc-400/[0.05] blur-[140px]" />
-
-      {/* FLOATING GLASS-PILL NAVIGATION BAR */}
-      <header className="fixed top-5 inset-x-0 z-50 mx-auto max-w-6xl px-4 md:px-8">
-        <nav className="flex items-center justify-between rounded-full border border-zinc-800/90 bg-[#0b0b0f]/80 px-5 py-2.5 shadow-[0_20px_50px_rgba(0,0,0,0.75)] backdrop-blur-2xl">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full border border-zinc-700/80 bg-zinc-900">
-              <ShieldCheck weight="duotone" className="h-4.5 w-4.5 text-emerald-400" />
-            </div>
-            <span className="text-sm font-semibold tracking-tight text-zinc-100">
-              SmartBlocker
+    <main className="min-h-screen w-full overflow-x-hidden bg-background text-foreground">
+      {/* Header — wordmark · live status · save (docs/design-notes.md §5) */}
+      <header className="sticky top-0 z-40 border-b border-border bg-background">
+        <div className="mx-auto flex h-14 max-w-5xl items-center justify-between gap-4 px-4 md:px-8">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex size-6 items-center justify-center rounded-md bg-primary text-primary-foreground">
+              <LockSimple weight="bold" className="size-3.5" />
             </span>
+            <span className="text-sm font-semibold tracking-tight">SmartBlocker</span>
+            <span className="hidden text-faint sm:inline">/</span>
+            <span className="hidden text-sm text-muted-foreground sm:inline">Settings</span>
           </div>
 
-          <div className="hidden md:flex items-center gap-7 text-xs font-medium text-zinc-400">
-            <button
-              type="button"
-              onClick={() => scrollToId('control-matrix')}
-              className="hover:text-zinc-100 transition-colors cursor-pointer"
+          <div className="flex items-center gap-4">
+            {locked ? (
+              <Badge variant="commit" dot>
+                {lockShort}
+              </Badge>
+            ) : enabled ? (
+              <Badge variant="success" dot>
+                Blocking on
+              </Badge>
+            ) : (
+              <Badge dot>Paused</Badge>
+            )}
+            <span
+              id="save-msg"
+              role="status"
+              className={`hidden text-xs font-medium transition-opacity duration-150 sm:inline ${
+                saveMsgVisible ? 'opacity-100' : 'opacity-0'
+              } ${saveMsgError ? 'text-destructive-soft' : 'text-success-soft'}`}
             >
-              Control Matrix
-            </button>
-            <button
-              type="button"
-              onClick={() => scrollToId('commitment-lock')}
-              className="hover:text-zinc-100 transition-colors cursor-pointer"
-            >
-              Commitment Lock
-            </button>
-            <button
-              type="button"
-              onClick={() => scrollToId('defense-architecture')}
-              className="hover:text-zinc-100 transition-colors cursor-pointer"
-            >
-              Defense Pipeline
-            </button>
-            <button
-              type="button"
-              onClick={() => scrollToId('commit-section')}
-              className="hover:text-zinc-100 transition-colors cursor-pointer"
-            >
-              Commit Changes
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2.5">
-            <Badge variant={locked ? 'crimson' : enabled ? 'emerald' : 'outline'}>
-              {locked ? 'Locked Session' : enabled ? 'Protection Active' : 'Standby'}
-            </Badge>
+              {saveMsgText}
+            </span>
             <Button
-              variant="default"
+              id="save-btn"
               size="sm"
-              onClick={() => scrollToId('commit-section')}
-              className="h-8 rounded-full px-4 text-xs"
+              disabled={locked}
+              onClick={() => void handleSaveSettings()}
             >
-              {isOnboarded ? 'Save Config' : 'Finish Setup'}
+              {isOnboarded ? 'Save' : 'Finish setup'}
             </Button>
           </div>
-        </nav>
+        </div>
       </header>
 
-      {/* ONBOARDING & ACTIVE LOCK BANNERS */}
-      <div className="relative z-10 mx-auto max-w-7xl px-6 md:px-12 pt-28">
-        <div
-          id="banner"
-          style={{ display: isOnboarded ? 'none' : 'block' }}
-          className="mb-4 rounded-2xl border border-emerald-500/40 bg-emerald-500/10 px-6 py-4 text-sm text-emerald-200 backdrop-blur-md"
-        >
-          <p className="m-0 font-medium">
-            Welcome to SmartBlocker — pick what distracts you, then click "Finish setup" to activate blocking.
-          </p>
-        </div>
+      <div className="mx-auto flex max-w-5xl gap-12 px-4 pb-24 pt-8 md:px-8">
+        {/* Section nav (md+) */}
+        <nav aria-label="Settings sections" className="hidden w-44 shrink-0 md:block">
+          <ul className="sticky top-22 m-0 flex list-none flex-col gap-0.5 p-0">
+            {SECTIONS.map((sec) => (
+              <li key={sec.id}>
+                <a
+                  href={`#${sec.id}`}
+                  aria-current={activeSection === sec.id ? 'true' : undefined}
+                  className={`block rounded-md px-2.5 py-1.5 text-[13px] no-underline transition-colors ${
+                    activeSection === sec.id
+                      ? 'bg-muted font-medium text-foreground'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {sec.label}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </nav>
 
-        <div
-          id="lock-status"
-          style={{ display: locked ? 'block' : 'none' }}
-          className="mb-4 rounded-2xl border border-red-500/45 bg-red-500/12 px-6 py-4 text-sm font-semibold text-red-200 backdrop-blur-md"
-        >
-          {lockStatusText}
-        </div>
-      </div>
-
-      {/* =====================================================================
-          A — ATTENTION: EDITORIAL SPLIT HERO (py-32 md:py-48)
-         ===================================================================== */}
-      <section className="relative z-10 mx-auto max-w-7xl px-6 md:px-12 py-32 md:py-48">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-16 items-center">
-          {/* Left: Wide Editorial Typography (2 Lines Guaranteed) */}
-          <div className="lg:col-span-8 flex flex-col items-start">
-            <h1 className="hero-reveal max-w-5xl w-full text-[clamp(2.5rem,4.0vw,4.35rem)] font-semibold leading-[1.08] tracking-[-0.035em] text-zinc-50">
-              Silence the impulse,
-              <br className="hidden sm:block" />
-              <span
-                className="inline-block w-24 h-11 md:w-28 md:h-12 rounded-full align-middle bg-cover bg-center mr-3 border border-zinc-700/80 grayscale contrast-125 shadow-inner"
-                style={{
-                  backgroundImage: `url(${heroPillImg})`,
-                }}
-              />
-              preserve the craft.
-            </h1>
-
-            <p className="hero-reveal mt-8 max-w-2xl text-lg md:text-xl leading-relaxed text-zinc-400">
-              SmartBlocker runs a local BGE-Small vector engine inside your browser to evaluate page
-              semantics in real time—allowing technical research through while intercepting
-              algorithmic feeds before they play.
-            </p>
-
-            <div className="hero-reveal mt-10 flex flex-wrap items-center gap-4">
-              <Button
-                variant="default"
-                size="lg"
-                onClick={() => scrollToId('control-matrix')}
-                className="bg-zinc-100 text-zinc-950 hover:bg-white"
-              >
-                Configure Control Matrix
-                <ArrowUpRight weight="bold" className="h-4.5 w-4.5" />
-              </Button>
-              <Button
-                variant="secondary"
-                size="lg"
-                onClick={() => scrollToId('defense-architecture')}
-                className="bg-zinc-900 text-zinc-100 border border-zinc-700/80 hover:bg-zinc-800"
-              >
-                Inspect Local Engine
-              </Button>
-            </div>
-          </div>
-
-          {/* Right: Editorial Split Visual Monolith with Negative Space */}
-          <div className="lg:col-span-4">
-            <div className="hero-reveal group relative overflow-hidden rounded-3xl border border-zinc-800/80 bg-zinc-950 aspect-[4/5] shadow-[0_32px_80px_rgba(0,0,0,0.85)]">
-              <img
-                src={monolithImg}
-                alt="Architectural concrete monolith"
-                className="h-full w-full object-cover grayscale mix-blend-luminosity opacity-90 contrast-125 group-hover:scale-105 transition-transform duration-700 ease-out"
-              />
-              <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#070709] via-[#070709]/35 to-transparent" />
-              <div className="absolute bottom-6 inset-x-6 flex flex-col gap-1">
-                <span className="font-mono text-xs text-zinc-400">
-                  Xenova/bge-small-en-v1.5
-                </span>
-                <p className="text-sm font-medium text-zinc-200 m-0">
-                  Zero telemetry. Multi-prototype cosine similarity in local WASM.
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* =====================================================================
-          I — INTEREST: 5-CARD GAPLESS BENTO CONTROL MATRIX (py-32 md:py-48)
-          Math Verification: Row 1 (7 + 5 = 12), Row 2 (6 + 6 = 12), Row 3 (12 = 12)
-         ===================================================================== */}
-      <section
-        id="control-matrix"
-        className="scroll-mt-24 relative z-10 mx-auto max-w-7xl px-6 md:px-12 py-32 md:py-48 border-t border-zinc-900/90"
-      >
-        <div className="mb-14 flex flex-col md:flex-row md:items-end justify-between gap-6">
-          <div>
-            <h2 className="max-w-4xl text-3xl md:text-5xl font-semibold tracking-tight text-zinc-50 leading-[1.08]">
-              Precision Blocking & Semantic Controls
-            </h2>
-            <p className="mt-3 max-w-2xl text-base text-zinc-400">
-              Every threshold, category centroid, domain rule, and commitment lock is persisted
-              locally and enforced across active tabs.
+        <div className="flex min-w-0 max-w-[680px] flex-1 flex-col gap-12">
+          {/* First run + lock seal */}
+          <div
+            id="banner"
+            style={{ display: isOnboarded ? 'none' : 'block' }}
+            className="rounded-xl border border-border bg-card px-5 py-4"
+          >
+            <p className="m-0 text-base font-semibold tracking-tight">Welcome to SmartBlocker</p>
+            <p className="m-0 mt-1 text-[13px] text-muted-foreground">
+              Pick the categories you want blocked below, then choose{' '}
+              <span className="font-medium text-foreground">Finish setup</span>. Everything runs on
+              this device.
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            <Button
-              variant="default"
-              onClick={() => void handleSaveSettings()}
-              disabled={locked}
-              className="bg-zinc-100 text-zinc-950 hover:bg-white"
-            >
-              {isOnboarded ? 'Apply & Save' : 'Finish setup'}
-            </Button>
-          </div>
-        </div>
 
-        {/* GAPLESS 12-COLUMN BENTO GRID */}
-        <div className="grid grid-cols-1 md:grid-cols-12 grid-flow-dense gap-6">
-          {/* BENTO CARD 1 (col-span-7): Engine Core, Threshold & System 1.5 Focus Context */}
-          <Card className="md:col-span-7 md:row-span-1 flex flex-col justify-between">
-            <CardHeader>
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-2.5">
-                  <Sliders className="h-5 w-5 text-emerald-400" />
-                  <CardTitle>Semantic Engine & Focus Context</CardTitle>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-xs font-medium text-zinc-300">Enable SmartBlocker</span>
+          <div
+            id="lock-status"
+            role="status"
+            style={{ display: locked ? 'flex' : 'none' }}
+            className="items-start gap-3 rounded-xl border border-accent/30 bg-accent/10 px-4 py-3 text-[13px] font-medium text-accent-soft"
+          >
+            <LockSimple weight="fill" className="mt-0.5 size-4 shrink-0 text-accent" />
+            <span>{lockStatusText}</span>
+          </div>
+
+          {/* ── Blocking ─────────────────────────────────────────── */}
+          <SettingsSection
+            id="blocking"
+            title="Blocking"
+            description="SmartBlocker checks every page title on this device and blocks the ones that look like a detour."
+          >
+            <SettingsGroup>
+              <SettingRow
+                label="Block distracting pages"
+                description="Turn off to pause all blocking. Allowed sites are never checked."
+                htmlFor="enabled-toggle"
+                control={
                   <Switch
                     id="enabled-toggle"
                     checked={enabled}
                     disabled={locked}
-                    onChange={(e) => setEnabled(e.target.checked)}
+                    onChange={(e) => {
+                      const next = e.target.checked;
+                      setEnabled(next);
+                      autoSaveSettings({ enabled: next });
+                    }}
                   />
-                </div>
-              </div>
-              <CardDescription>
-                Calibrate the softmax decision boundary and supply your current task intention so
-                ambiguous lectures or technical threads are judged against your active work.
-              </CardDescription>
-            </CardHeader>
-
-            <CardContent className="flex flex-col gap-6">
-              {/* Block Threshold Slider */}
-              <div className="rounded-xl border border-zinc-800/80 bg-[#111117] p-5">
-                <div className="flex items-center justify-between mb-2">
-                  <label htmlFor="threshold" className="text-sm font-medium text-zinc-200">
-                    Block Confidence Threshold
-                  </label>
+                }
+              />
+              <SettingRow
+                stacked
+                label="Sensitivity"
+                htmlFor="threshold"
+                description="A page is blocked when the model is at least this confident it's a distraction."
+                control={
                   <span
                     id="threshold-val"
-                    className="font-mono text-base font-semibold text-emerald-400 tabular-nums"
+                    className="font-mono text-sm font-medium tabular-nums text-foreground"
                   >
                     {pct(threshold)}
                   </span>
+                }
+              >
+                <div className="flex flex-col gap-1.5">
+                  <input
+                    type="range"
+                    id="threshold"
+                    min="0.3"
+                    max="0.9"
+                    step="0.05"
+                    value={threshold}
+                    disabled={locked}
+                    style={{ ['--fill' as string]: `${((threshold - 0.3) / 0.6) * 100}%` }}
+                    onChange={(e) => {
+                      const next = parseFloat(e.target.value);
+                      setThreshold(next);
+                      autoSaveSettings({ blockThreshold: next });
+                    }}
+                    className="sb-range"
+                  />
+                  <div className="flex justify-between text-xs text-faint">
+                    <span>Stricter · blocks more</span>
+                    <span>Relaxed · blocks less</span>
+                  </div>
                 </div>
-                <p className="text-xs text-zinc-400 mb-4">
-                  Minimum confidence score before a page is blocked. Lower = stricter; higher = only
-                  block when very confident.
-                </p>
-                <input
-                  type="range"
-                  id="threshold"
-                  min="0.3"
-                  max="0.9"
-                  step="0.05"
-                  value={threshold}
-                  disabled={locked}
-                  onChange={(e) => setThreshold(parseFloat(e.target.value))}
-                  className="w-full h-2 rounded-lg appearance-none bg-zinc-800 accent-emerald-400 cursor-pointer disabled:cursor-not-allowed disabled:opacity-45"
-                />
-                <div className="mt-2 flex justify-between font-mono text-[11px] text-zinc-500">
-                  <span>30% (Strict)</span>
-                  <span>50% (Calibrated Default)</span>
-                  <span>90% (Conservative)</span>
-                </div>
-              </div>
+              </SettingRow>
+            </SettingsGroup>
+          </SettingsSection>
 
-              {/* Focus Context (System 1.5) */}
-              <div className="rounded-xl border border-zinc-800/80 bg-[#111117] p-5">
-                <div className="flex items-center justify-between mb-2">
-                  <label
-                    htmlFor="focus-goal"
-                    className="flex items-center gap-2 text-sm font-medium text-zinc-200"
+          {/* ── Categories ───────────────────────────────────────── */}
+          <SettingsSection
+            id="categories"
+            title="Categories"
+            description="What counts as a distraction for you. Unchecked categories are recognized but never blocked."
+            aside={
+              <span className="text-xs tabular-nums text-faint">
+                {checkedBlocked.size} of {currentLabels.length} blocked
+              </span>
+            }
+          >
+            <SettingsGroup className="overflow-hidden">
+              <ul
+                id="label-list"
+                className="m-0 grid list-none grid-cols-1 gap-px bg-border p-0 sm:grid-cols-2"
+              >
+                {currentLabels.map((label) => {
+                  const isChecked = checkedBlocked.has(label);
+                  return (
+                    <li
+                      key={label}
+                      className="group/row flex items-center gap-3 bg-card px-4 py-2.5 transition-colors hover:bg-muted sm:last:odd:col-span-2"
+                    >
+                      <Checkbox
+                        id={`lbl-${label}`}
+                        checked={isChecked}
+                        disabled={locked}
+                        onChange={(e) => toggleCategory(label, e.target.checked)}
+                      />
+                      <label
+                        htmlFor={`lbl-${label}`}
+                        className={`label-name min-w-0 flex-1 truncate text-sm select-none ${
+                          locked ? 'cursor-default' : 'cursor-pointer'
+                        } ${isChecked ? 'text-foreground' : 'text-muted-foreground'}`}
+                      >
+                        {displayLabel(label)}
+                      </label>
+                      <button
+                        type="button"
+                        disabled={locked}
+                        onClick={() => removeCategory(label)}
+                        title={`Remove ${label}`}
+                        aria-label={`Remove ${label}`}
+                        className="delete-label-btn flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-faint opacity-0 transition-[opacity,color] group-hover/row:opacity-100 hover:text-destructive-soft focus-visible:opacity-100 disabled:hidden"
+                      >
+                        <X className="size-3.5" />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+              <div className="flex flex-col gap-2 px-4 py-3.5">
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="text"
+                    id="custom-category-input"
+                    value={customCategory}
+                    disabled={locked}
+                    placeholder={categoryPlaceholder}
+                    onChange={(e) => setCustomCategory(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        addCategory(customCategory);
+                      }
+                    }}
+                  />
+                  <Button
+                    id="add-category-btn"
+                    variant="secondary"
+                    disabled={locked}
+                    onClick={() => addCategory(customCategory)}
                   >
-                    <Crosshair className="h-4 w-4 text-emerald-400" />
-                    Active Focus Goal (System 1.5)
-                  </label>
-                  <Badge variant="outline" className="font-mono text-[10px]">
-                    2:1 Goal Weighting
-                  </Badge>
+                    <Plus weight="bold" className="size-3.5" />
+                    Add category
+                  </Button>
                 </div>
-                <p className="text-xs text-zinc-400 mb-3.5">
-                  Tell SmartBlocker what you are working on right now. Ambiguous pages (a YouTube
-                  lecture, a Reddit thread about your coursework) are evaluated against your task
-                  vector instead of URL reputation alone.
+                <p className="m-0 text-xs text-faint">
+                  Describe it in a few words — "cooking and recipes" works better than "cooking".
                 </p>
+              </div>
+            </SettingsGroup>
+          </SettingsSection>
+
+          {/* ── Focus ────────────────────────────────────────────── */}
+          <SettingsSection
+            id="focus"
+            title="Focus"
+            description="Tell SmartBlocker what you're working on so related pages on mixed sites stay open."
+          >
+            <SettingsGroup>
+              <SettingRow
+                stacked
+                label="Current focus goal"
+                htmlFor="focus-goal"
+                description="Saved when you press Enter or leave the field."
+                control={focusGoal.trim() ? <Badge variant="commit" dot>Focusing</Badge> : undefined}
+              >
                 <Input
                   type="text"
                   id="focus-goal"
                   value={focusGoal}
                   disabled={locked}
                   onChange={(e) => setFocusGoal(e.target.value)}
-                  placeholder="e.g., Studying linear algebra, Building Rust CLI..."
-                  className="mb-4"
+                  onBlur={() => autoSaveSettings({ focusGoal: focusGoal.trim() })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      autoSaveSettings({ focusGoal: focusGoal.trim() });
+                    }
+                  }}
+                  placeholder="e.g. Writing my biology lab report"
                 />
-                <div className="flex items-center justify-between pt-3 border-t border-zinc-800/70">
-                  <span className="text-xs text-zinc-300 pr-4">
-                    Infer task context from open productive tabs and focus goal to disambiguate
-                    gray-zone pages
-                  </span>
+              </SettingRow>
+              <SettingRow
+                label="Use my open tabs as context"
+                description="Pages similar to the work tabs you have open are less likely to be blocked."
+                htmlFor="use-tab-context"
+                control={
                   <Switch
                     id="use-tab-context"
                     checked={useTabContext}
                     disabled={locked}
-                    onChange={(e) => setUseTabContext(e.target.checked)}
+                    onChange={(e) => {
+                      const next = e.target.checked;
+                      setUseTabContext(next);
+                      autoSaveSettings({ useTabContext: next });
+                    }}
                   />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* BENTO CARD 2 (col-span-5): Commitment Lock (Timer & Password) */}
-          <Card
-            id="commitment-lock"
-            className="scroll-mt-24 md:col-span-5 md:row-span-1 flex flex-col"
-          >
-            <div className="pointer-events-none absolute inset-x-0 top-0 h-36 overflow-hidden opacity-25">
-              <img
-                src={vaultImg}
-                alt="Architectural vault texture"
-                className="h-full w-full object-cover grayscale mix-blend-luminosity contrast-125 group-hover:scale-105 transition-transform duration-700 ease-out"
+                }
               />
-              <div className="absolute inset-0 bg-gradient-to-b from-transparent to-[#0d0d12]" />
-            </div>
+            </SettingsGroup>
+          </SettingsSection>
 
-            <CardHeader className="relative z-10">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2.5">
-                  <LockKey className="h-5 w-5 text-amber-400" />
-                  <CardTitle>Commitment Lock</CardTitle>
-                </div>
-                <Badge variant={locked ? 'crimson' : 'outline'} className="font-mono text-[10px]">
-                  {locked ? 'Locked' : 'Unlocked'}
+          {/* ── Sites ────────────────────────────────────────────── */}
+          <SettingsSection
+            id="sites"
+            title="Sites"
+            description="Rules that skip the model entirely. Use Save in the header after editing these lists."
+          >
+            <SettingsGroup>
+              <SettingRow
+                stacked
+                label="Always allow"
+                htmlFor="whitelist"
+                description={
+                  <>
+                    One domain per line. Subdomains are included —{' '}
+                    <code className="text-xs text-foreground">github.com</code> also allows{' '}
+                    <code className="text-xs text-foreground">gist.github.com</code>.
+                  </>
+                }
+              >
+                <Textarea
+                  id="whitelist"
+                  spellCheck={false}
+                  disabled={locked}
+                  value={whitelistText}
+                  onChange={(e) => setWhitelistText(e.target.value)}
+                  placeholder={'github.com\nmail.google.com\nlocalhost'}
+                  className="min-h-[148px]"
+                />
+              </SettingRow>
+              <SettingRow
+                stacked
+                label="Always block"
+                htmlFor="blocklist"
+                description="Keywords or URL fragments, one per line. Any address or page title containing one is blocked instantly."
+              >
+                <Textarea
+                  id="blocklist"
+                  spellCheck={false}
+                  disabled={locked}
+                  value={blocklistText}
+                  onChange={(e) => setBlocklistText(e.target.value)}
+                  placeholder={'amazon.com\n/cart\nblack friday'}
+                  className="min-h-[120px]"
+                />
+              </SettingRow>
+            </SettingsGroup>
+          </SettingsSection>
+
+          {/* ── Commitment ───────────────────────────────────────── */}
+          <SettingsSection
+            id="commitment"
+            title="Commitment"
+            description="Lock your settings so future-you can't switch blocking off. Locks can be extended, never shortened, and survive restarts."
+            aside={
+              locked ? (
+                <Badge variant="commit" dot>
+                  Locked
                 </Badge>
-              </div>
-              <CardDescription>
-                Cold-Turkey-style commitment: while locked, no setting can be loosened and the block
-                screen's bypass buttons disappear. Locks can be extended but never shortened.
-              </CardDescription>
-            </CardHeader>
-
-            <CardContent className="relative z-10 flex flex-1 flex-col justify-between gap-4">
-              {/* Timer Lock */}
-              <div className="rounded-xl border border-zinc-800/80 bg-[#111117]/95 p-4">
-                <span className="block text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">
-                  Monotonic Timer Lock
-                </span>
-                <div className="flex items-center gap-2.5 flex-wrap">
-                  <Input
-                    type="number"
-                    id="lock-duration"
-                    min="1"
-                    value={lockDuration}
-                    onChange={(e) => setLockDuration(e.target.value)}
-                    className="w-20 font-mono"
-                  />
-                  <Select
-                    id="lock-unit"
-                    value={lockUnit}
-                    onChange={(e) => setLockUnit(e.target.value as 'h' | 'd')}
-                    className="w-28"
-                  >
-                    <option value="h">hours</option>
-                    <option value="d">days</option>
-                  </Select>
-                  <Button
-                    id="lock-timer-btn"
-                    variant={timerConfirmPending ? 'destructive' : 'default'}
-                    onClick={() => void handleTimerLockClick()}
-                    className="flex-1"
-                  >
-                    {timerBtnText}
-                  </Button>
-                </div>
-              </div>
-
-              {/* Password Lock */}
-              <div className="rounded-xl border border-zinc-800/80 bg-[#111117]/95 p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
-                    PBKDF2 Password Lock
-                  </span>
-                  {passwordArmed && (
-                    <Badge variant="amber" className="text-[10px]">
-                      Password Armed
-                    </Badge>
-                  )}
-                </div>
-                <div className="flex items-center gap-2.5 flex-wrap">
+              ) : (
+                <Badge>Unlocked</Badge>
+              )
+            }
+          >
+            <SettingsGroup>
+              <SettingRow
+                label="Lock for a set time"
+                description="No override buttons on block screens until it ends."
+                control={
+                  <>
+                    <Input
+                      type="number"
+                      id="lock-duration"
+                      min="1"
+                      aria-label="Lock duration"
+                      value={lockDuration}
+                      onChange={(e) => setLockDuration(e.target.value)}
+                      className="w-16 font-mono tabular-nums"
+                    />
+                    <Select
+                      id="lock-unit"
+                      aria-label="Lock duration unit"
+                      value={lockUnit}
+                      onChange={(e) => setLockUnit(e.target.value as 'h' | 'd')}
+                      className="w-24"
+                    >
+                      <option value="h">hours</option>
+                      <option value="d">days</option>
+                    </Select>
+                    <Button
+                      id="lock-timer-btn"
+                      variant={timerConfirmPending ? 'commit' : 'secondary'}
+                      onClick={() => void handleTimerLockClick()}
+                    >
+                      {timerBtnText}
+                    </Button>
+                  </>
+                }
+              />
+              <SettingRow
+                stacked
+                label="Password lock"
+                htmlFor="lock-password"
+                description="Give the password to someone you trust. Settings stay locked until it's entered here."
+                control={passwordArmed ? <Badge variant="commit" dot>Armed</Badge> : undefined}
+              >
+                <div className="flex items-center gap-2">
                   <Input
                     type="password"
                     id="lock-password"
                     value={lockPassword}
                     onChange={(e) => setLockPassword(e.target.value)}
-                    placeholder="Password (min 8 chars)"
-                    className="flex-1 min-w-[160px]"
+                    placeholder={passwordArmed ? 'Enter password to unlock' : 'At least 8 characters'}
+                    autoComplete={passwordArmed ? 'current-password' : 'new-password'}
                   />
                   <Button
                     id="lock-password-btn"
@@ -1189,721 +1139,381 @@ export function OptionsApp() {
                 </div>
                 <span
                   id="lock-password-msg"
-                  className="mt-2 block min-h-[18px] text-xs font-medium text-red-400"
+                  role="alert"
+                  className="block min-h-[18px] text-xs font-medium text-destructive-soft empty:min-h-0"
                 >
                   {lockPasswordMsg}
                 </span>
-              </div>
+              </SettingRow>
+            </SettingsGroup>
+          </SettingsSection>
 
-              {/* Monotonic Guarantee Note */}
-              <div className="rounded-xl border border-zinc-800/60 bg-[#0a0a0f] px-4 py-3 text-xs text-zinc-400 leading-relaxed">
-                <span className="font-mono text-[11px] uppercase tracking-wider text-zinc-300 block mb-1">
-                  Monotonic State Guarantee
-                </span>
-                Active locks synchronize with the native desktop daemon and survive extension
-                reloads.
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* BENTO CARD 3 (col-span-6): Categories to Block */}
-          <Card className="md:col-span-6 md:row-span-1 flex flex-col justify-between">
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle>Categories to Block</CardTitle>
-                <Badge variant="outline" className="font-mono">
-                  {checkedBlocked.size} / {currentLabels.length} Blocked
-                </Badge>
-              </div>
-              <CardDescription>
-                Toggle distraction prototypes or inject custom semantic categories into the vector
-                space.
-              </CardDescription>
-            </CardHeader>
-
-            <CardContent className="flex flex-col gap-4">
-              <ul
-                id="label-list"
-                className="m-0 p-0 list-none divide-y divide-zinc-800/70 rounded-xl border border-zinc-800/80 bg-[#111117] max-h-[340px] overflow-y-auto"
-              >
-                {currentLabels.map((label) => {
-                  const isChecked = checkedBlocked.has(label);
-                  return (
-                    <li
-                      key={label}
-                      className="flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-900/60 transition-colors"
-                    >
+          {/* ── Focus hours (schedules) ──────────────────────────── */}
+          <SettingsSection
+            id="schedules"
+            title="Focus hours"
+            description="Recurring windows where blocking is forced on and settings are locked. An end time before the start runs overnight."
+          >
+            <SettingsGroup>
+              <div id="schedule-list" className="flex flex-col divide-y divide-border">
+                {scheduleRules.length === 0 && (
+                  <p className="m-0 px-4 py-3.5 text-[13px] text-faint">No focus hours yet.</p>
+                )}
+                {scheduleRules.map((rule) => (
+                  <div
+                    key={rule.id}
+                    className="schedule-row flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+                  >
+                    <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Days">
+                      {DAY_NAMES.map((dayName, d) => (
+                        <label
+                          key={d}
+                          className={`day-label inline-flex h-7 min-w-9 items-center justify-center rounded-md border px-1.5 text-xs font-medium select-none transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-ring/70 ${
+                            rule.days.includes(d)
+                              ? 'border-accent/40 bg-accent/10 text-accent-soft'
+                              : 'border-border text-faint hover:text-muted-foreground'
+                          } ${locked ? 'cursor-not-allowed opacity-45' : 'cursor-pointer'}`}
+                        >
+                          <input
+                            type="checkbox"
+                            className="sr-only"
+                            checked={rule.days.includes(d)}
+                            disabled={locked}
+                            onChange={(e) => handleToggleScheduleDay(rule.id, d, e.target.checked)}
+                          />
+                          {dayName}
+                        </label>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-2">
                       <input
-                        type="checkbox"
-                        id={`lbl-${label}`}
-                        checked={isChecked}
+                        type="time"
+                        aria-label="Start time"
+                        value={minutesToHHMM(rule.startMinutes)}
                         disabled={locked}
-                        onChange={(e) => toggleCategory(label, e.target.checked)}
-                        className="h-4 w-4 rounded border-zinc-700 bg-zinc-900 accent-emerald-400 cursor-pointer disabled:cursor-not-allowed"
+                        onChange={(e) => handleScheduleTimeChange(rule.id, 'startMinutes', e.target.value)}
+                        className="h-8 rounded-md border border-input bg-background px-2 font-mono text-xs tabular-nums text-foreground disabled:opacity-45"
                       />
-                      <span
-                        onClick={() => toggleCategory(label, !isChecked)}
-                        className={`label-name flex-1 text-sm capitalize select-none ${
-                          locked ? 'cursor-default' : 'cursor-pointer'
-                        } ${isChecked ? 'text-zinc-100 font-medium' : 'text-zinc-400'}`}
-                      >
-                        {label}
-                      </span>
+                      <Minus className="size-3 text-faint" aria-hidden />
+                      <input
+                        type="time"
+                        aria-label="End time"
+                        value={minutesToHHMM(rule.endMinutes)}
+                        disabled={locked}
+                        onChange={(e) => handleScheduleTimeChange(rule.id, 'endMinutes', e.target.value)}
+                        className="h-8 rounded-md border border-input bg-background px-2 font-mono text-xs tabular-nums text-foreground disabled:opacity-45"
+                      />
                       <button
                         type="button"
                         disabled={locked}
-                        onClick={() => removeCategory(label)}
-                        title="Remove category"
-                        className="delete-label-btn text-zinc-500 hover:text-red-400 disabled:opacity-40 px-1.5 py-0.5 text-base leading-none cursor-pointer transition-colors"
+                        onClick={() => handleRemoveSchedule(rule.id)}
+                        title="Remove focus hours"
+                        aria-label="Remove focus hours"
+                        className="schedule-remove flex size-7 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-muted hover:text-destructive-soft disabled:opacity-40"
                       >
-                        ×
+                        <X className="size-3.5" />
                       </button>
-                    </li>
-                  );
-                })}
-              </ul>
-
-              <div className="flex items-center gap-2.5">
-                <Input
-                  type="text"
-                  id="custom-category-input"
-                  value={customCategory}
-                  disabled={locked}
-                  placeholder={categoryPlaceholder}
-                  onChange={(e) => setCustomCategory(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      addCategory(customCategory);
-                    }
-                  }}
-                />
-                <Button
-                  id="add-category-btn"
-                  variant="secondary"
-                  disabled={locked}
-                  onClick={() => addCategory(customCategory)}
-                >
-                  <Plus weight="bold" className="h-4 w-4" />
-                  Add
-                </Button>
-              </div>
-              <p className="m-0 text-xs text-zinc-500">
-                Tip: use descriptive phrases like "cooking and recipes" rather than single words —
-                embedding similarity improves with specific phrasing.
-              </p>
-            </CardContent>
-          </Card>
-
-          {/* BENTO CARD 4 (col-span-6): Whitelist & Deterministic Blocklist */}
-          <Card className="md:col-span-6 md:row-span-1 flex flex-col justify-between">
-            <CardHeader>
-              <CardTitle>Deterministic Domain & Substring Rules</CardTitle>
-              <CardDescription>
-                Short-circuit the neural classifier with explicit domain exemptions or zero-latency
-                substring blocks.
-              </CardDescription>
-            </CardHeader>
-
-            <CardContent className="grid grid-cols-1 gap-5">
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label htmlFor="whitelist" className="text-sm font-medium text-zinc-200">
-                    Whitelisted Sites (Never Blocked)
-                  </label>
-                  <span className="font-mono text-[11px] text-emerald-400">Subdomain-aware</span>
-                </div>
-                <p className="text-xs text-zinc-400 mb-2.5">
-                  One domain per line — a domain also covers its subdomains (e.g.{' '}
-                  <code className="text-zinc-300">google.com</code> covers{' '}
-                  <code className="text-zinc-300">mail.google.com</code>).
-                </p>
-                <Textarea
-                  id="whitelist"
-                  spellCheck={false}
-                  disabled={locked}
-                  value={whitelistText}
-                  onChange={(e) => setWhitelistText(e.target.value)}
-                  placeholder={'github.com\nmail.google.com\nlocalhost'}
-                  className="min-h-[145px]"
-                />
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label htmlFor="blocklist" className="text-sm font-medium text-zinc-200">
-                    Deterministic Blocklist (Always Blocked)
-                  </label>
-                  <span className="font-mono text-[11px] text-red-400">0ms Instant Match</span>
-                </div>
-                <p className="text-xs text-zinc-400 mb-2.5">
-                  Matched as a substring against the full URL and page title. A match blocks
-                  instantly without running AI inference.
-                </p>
-                <Textarea
-                  id="blocklist"
-                  spellCheck={false}
-                  disabled={locked}
-                  value={blocklistText}
-                  onChange={(e) => setBlocklistText(e.target.value)}
-                  placeholder={'amazon.com\n/cart\nblack friday'}
-                  className="min-h-[145px]"
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* BENTO CARD 5 (col-span-12): Schedules, Desktop Companion, History Scan & Feedback Loop */}
-          <Card className="md:col-span-12 md:row-span-1">
-            <CardContent className="p-6 md:p-8">
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 divide-y lg:divide-y-0 lg:divide-x divide-zinc-800/80">
-                {/* Sub-panel 1: Scheduled Blocks (5 cols) */}
-                <div className="lg:col-span-5 lg:pr-6 flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <Clock className="h-5 w-5 text-amber-400" />
-                      <h3 className="text-lg font-semibold text-zinc-50 m-0">Scheduled Blocks</h3>
-                    </div>
-                    <p className="text-xs text-zinc-400 mb-4 leading-relaxed">
-                      Recurring locked windows — during them blocking is forced on (even if
-                      SmartBlocker is toggled off) and settings are frozen. End time earlier than
-                      start creates an overnight window.
-                    </p>
-
-                    <div id="schedule-list" className="flex flex-col gap-2.5 mb-4">
-                      {scheduleRules.map((rule) => (
-                        <div
-                          key={rule.id}
-                          className="schedule-row flex items-center gap-2 flex-wrap rounded-xl border border-zinc-800/90 bg-[#111117] p-3 text-xs"
-                        >
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            {DAY_NAMES.map((dayName, d) => (
-                              <label
-                                key={d}
-                                className="day-label inline-flex items-center gap-1 rounded-md border border-zinc-800 bg-zinc-900/90 px-2 py-1 cursor-pointer select-none"
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={rule.days.includes(d)}
-                                  disabled={locked}
-                                  onChange={(e) =>
-                                    handleToggleScheduleDay(rule.id, d, e.target.checked)
-                                  }
-                                  className="accent-emerald-400"
-                                />
-                                <span className="text-[11px] text-zinc-300">{dayName}</span>
-                              </label>
-                            ))}
-                          </div>
-
-                          <div className="mt-1 flex items-center gap-2 w-full justify-between pt-2 border-t border-zinc-800/60">
-                            <div className="flex items-center gap-1.5">
-                              <input
-                                type="time"
-                                value={minutesToHHMM(rule.startMinutes)}
-                                disabled={locked}
-                                onChange={(e) =>
-                                  handleScheduleTimeChange(rule.id, 'startMinutes', e.target.value)
-                                }
-                                className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-xs text-zinc-100"
-                              />
-                              <span className="text-zinc-500">–</span>
-                              <input
-                                type="time"
-                                value={minutesToHHMM(rule.endMinutes)}
-                                disabled={locked}
-                                onChange={(e) =>
-                                  handleScheduleTimeChange(rule.id, 'endMinutes', e.target.value)
-                                }
-                                className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-xs text-zinc-100"
-                              />
-                            </div>
-                            <button
-                              type="button"
-                              disabled={locked}
-                              onClick={() => handleRemoveSchedule(rule.id)}
-                              title="Remove schedule"
-                              className="schedule-remove text-zinc-500 hover:text-red-400 px-2 py-0.5 text-base leading-none cursor-pointer"
-                            >
-                              ×
-                            </button>
-                          </div>
-                        </div>
-                      ))}
                     </div>
                   </div>
+                ))}
+              </div>
+              <div className="flex flex-wrap items-center gap-2 px-4 py-3">
+                <Button
+                  id="schedule-add"
+                  variant="ghost"
+                  size="sm"
+                  disabled={locked}
+                  onClick={handleAddSchedule}
+                >
+                  <Plus weight="bold" className="size-3.5" />
+                  Add focus hours
+                </Button>
+                <span
+                  id="schedule-msg"
+                  role="status"
+                  className={`ml-auto text-xs font-medium ${
+                    scheduleMsgError ? 'text-destructive-soft' : 'text-success-soft'
+                  }`}
+                >
+                  {scheduleMsg}
+                </span>
+                <Button
+                  id="schedule-save"
+                  variant="secondary"
+                  size="sm"
+                  disabled={locked}
+                  onClick={() => void handleSaveSchedules()}
+                >
+                  Save focus hours
+                </Button>
+              </div>
+            </SettingsGroup>
+          </SettingsSection>
 
-                  <div className="flex items-center gap-2.5 flex-wrap pt-2">
+          {/* ── Desktop companion ────────────────────────────────── */}
+          <SettingsSection
+            id="companion"
+            title="Desktop companion"
+            description="An optional desktop app that enforces locks outside the browser: closes distracting apps and browsers launched without SmartBlocker."
+          >
+            <SettingsGroup>
+              <div className="flex flex-col gap-3 px-4 py-3.5">
+                <div className="flex items-center gap-2.5">
+                  <span
+                    aria-hidden
+                    className={`size-2 shrink-0 rounded-full ${
+                      companionState === 'connected' ? 'bg-success' : 'bg-faint'
+                    }`}
+                  />
+                  <div
+                    id="companion-status"
+                    className={`text-sm ${
+                      companionState === 'connected'
+                        ? 'companion-connected font-medium text-foreground'
+                        : 'companion-muted text-muted-foreground'
+                    }`}
+                  >
+                    {companionText}
+                  </div>
+                </div>
+                <ul
+                  id="companion-enforcement"
+                  style={{ display: companionFlags.length > 0 ? 'flex' : 'none' }}
+                  className="m-0 flex-col gap-1.5 p-0 pl-[18px] list-none text-[13px] text-muted-foreground"
+                >
+                  {companionFlags.map((f, i) => (
+                    <li key={i} className="flex items-center gap-2">
+                      {f.ok ? (
+                        <Check weight="bold" className="size-3.5 text-success" />
+                      ) : (
+                        <Minus weight="bold" className="size-3.5 text-faint" />
+                      )}
+                      <span>{f.label}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              {incognitoAllowed === false && (
+                <div className="px-4 py-3.5">
+                  <Callout id="incognito-warning" tone="warning">
+                    <div className="mb-1 flex items-center gap-1.5 font-medium">
+                      <Warning weight="fill" className="size-4 shrink-0 text-warning" />
+                      Private windows aren't protected
+                    </div>
+                    <p className="m-0 text-warning-soft/80">
+                      SmartBlocker can't see incognito tabs, so they bypass active locks. Open{' '}
+                      <code className="font-mono text-xs text-warning-soft">chrome://extensions</code>,
+                      find SmartBlocker, and turn on{' '}
+                      <span className="font-medium text-warning-soft">Allow in Incognito</span>.
+                    </p>
+                  </Callout>
+                </div>
+              )}
+            </SettingsGroup>
+          </SettingsSection>
+
+          {/* ── History review ───────────────────────────────────── */}
+          <SettingsSection
+            id="history"
+            title="History review"
+            description="Classify your recent browsing history on-device to see where your time actually goes."
+          >
+            <SettingsGroup>
+              <SettingRow
+                stacked
+                label="Review recent history"
+                description="Nothing leaves this device. Takes a few seconds."
+                control={
+                  <div className="flex items-center gap-2">
                     <Button
-                      id="schedule-add"
+                      id="block-top-btn"
+                      variant="commit"
+                      size="sm"
+                      disabled={locked}
+                      style={{ display: showBlockTopBtn ? 'inline-flex' : 'none' }}
+                      onClick={handleBlockTopDistractions}
+                    >
+                      Block top 3
+                    </Button>
+                    <Button
+                      id="scan-btn"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void handleScanHistory()}
+                    >
+                      Review history
+                    </Button>
+                  </div>
+                }
+              >
+                <div
+                  id="scan-status"
+                  role="status"
+                  className="text-xs text-muted-foreground empty:hidden"
+                >
+                  {scanStatusText}
+                </div>
+                <pre
+                  id="scan-out"
+                  style={{ display: scanOutVisible ? 'block' : 'none' }}
+                  className="m-0 max-h-[200px] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-background p-3 font-mono text-xs leading-relaxed tabular-nums text-muted-foreground"
+                >
+                  {scanOutText}
+                </pre>
+              </SettingRow>
+            </SettingsGroup>
+          </SettingsSection>
+
+          {/* ── Learning & privacy ───────────────────────────────── */}
+          <SettingsSection
+            id="privacy"
+            title="Learning & privacy"
+            description="When you correct a block, SmartBlocker learns from it on this device. Nothing is shared unless you turn sharing on."
+          >
+            <SettingsGroup>
+              <SettingRow
+                label={
+                  <>
+                    <span id="feedback-count" className="font-mono tabular-nums">
+                      {feedbackCount}
+                    </span>{' '}
+                    {feedbackCount === 1 ? 'correction' : 'corrections'} learned
+                  </>
+                }
+                description="Stored only in this browser profile."
+                control={
+                  <>
+                    <Button
+                      id="feedback-export"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void handleExportFeedback()}
+                    >
+                      Export JSON
+                    </Button>
+                    <Button
+                      id="feedback-clear"
                       variant="secondary"
                       size="sm"
                       disabled={locked}
-                      onClick={handleAddSchedule}
+                      onClick={() => void handleClearFeedback()}
                     >
-                      Add schedule
+                      Clear all
                     </Button>
-                    <Button
-                      id="schedule-save"
-                      variant="default"
-                      size="sm"
-                      disabled={locked}
-                      onClick={() => void handleSaveSchedules()}
-                    >
-                      Save schedules
-                    </Button>
-                    <span
-                      id="schedule-msg"
-                      className={`text-xs font-medium ${
-                        scheduleMsgError ? 'text-red-400' : 'text-emerald-400'
-                      }`}
-                    >
-                      {scheduleMsg}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Sub-panel 2: Desktop Companion & History Scanner (4 cols) */}
-                <div className="lg:col-span-4 pt-6 lg:pt-0 lg:px-6 flex flex-col justify-between gap-6">
-                  {/* Desktop Companion */}
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <Desktop className="h-5 w-5 text-emerald-400" />
-                      <h3 className="text-lg font-semibold text-zinc-50 m-0">Desktop Companion</h3>
-                    </div>
-                    <p className="text-xs text-zinc-400 mb-3 leading-relaxed">
-                      Turns locks into hard enforcement: closes blocklisted apps and restarts the
-                      browser if SmartBlocker is disabled during a locked session.
-                    </p>
-                    <div
-                      id="companion-status"
-                      className={`rounded-xl border px-3.5 py-2.5 text-xs font-semibold ${
-                        companionState === 'connected'
-                          ? 'companion-connected border-emerald-500/40 bg-emerald-500/12 text-emerald-300'
-                          : 'companion-muted border-zinc-800 bg-[#111117] text-zinc-400 font-normal italic'
-                      }`}
-                    >
-                      {companionText}
-                    </div>
-                    <ul
-                      id="companion-enforcement"
-                      style={{ display: companionFlags.length > 0 ? 'block' : 'none' }}
-                      className="m-0 mt-3 p-0 list-none space-y-1.5 text-xs text-zinc-300"
-                    >
-                      {companionFlags.map((f, i) => (
-                        <li key={i} className="flex items-center gap-2">
-                          {f.ok ? (
-                            <CheckCircle weight="fill" className="h-4 w-4 text-emerald-400" />
-                          ) : (
-                            <XCircle weight="fill" className="h-4 w-4 text-zinc-500" />
-                          )}
-                          <span>{f.label}</span>
-                        </li>
-                      ))}
-                    </ul>
-                    {incognitoAllowed === false && (
-                      <div
-                        id="incognito-warning"
-                        className="mt-3 rounded-xl border border-amber-500/45 bg-amber-500/10 px-3.5 py-3"
-                      >
-                        <div className="flex items-center gap-1.5 mb-1.5">
-                          <Warning weight="fill" className="h-4 w-4 shrink-0 text-amber-400" />
-                          <span className="text-xs font-semibold text-amber-200">
-                            Incognito bypass possible
-                          </span>
-                        </div>
-                        <p className="m-0 text-[11px] leading-relaxed text-amber-100/75">
-                          Incognito access is currently disabled for SmartBlocker, so anything
-                          opened in an Incognito window ignores your blocks — even during an
-                          active lock. To close the loophole, open{' '}
-                          <code className="font-mono text-amber-200">chrome://extensions</code>,
-                          find SmartBlocker, and turn on{' '}
-                          <span className="font-semibold text-amber-100">Allow in Incognito</span>
-                          .
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* History Scan */}
-                  <div className="pt-5 border-t border-zinc-800/70">
-                    <div className="flex items-center gap-2 mb-2">
-                      <ClockCounterClockwise className="h-5 w-5 text-zinc-300" />
-                      <h3 className="text-base font-semibold text-zinc-50 m-0">History Audit</h3>
-                    </div>
-                    <p className="text-xs text-zinc-400 mb-3">
-                      Scan recent browsing history locally to quantify distraction categories.
-                    </p>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Button
-                        id="scan-btn"
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => void handleScanHistory()}
-                      >
-                        Scan my history
-                      </Button>
-                      <Button
-                        id="block-top-btn"
-                        variant="emerald"
-                        size="sm"
-                        disabled={locked}
-                        style={{ display: showBlockTopBtn ? 'inline-flex' : 'none' }}
-                        onClick={handleBlockTopDistractions}
-                      >
-                        Block my top distractions
-                      </Button>
-                    </div>
-                    <div id="scan-status" className="mt-2 min-h-[18px] text-xs text-emerald-400">
-                      {scanStatusText}
-                    </div>
-                    <pre
-                      id="scan-out"
-                      style={{ display: scanOutVisible ? 'block' : 'none' }}
-                      className="m-0 mt-2 max-h-[180px] overflow-auto rounded-xl border border-zinc-800 bg-[#050507] p-3 font-mono text-[11px] text-zinc-300 whitespace-pre-wrap break-words"
-                    >
-                      {scanOutText}
-                    </pre>
-                  </div>
-                </div>
-
-                {/* Sub-panel 3: On-Device Feedback Loop (3 cols) */}
-                <div className="lg:col-span-3 pt-6 lg:pt-0 lg:pl-6 flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <Brain className="h-5 w-5 text-emerald-400" />
-                      <h3 className="text-lg font-semibold text-zinc-50 m-0">On-Device Learning</h3>
-                    </div>
-                    <p className="text-xs text-zinc-400 mb-4 leading-relaxed">
-                      When you correct SmartBlocker, the correction is stored on this device and
-                      folds directly into category centroids.{' '}
-                      <span id="feedback-count" className="font-mono font-semibold text-zinc-100">
-                        {feedbackCount}
-                      </span>{' '}
-                      correction(s) recorded.
-                    </p>
-
-                    <div className="flex items-center gap-2 flex-wrap mb-5">
-                      <Button
-                        id="feedback-export"
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => void handleExportFeedback()}
-                      >
-                        Export as JSON
-                      </Button>
-                      <Button
-                        id="feedback-clear"
-                        variant="outline"
-                        size="sm"
-                        disabled={locked}
-                        onClick={() => void handleClearFeedback()}
-                      >
-                        Clear all
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border border-zinc-800/80 bg-[#111117] p-4">
-                    <div className="flex items-center justify-between gap-3 mb-2">
-                      <span className="text-xs font-medium text-zinc-200">
-                        Share my corrections to improve SmartBlocker (off by default)
-                      </span>
-                      <Switch
-                        id="share-toggle"
-                        checked={shareFeedback}
-                        disabled={locked}
-                        onChange={(e) => setShareFeedback(e.target.checked)}
-                      />
-                    </div>
-                    <p className="m-0 text-[11px] text-zinc-500 leading-relaxed">
-                      Sends only page title, hostname, and verdict delta. Never full URLs or
-                      browsing history. See PRIVACY.md.
-                    </p>
-                  </div>
-
-                  <div className="rounded-xl border border-zinc-800/80 bg-[#111117] p-4">
-                    <div className="flex items-center justify-between gap-3 mb-2">
-                      <span className="text-xs font-medium text-zinc-200">
-                        Resolve embed titles via YouTube oEmbed (off by default)
-                      </span>
-                      <Switch
-                        id="oembed-toggle"
-                        checked={resolveEmbedTitles}
-                        disabled={locked}
-                        onChange={(e) => setResolveEmbedTitles(e.target.checked)}
-                      />
-                    </div>
-                    <p className="m-0 text-[11px] text-zinc-500 leading-relaxed">
-                      Last-resort title lookup for untitled embedded YouTube players — sends the
-                      video ID to www.youtube.com. Never fires for youtube-nocookie or privacy
-                      facades. See PRIVACY.md.
-                    </p>
-                  </div>
-
-                  {/* Self-service erasure (#32 P3): installId reveal + delete.
-                       The id only exists after the FIRST shared correction —
-                       never minted just for viewing. */}
-                  <div className="rounded-xl border border-zinc-800/80 bg-[#111117] p-4">
-                    <span className="text-xs font-medium text-zinc-200 block mb-2">
-                      Your shared feedback data
-                    </span>
-                    <div className="flex items-center justify-between gap-3 mb-2">
-                      <span className="text-[11px] text-zinc-500">
-                        Install ID (random, not tied to you):
-                      </span>
-                      {installId ? (
-                        <span className="flex items-center gap-2">
-                          <code className="text-[11px] text-zinc-300 font-mono">
-                            {idRevealed ? installId : `${installId.slice(0, 8)}…••••`}
-                          </code>
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            className="h-6 px-2 text-[10px]"
-                            onClick={() => setIdRevealed((v) => !v)}
-                          >
-                            {idRevealed ? 'Hide' : 'Reveal'}
-                          </Button>
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            className="h-6 px-2 text-[10px]"
-                            onClick={() => void copyInstallId()}
-                          >
-                            {idCopied ? 'Copied!' : 'Copy'}
-                          </Button>
-                        </span>
-                      ) : (
-                        <span className="text-[11px] text-zinc-600 italic">
-                          none yet — created the first time you share a correction
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="m-0 text-[11px] text-zinc-500 leading-relaxed">
-                        Deletes every record shared from this install. Rate-limited to once per
-                        hour; unshared records also auto-expire after 90 days. See PRIVACY.md.
-                      </p>
-                      <Button
-                        variant={deleteStage === 'confirm' ? 'destructive' : 'secondary'}
-                        size="sm"
-                        className="h-7 px-3 text-[11px] shrink-0"
-                        disabled={
-                          deleteStage === 'busy' || (!FEEDBACK_ENDPOINT && deleteStage !== 'confirm')
-                        }
-                        onClick={() => void runDeleteShared()}
-                      >
-                        {deleteStage === 'busy'
-                          ? 'Deleting…'
-                          : deleteStage === 'confirm'
-                            ? 'Click again to confirm delete'
-                            : 'Delete shared data'}
-                      </Button>
-                    </div>
-                    {!FEEDBACK_ENDPOINT && (
-                      <p className="m-0 mt-2 text-[11px] text-zinc-600 italic">
-                        Feedback sharing is not configured in this build — nothing was ever
-                        uploaded, so there is nothing to delete.
-                      </p>
-                    )}
-                    {deleteResult && (
-                      <p className="m-0 mt-2 text-[11px] text-emerald-400">
-                        Done — {deleteResult.deleted} record(s) deleted
-                        {deleteResult.deleted === 0 ? ' (nothing had been shared)' : ''}.
-                      </p>
-                    )}
-                    {deleteError && (
-                      <p className="m-0 mt-2 text-[11px] text-red-400">
-                        Could not delete: {deleteError}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </section>
-
-      {/* =====================================================================
-          D — DESIRE: INFINITE MARQUEE, SCRUBBING MANIFESTO, PINNED SPLIT &
-              HORIZONTAL ACCORDIONS (py-32 md:py-48)
-         ===================================================================== */}
-      <section
-        id="defense-architecture"
-        className="scroll-mt-24 relative z-10 py-32 md:py-48 border-t border-zinc-900/90"
-      >
-        {/* COMPONENT ARSENAL 1: INFINITE MARQUEE */}
-        <div className="w-full overflow-hidden border-y border-zinc-800/80 bg-[#0a0a0e] py-6 mb-32">
-          <div className="animate-marquee flex items-center gap-14">
-            {[0, 1].map((dup) => (
-              <div key={dup} className="flex items-center gap-14 shrink-0">
-                <span className="flex items-center gap-3 text-xl md:text-2xl font-semibold tracking-tight text-zinc-300">
-                  <Cpu className="h-6 w-6 text-emerald-400" />
-                  100% Local ONNX WASM
-                </span>
-                <span className="flex items-center gap-3 text-xl md:text-2xl font-semibold tracking-tight text-zinc-300">
-                  <Lightning className="h-6 w-6 text-amber-400" />
-                  Sub-15ms Title Embedding
-                </span>
-                <span className="flex items-center gap-3 text-xl md:text-2xl font-semibold tracking-tight text-zinc-300">
-                  <Fingerprint className="h-6 w-6 text-emerald-400" />
-                  Multi-Prototype Centroids
-                </span>
-                <span className="flex items-center gap-3 text-xl md:text-2xl font-semibold tracking-tight text-zinc-300">
-                  <EyeSlash className="h-6 w-6 text-zinc-400" />
-                  Zero Cloud Telemetry
-                </span>
-                <span className="flex items-center gap-3 text-xl md:text-2xl font-semibold tracking-tight text-zinc-300">
-                  <Sparkle className="h-6 w-6 text-emerald-400" />
-                  97.6% E2E Decision Accuracy
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* GSAP PARADIGM 1: SCRUBBING TEXT REVEAL */}
-        <div id="manifesto-section" className="mx-auto max-w-6xl px-6 md:px-12 mb-36">
-          <p
-            ref={scrubRef}
-            className="text-3xl md:text-5xl font-semibold leading-[1.18] tracking-tight text-zinc-100"
-          >
-            {MANIFESTO_TEXT.split(' ').map((word, idx) => (
-              <span key={idx} className="scrub-word inline-block mr-[0.28em]">
-                {word}
-              </span>
-            ))}
-          </p>
-        </div>
-
-        {/* GSAP PARADIGM 2: SCROLL PINNING SPLIT + IMAGE SCALE & FADE */}
-        <div
-          ref={pinSectionRef}
-          className="mx-auto max-w-7xl px-6 md:px-12 grid grid-cols-1 lg:grid-cols-12 gap-12 items-start mb-36"
-        >
-          <div ref={pinLeftRef} className="lg:col-span-5 pr-4">
-            <h2 className="text-3xl md:text-5xl font-semibold tracking-tight text-zinc-50 leading-[1.08]">
-              Engineered for Unbreakable Focus
-            </h2>
-            <p className="mt-5 text-base md:text-lg text-zinc-400 leading-relaxed">
-              Every architectural layer is built to eliminate both latency and willpower loopholes—from
-              persistent offscreen inference to native process watchdogs.
-            </p>
-          </div>
-
-          <div className="lg:col-span-7 flex flex-col gap-12">
-            {PINNED_CHAPTERS.map((item) => (
-              <div
-                key={item.title}
-                className="gsap-scale-card group relative overflow-hidden rounded-3xl border border-zinc-800/80 bg-[#0d0d12] p-8 md:p-10"
-              >
-                <div className="overflow-hidden rounded-2xl border border-zinc-800/80 mb-6 aspect-[16/9]">
-                  <img
-                    src={item.image}
-                    alt={item.title}
-                    className="h-full w-full object-cover grayscale mix-blend-luminosity opacity-90 contrast-125 group-hover:scale-105 transition-transform duration-700 ease-out"
+                  </>
+                }
+              />
+              <SettingRow
+                label="Share corrections to improve blocking"
+                htmlFor="share-toggle"
+                description="Off by default. Sends only the page title, site name and category — never full URLs or your history. See PRIVACY.md."
+                control={
+                  <Switch
+                    id="share-toggle"
+                    checked={shareFeedback}
+                    disabled={locked}
+                    onChange={(e) => {
+                      const next = e.target.checked;
+                      setShareFeedback(next);
+                      autoSaveSettings({ shareFeedback: next });
+                    }}
                   />
-                </div>
-                <h3 className="text-2xl font-semibold text-zinc-50 tracking-tight">
-                  {item.title}
-                </h3>
-                <p className="mt-2 text-sm md:text-base text-zinc-400 leading-relaxed m-0">
-                  {item.detail}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
+                }
+              />
+              <SettingRow
+                label="Identify embedded YouTube videos"
+                htmlFor="oembed-toggle"
+                description="Off by default. Looks up titles of embedded players so they can be checked. Never used for privacy-enhanced embeds."
+                control={
+                  <Switch
+                    id="oembed-toggle"
+                    checked={resolveEmbedTitles}
+                    disabled={locked}
+                    onChange={(e) => {
+                      const next = e.target.checked;
+                      setResolveEmbedTitles(next);
+                      autoSaveSettings({ resolveEmbedTitles: next });
+                    }}
+                  />
+                }
+              />
 
-        {/* COMPONENT ARSENAL 2: HORIZONTAL ACCORDIONS */}
-        <div className="mx-auto max-w-7xl px-6 md:px-12">
-          <h3 className="text-2xl md:text-4xl font-semibold tracking-tight text-zinc-50 mb-8">
-            Three-Stage Interception Ladder
-          </h3>
-          <div className="flex flex-col md:flex-row gap-4 min-h-[420px]">
-            {ACCORDION_PANELS.map((panel) => (
-              <div
-                key={panel.title}
-                className="group relative flex-1 hover:flex-[2.4] transition-all duration-700 ease-out overflow-hidden rounded-3xl border border-zinc-800/80 bg-[#0d0d12] p-7 md:p-9 flex flex-col justify-end"
+              {/* Self-service erasure (#32 P3): installId reveal + delete.
+                   The id only exists after the FIRST shared correction —
+                   never minted just for viewing. */}
+              <SettingRow
+                stacked
+                label="Your shared feedback data"
+                description="Deletes every record shared from this installation. Limited to once per hour; shared records also expire after 90 days."
+                control={
+                  <Button
+                    variant={deleteStage === 'confirm' ? 'destructive' : 'secondary'}
+                    size="sm"
+                    disabled={
+                      deleteStage === 'busy' || (!FEEDBACK_ENDPOINT && deleteStage !== 'confirm')
+                    }
+                    onClick={() => void runDeleteShared()}
+                  >
+                    {deleteStage === 'busy'
+                      ? 'Deleting…'
+                      : deleteStage === 'confirm'
+                        ? 'Click again to confirm delete'
+                        : 'Delete shared data'}
+                  </Button>
+                }
               >
-                <img
-                  src={panel.image}
-                  alt={panel.title}
-                  className="pointer-events-none absolute inset-0 h-full w-full object-cover grayscale mix-blend-luminosity opacity-30 contrast-125 group-hover:scale-105 group-hover:opacity-45 transition-all duration-700 ease-out"
-                />
-                <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#070709] via-[#070709]/80 to-transparent" />
-                <div className="relative z-10">
-                  <span className="font-mono text-xs text-emerald-400">{panel.subtitle}</span>
-                  <h4 className="mt-2 text-xl md:text-2xl font-semibold text-zinc-50 tracking-tight">
-                    {panel.title}
-                  </h4>
-                  <p className="mt-3 max-w-xl text-sm text-zinc-300 leading-relaxed opacity-85 group-hover:opacity-100 transition-opacity duration-500">
-                    {panel.description}
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-background px-3 py-2 text-xs">
+                  <span className="text-faint">Install ID — random, not tied to you</span>
+                  {installId ? (
+                    <span className="flex items-center gap-1">
+                      <code className="mr-1 font-mono text-xs text-muted-foreground">
+                        {idRevealed ? installId : `${installId.slice(0, 8)}…••••`}
+                      </code>
+                      <Button variant="ghost" size="xs" onClick={() => setIdRevealed((v) => !v)}>
+                        {idRevealed ? 'Hide' : 'Reveal'}
+                      </Button>
+                      <Button variant="ghost" size="xs" onClick={() => void copyInstallId()}>
+                        {idCopied ? 'Copied' : 'Copy'}
+                      </Button>
+                    </span>
+                  ) : (
+                    <span className="text-faint">
+                      none yet — created the first time you share a correction
+                    </span>
+                  )}
+                </div>
+                {!FEEDBACK_ENDPOINT && (
+                  <p className="m-0 text-xs text-faint">
+                    Feedback sharing is not configured in this build — nothing was ever uploaded, so
+                    there is nothing to delete.
                   </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+                )}
+                {deleteResult && (
+                  <p className="m-0 text-xs text-success-soft">
+                    Done — {deleteResult.deleted} record(s) deleted
+                    {deleteResult.deleted === 0 ? ' (nothing had been shared)' : ''}.
+                  </p>
+                )}
+                {deleteError && (
+                  <p className="m-0 text-xs text-destructive-soft">Could not delete: {deleteError}</p>
+                )}
+              </SettingRow>
+            </SettingsGroup>
+          </SettingsSection>
 
-      {/* =====================================================================
-          A — ACTION: HIGH-CONTRAST COMMIT FOOTER (py-32 md:py-48)
-         ===================================================================== */}
-      <footer
-        id="commit-section"
-        className="scroll-mt-24 relative z-10 mx-auto max-w-7xl px-6 md:px-12 py-32 md:py-48 border-t border-zinc-900"
-      >
-        <div className="rounded-3xl border border-zinc-800/90 bg-gradient-to-b from-[#111118] to-[#09090d] p-10 md:p-16 flex flex-col md:flex-row items-start md:items-center justify-between gap-8 shadow-[0_32px_90px_rgba(0,0,0,0.85)]">
-          <div className="max-w-2xl">
-            <h2 className="text-3xl md:text-5xl font-semibold tracking-tight text-zinc-50 leading-[1.06]">
-              Commit Your Focus Policy
-            </h2>
-            <p className="mt-4 text-base text-zinc-400 leading-relaxed m-0">
-              Changes take effect immediately across all open browser tabs and synchronize with your
-              local centroid cache.
-            </p>
-          </div>
-
-          <div className="flex flex-col items-start md:items-end gap-3 shrink-0">
-            <div className="flex items-center gap-4">
-              <Button
-                id="save-btn"
-                variant="default"
-                size="lg"
-                disabled={locked}
-                onClick={() => void handleSaveSettings()}
-                className="bg-zinc-100 text-zinc-950 hover:bg-white px-9 h-13 text-base font-semibold"
-              >
-                {isOnboarded ? 'Save' : 'Finish setup'}
-              </Button>
-              <span
-                id="save-msg"
-                className={`text-sm font-semibold transition-opacity duration-300 ${
-                  saveMsgVisible ? 'visible opacity-100' : 'opacity-0'
-                } ${saveMsgError ? 'text-red-400' : 'text-emerald-400'}`}
-              >
-                {saveMsgText}
-              </span>
-            </div>
-
+          <footer className="flex flex-col gap-2 border-t border-border pt-6 text-xs text-faint sm:flex-row sm:items-center sm:justify-between">
+            <span>SmartBlocker v0.5.0 · runs entirely on this device</span>
             <span
               id="model-progress"
+              role="status"
               style={{ display: modelProgressVisible ? 'inline-block' : 'none' }}
-              className="font-mono text-xs text-zinc-400"
+              className="font-mono tabular-nums text-muted-foreground"
             >
               {modelProgressText}
             </span>
-          </div>
+          </footer>
         </div>
-
-        <div className="mt-16 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-zinc-500 font-mono">
-          <span>SmartBlocker v0.5.0 — Local-AI Distraction Blocker</span>
-          <span>100% On-Device Inference · Privacy-First Architecture</span>
-        </div>
-      </footer>
+      </div>
     </main>
   );
 }

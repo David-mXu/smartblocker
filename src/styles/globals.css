@@ -1,96 +1,172 @@
 @import "tailwindcss";
 @import "./fonts.css";
+@import "./tokens.css";
 @source "../";
 
-@layer base {
-  :root {
-    --background: 240 15% 3.5%;
-    --foreground: 0 0% 98%;
-    --card: 240 14% 6%;
-    --card-foreground: 0 0% 98%;
-    --popover: 240 14% 6%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 240 15% 4%;
-    --secondary: 240 10% 11%;
-    --secondary-foreground: 0 0% 96%;
-    --muted: 240 9% 12%;
-    --muted-foreground: 240 5% 62%;
-    --accent: 160 84% 39%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 84% 60%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 240 8% 15%;
-    --input: 240 8% 15%;
-    --ring: 0 0% 90%;
-    --radius: 0.75rem;
-  }
+/* ─────────────────────────────────────────────────────────────────────────────
+   Base typography — deliberately UNLAYERED (docs/design-notes.md §1.1).
+   Chrome injects an unlayered stylesheet into extension pages that sets
+   `body { font-family: <system font>; font-size: 75% }`. Under CSS cascade
+   layers, unlayered rules beat EVERY layered rule regardless of specificity,
+   so the same declarations inside Tailwind's `@layer base` silently lose and
+   the UI renders in DejaVu/system sans at 12px. Keep these outside @layer.
+   (Tailwind utilities on descendants are unaffected — they target other
+   elements.)
+   ─────────────────────────────────────────────────────────────────────────── */
+html,
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'ss01' 0;
+}
 
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--font-mono);
+}
+
+::selection {
+  background: color-mix(in oklch, var(--accent) 35%, transparent);
+  color: var(--foreground);
+}
+
+@layer base {
   *,
   *::before,
   *::after {
     box-sizing: border-box;
   }
 
-  html,
-  body {
-    background-color: #070709;
-    color: #fafafa;
-    font-family: 'Geist', 'Outfit', 'Satoshi', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-    selection-background-color: rgba(250, 250, 250, 0.18);
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
   }
 
-  code,
-  pre,
-  .font-mono {
-    font-family: 'Geist Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  p {
+    text-wrap: pretty;
   }
-}
 
-@keyframes marquee-scroll {
-  0% {
-    transform: translateX(0%);
-  }
-  100% {
-    transform: translateX(-50%);
+  :focus-visible {
+    outline: 2px solid color-mix(in oklch, var(--ring) 70%, transparent);
+    outline-offset: 2px;
   }
 }
 
-.animate-marquee {
-  display: flex;
-  width: max-content;
-  animation: marquee-scroll 34s linear infinite;
+/* ── Threshold Meter range input (signature, design-notes §2) ──────────────
+   2px track; the filled portion is driven by the `--fill` custom property
+   set inline from React. Thumb is ivory; focus ring is amber. */
+@layer components {
+  .sb-range {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 20px;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .sb-range:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  .sb-range::-webkit-slider-runnable-track {
+    height: 2px;
+    border-radius: 9999px;
+    background: linear-gradient(
+      to right,
+      var(--foreground) 0 var(--fill, 50%),
+      var(--secondary) var(--fill, 50%) 100%
+    );
+  }
+
+  .sb-range::-moz-range-track {
+    height: 2px;
+    border-radius: 9999px;
+    background: var(--secondary);
+  }
+
+  .sb-range::-moz-range-progress {
+    height: 2px;
+    border-radius: 9999px;
+    background: var(--foreground);
+  }
+
+  .sb-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    margin-top: -6px;
+    border-radius: 9999px;
+    background: var(--primary);
+    border: 3px solid var(--background);
+    box-shadow: 0 0 0 1px var(--border);
+  }
+
+  .sb-range::-moz-range-thumb {
+    width: 10px;
+    height: 10px;
+    border-radius: 9999px;
+    background: var(--primary);
+    border: 3px solid var(--background);
+    box-shadow: 0 0 0 1px var(--border);
+  }
+
+  .sb-range:focus-visible {
+    outline: none;
+  }
+
+  .sb-range:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+
+  .sb-range:focus-visible::-moz-range-thumb {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+
+  /* Native time inputs: match the dark inset fields. */
+  input[type='time']::-webkit-calendar-picker-indicator {
+    filter: invert(0.8) sepia(0.2);
+    opacity: 0.6;
+    cursor: pointer;
+  }
 }
 
-.animate-marquee:hover {
-  animation-play-state: paused;
-}
-
-/* Subtle architectural grid and noise atmosphere */
-.bg-editorial-grid {
-  background-size: 48px 48px;
-  background-image:
-    linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
-}
-
-/* Custom subtle scrollbars for pre & textareas */
+/* Quiet scrollbars for lists, textareas and the diagnostics well. */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(9, 9, 11, 0.6);
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(113, 113, 122, 0.35);
+  background: color-mix(in oklch, var(--muted-foreground) 25%, transparent);
   border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(161, 161, 170, 0.55);
+  background-color: color-mix(in oklch, var(--muted-foreground) 45%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }

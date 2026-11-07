@@ -141,6 +141,7 @@ type CentroidCache = {
   names: string[];
   vectors: number[][];
   seedVectors?: number[][][];
+  specVersions?: string[];
 };
 
 let centroidsInFlight: Promise<CentroidCache> | null = null;
@@ -166,14 +167,52 @@ async function getCentroids(labels: string[]): Promise<CentroidCache & { buildMs
     const names: string[] = [];
     const vectors: number[][] = [];
     const seedVectors: number[][][] = [];
-    // One embed batch per centroid keeps peak memory low.
+    const specVersions: string[] = [];
+
+    // Build a lookup of previously cached per-category seed vectors so adding
+    // a single user correction (OVERRIDE or REPORT_FN) only embeds the changed
+    // category's new seed text (~12ms) instead of re-embedding all 518 seeds (~25s).
+    const prevByName = new Map<
+      string,
+      { vec: number[]; seedVecs: number[][]; specVer?: string }
+    >();
+    if (cached && cached.seedVectors && cached.names.length === cached.seedVectors.length) {
+      for (let i = 0; i < cached.names.length; i++) {
+        prevByName.set(cached.names[i], {
+          vec: cached.vectors[i],
+          seedVecs: cached.seedVectors[i],
+          specVer: cached.specVersions?.[i],
+        });
+      }
+    }
+
     for (const spec of specs) {
-      const { vectors: vecs } = await embedTexts(spec.texts);
+      const sVer = prototypesVersion(EMBED_MODEL_ID, [spec]);
+      const prev = prevByName.get(spec.name);
+      let vecs: number[][];
+      if (prev && prev.specVer === sVer && prev.seedVecs.length === spec.texts.length) {
+        vecs = prev.seedVecs;
+      } else if (
+        prev &&
+        prev.seedVecs.length > 0 &&
+        prev.seedVecs.length < spec.texts.length &&
+        spec.name !== 'neutral: user approved'
+      ) {
+        // User feedback appended new examples to the tail of an existing category's
+        // static seeds: reuse the static prefix vectors and only embed the new tail!
+        const tailTexts = spec.texts.slice(prev.seedVecs.length);
+        const { vectors: tailVecs } = await embedTexts(tailTexts);
+        vecs = [...prev.seedVecs, ...tailVecs];
+      } else {
+        const res = await embedTexts(spec.texts);
+        vecs = res.vectors;
+      }
       names.push(spec.name);
       vectors.push(meanNormalize(vecs));
       seedVectors.push(vecs);
+      specVersions.push(sVer);
     }
-    const built: CentroidCache = { version, names, vectors, seedVectors };
+    const built: CentroidCache = { version, names, vectors, seedVectors, specVersions };
     await api.storage.local.set({ centroidCache: built });
     return built;
   })();

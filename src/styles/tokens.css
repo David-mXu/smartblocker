@@ -1,0 +1,86 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   SmartBlocker design tokens — "Lamplight" (warm obsidian + amber)
+   Rules & rationale: docs/design-notes.md §3. Amber (--accent) means
+   COMMITMENT & FOCUS only — never decoration. Single source of truth for every
+   color in the extension UI and the landing site. Values are OKLCH so light
+   variants can be derived perceptually later (dark-only product today).
+   ─────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* Surfaces */
+  --background: oklch(0.156 0.0071 78.3); /* #0e0c09 — page */
+  --card: oklch(0.19 0.0117 73.2); /*       #17130e — cards */
+  --popover: oklch(0.213 0.0138 72); /*     #1d1812 — raised/inset */
+  --muted: oklch(0.213 0.0138 72); /*       #1d1812 — inset rows, code wells */
+  --secondary: oklch(0.236 0.0196 73.6); /* #241d14 — ghost buttons, chips */
+
+  /* Foregrounds */
+  --foreground: oklch(0.953 0.0156 86.4); /*      #f4efe4 — warm ivory */
+  --muted-foreground: oklch(0.688 0.026 85.8); /* #a29a89 — secondary text */
+  --faint: oklch(0.57 0.0235 88.8); /*            #7d7768 — tertiary/meta text */
+  --card-foreground: var(--foreground);
+  --popover-foreground: var(--foreground);
+  --secondary-foreground: var(--foreground);
+
+  /* Primary action: warm ivory fill */
+  --primary: oklch(0.932 0.0226 87.2); /*       #efe8d8 */
+  --primary-foreground: oklch(0.197 0.0301 82.7); /* #1c1405 */
+
+  /* Brand accent: amber. Also the commitment/lock color. */
+  --accent: oklch(0.765 0.1399 72.9); /*         #e8a33d */
+  --accent-foreground: oklch(0.197 0.0301 82.7); /* #1c1405 */
+  --accent-soft: oklch(0.865 0.0934 81.4); /*    #f2cd8b — accent text on dark tints */
+
+  /* Status hues: base = fills/icons, -soft = text on dark tinted surfaces */
+  --success: oklch(0.716 0.1136 159.6); /*       #5cb98a */
+  --success-soft: oklch(0.82 0.081 162.9); /*    #93d5b5 */
+  --warning: oklch(0.829 0.1332 90.4); /*        #e8c356 */
+  --warning-soft: oklch(0.877 0.0991 89.8); /*   #f0d489 */
+  --destructive: oklch(0.655 0.156 27.3); /*     #e0655a */
+  --destructive-soft: oklch(0.785 0.0997 30.9); /* #f2a192 */
+  --destructive-foreground: oklch(0.96 0.015 90); /* near-white on filled destructive */
+
+  /* Lines & focus */
+  --border: oklch(0.276 0.0276 85.6); /* #2e2718 */
+  --input: var(--border);
+  --ring: var(--accent);
+
+  --radius: 0.75rem;
+}
+
+/* shadcn/Tailwind v4 semantic utilities: bg-background, text-muted-foreground,
+   border-border, bg-accent, text-success-soft, accent-accent, ring-ring, … */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-soft: var(--accent-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-destructive: var(--destructive);
+  --color-destructive-soft: var(--destructive-soft);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+}
+
+/* Typography tokens (Tailwind `font-sans` / `font-mono`). */
+@theme inline {
+  --font-sans: 'Geist', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}

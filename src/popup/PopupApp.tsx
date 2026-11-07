@@ -1,18 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import gsap from 'gsap';
-import { useGSAP } from '@gsap/react';
-import {
-  ShieldCheck,
-  LockKey,
-  Crosshair,
-  Snowflake,
-  Flask,
-  ClockCounterClockwise,
-  Gauge,
-  GearSix,
-  WarningCircle,
-  Sparkle,
-} from '@phosphor-icons/react';
+import { LockSimple, Flask, ClockCounterClockwise, Gauge, GearSix } from '@phosphor-icons/react';
 import { api } from '../shared/api';
 import { getSettings, setSettings } from '../shared/settings';
 import { getLockStatus, startFrozenTurkey } from '../shared/lock';
@@ -26,8 +13,6 @@ import { Input } from '../components/ui/input';
 import { Select } from '../components/ui/select';
 import { Switch } from '../components/ui/switch';
 import { Badge } from '../components/ui/badge';
-
-gsap.registerPlugin(useGSAP);
 
 function pct(n: number): string {
   return `${Math.round(n * 100)}%`;
@@ -54,8 +39,8 @@ const FROZEN_PRESETS = [
 ] as const;
 
 export function PopupApp() {
-  const containerRef = useRef<HTMLDivElement>(null);
-
+  const [enabled, setEnabled] = useState(true);
+  const [allowedCount, setAllowedCount] = useState(0);
   const [focusGoal, setFocusGoal] = useState('');
   const [savedFocusGoal, setSavedFocusGoal] = useState('');
   const [useTabContext, setUseTabContext] = useState(true);
@@ -67,25 +52,11 @@ export function PopupApp() {
   const [confirmingMins, setConfirmingMins] = useState<number | null>(null);
 
   const [statusText, setStatusText] = useState('');
-  const [outText, setOutText] = useState(
-    'First "Test Pair" click downloads the model (~34MB) — watch the background console for progress.',
-  );
+  // Empty until a diagnostic runs (the well hides itself via :empty).
+  const [outText, setOutText] = useState('');
 
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const confirmTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  useGSAP(
-    () => {
-      gsap.from('.hud-panel', {
-        y: 10,
-        opacity: 0,
-        duration: 0.45,
-        stagger: 0.06,
-        ease: 'power3.out',
-      });
-    },
-    { scope: containerRef },
-  );
 
   const refreshLockLine = async () => {
     const s = await getLockStatus();
@@ -101,6 +72,8 @@ export function PopupApp() {
 
   useEffect(() => {
     void getSettings().then((s) => {
+      setEnabled(s.enabled);
+      setAllowedCount(s.whitelist.length);
       setSavedFocusGoal(s.focusGoal);
       setFocusGoal(s.focusGoal);
       setUseTabContext(s.useTabContext);
@@ -113,10 +86,33 @@ export function PopupApp() {
     void refreshLockLine();
     const lockInterval = setInterval(() => void refreshLockLine(), 1000);
 
+    const onStorageChanged = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      area: string,
+    ) => {
+      if (area === 'local' && changes['settings']) {
+        void getSettings().then((s) => {
+          setEnabled(s.enabled);
+          setAllowedCount(s.whitelist.length);
+          setLabels(s.labels);
+          setUseTabContext(s.useTabContext);
+          if (s.labels.length > 0) {
+            setSelectedCategory((prev) => (s.labels.includes(prev) ? prev : s.labels[0]));
+          }
+          if (document.activeElement?.id !== 'focus-goal') {
+            setSavedFocusGoal(s.focusGoal);
+            setFocusGoal(s.focusGoal);
+          }
+        });
+      }
+    };
+    api.storage.onChanged.addListener(onStorageChanged);
+
     return () => {
       clearInterval(lockInterval);
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
       if (confirmTimeoutRef.current) clearTimeout(confirmTimeoutRef.current);
+      api.storage.onChanged.removeListener(onStorageChanged);
     };
   }, []);
 
@@ -146,6 +142,19 @@ export function PopupApp() {
     const targetGoal = focusClearPending ? '' : focusGoal;
     if (focusClearPending) setFocusGoal('');
     void persistFocusSettings(targetGoal, useTabContext);
+  };
+
+  const handleToggleEnabled = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const next = e.target.checked;
+    setEnabled(next);
+    void setSettings({ enabled: next })
+      .then(() => {
+        setStatusText(next ? 'SmartBlocker enabled.' : 'SmartBlocker paused.');
+      })
+      .catch((err) => {
+        setEnabled(!next);
+        setStatusText(err instanceof Error ? err.message : String(err));
+      });
   };
 
   const handleToggleTabContext = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -190,7 +199,7 @@ export function PopupApp() {
   };
 
   const handleTestPair = async () => {
-    setStatusText('Classifying... (first run downloads the model)');
+    setStatusText('Classifying… the first run downloads the model (~34 MB).');
     setOutText('');
     const res: TestPairResponse = await api.runtime.sendMessage({ type: 'TEST_PAIR' });
     setStatusText('');
@@ -281,249 +290,227 @@ export function PopupApp() {
     api.runtime.openOptionsPage();
   };
 
-  return (
-    <main
-      ref={containerRef}
-      className="relative overflow-x-hidden w-full max-w-full min-h-[480px] bg-[#070709] text-zinc-50 p-4 flex flex-col gap-3.5"
-    >
-      {/* Ambient radial light */}
-      <div className="pointer-events-none absolute -top-24 left-1/2 -translate-x-1/2 h-48 w-72 rounded-full bg-emerald-500/10 blur-3xl" />
+  const confirmingPreset = FROZEN_PRESETS.find((p) => p.mins === confirmingMins);
 
-      {/* Header bar */}
-      <header className="hud-panel relative z-10 flex items-center justify-between border-b border-zinc-800/80 pb-3">
+  return (
+    <main className="flex w-full max-w-full flex-col overflow-x-hidden bg-background text-foreground">
+      {/* Header */}
+      <header className="flex h-12 items-center justify-between border-b border-border px-4">
         <div className="flex items-center gap-2.5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700/80 bg-zinc-900 text-zinc-100 shadow-inner">
-            <ShieldCheck weight="duotone" className="h-4.5 w-4.5 text-emerald-400" />
-          </div>
-          <div>
-            <h1 className="text-sm font-semibold tracking-tight text-zinc-50 leading-none">
-              SmartBlocker
-            </h1>
-            <p className="mt-1 text-[11px] font-mono text-zinc-400 leading-none">
-              BGE-Small Local Centroid Engine
-            </p>
-          </div>
+          <span className="flex size-6 items-center justify-center rounded-md bg-primary text-primary-foreground">
+            <LockSimple weight="bold" className="size-3.5" />
+          </span>
+          <h1 className="m-0 text-sm font-semibold tracking-tight">SmartBlocker</h1>
         </div>
-        <div className="flex items-center gap-2">
-          <Badge variant={settingsLocked ? 'crimson' : 'emerald'} className="text-[11px]">
-            {settingsLocked ? 'Locked' : 'Armed'}
-          </Badge>
-          <Button
-            id="open-options"
-            variant="secondary"
-            size="sm"
-            onClick={handleOpenOptions}
-            className="h-7 px-2.5 text-xs"
-            title="Open full Command Center"
-          >
-            <GearSix className="h-3.5 w-3.5" />
-            Options
-          </Button>
-        </div>
+        <Button
+          id="open-options"
+          variant="ghost"
+          size="icon"
+          onClick={handleOpenOptions}
+          title="Open settings"
+          aria-label="Open settings"
+        >
+          <GearSix className="size-4" />
+        </Button>
       </header>
 
-      {/* Active lock status line */}
-      <div
-        id="lock-line"
-        style={{ display: settingsLocked ? 'flex' : 'none' }}
-        className="hud-panel items-center gap-2 rounded-xl border border-red-500/40 bg-red-500/12 px-3 py-2 text-xs font-medium text-red-200"
-      >
-        <LockKey weight="fill" className="h-4 w-4 shrink-0 text-red-400" />
-        <span>{lockText}</span>
-      </div>
+      <div className="flex flex-col gap-3 p-4">
+        {/* Status — the focal element */}
+        <div
+          id="lock-line"
+          role="status"
+          style={{ display: settingsLocked ? 'flex' : 'none' }}
+          className="items-start gap-2.5 rounded-xl border border-accent/30 bg-accent/10 px-3.5 py-3 text-[13px] font-medium text-accent-soft"
+        >
+          <LockSimple weight="fill" className="mt-0.5 size-4 shrink-0 text-accent" />
+          <span className="tabular-nums">{lockText}</span>
+        </div>
 
-      {/* Current Focus Context (System 1.5) */}
-      <section className="hud-panel rounded-xl border border-zinc-800/90 bg-[#0d0d12]/90 p-3.5 shadow-sm">
-        <div className="flex items-center justify-between mb-2">
-          <label
-            htmlFor="focus-goal"
-            className="flex items-center gap-1.5 text-xs font-semibold tracking-tight text-zinc-200"
-          >
-            <Crosshair className="h-3.5 w-3.5 text-emerald-400" />
-            Current Focus Intention
-          </label>
-          <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">
-            System 1.5
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <Input
-            type="text"
-            id="focus-goal"
-            value={focusGoal}
-            disabled={settingsLocked}
-            onChange={(e) => setFocusGoal(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                handleSubmitFocusGoal();
-              }
-            }}
-            placeholder="Current focus goal (e.g. Studying Rust)..."
-            className="h-8 text-xs"
-          />
-          <Button
-            id="save-focus-goal"
-            variant={focusClearPending ? 'secondary' : 'default'}
-            size="sm"
-            disabled={settingsLocked}
-            onClick={handleSubmitFocusGoal}
-            className="h-8 px-3 text-xs shrink-0"
-          >
-            {focusClearPending ? 'Clear' : 'Set'}
-          </Button>
-        </div>
-        <div className="mt-2.5 flex items-center justify-between pt-2 border-t border-zinc-800/60">
-          <label
-            htmlFor="use-tab-context"
-            className="text-[11px] text-zinc-400 cursor-pointer select-none"
-          >
-            Use open tabs for context disambiguation
-          </label>
-          <Switch
-            id="use-tab-context"
-            checked={useTabContext}
-            disabled={settingsLocked}
-            onChange={handleToggleTabContext}
-          />
-        </div>
-      </section>
-
-      {/* Frozen Turkey Quick Commitment */}
-      <section className="hud-panel rounded-xl border border-zinc-800/90 bg-[#0d0d12]/90 p-3">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5">
-            <Snowflake weight="duotone" className="h-3.5 w-3.5 text-amber-400" />
-            <span
-              className="text-xs font-semibold text-zinc-200"
-              title="Force blocking ON for a set time — uncancellable"
-            >
-              Frozen Turkey
+        <div className="flex items-center justify-between gap-4 rounded-xl border border-border bg-card px-3.5 py-3">
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <span className="flex items-center gap-2 text-[15px] font-semibold tracking-tight">
+              <span
+                aria-hidden
+                className={`size-2 rounded-full ${enabled ? 'bg-success' : 'bg-faint'}`}
+              />
+              {enabled ? 'Blocking on' : 'Paused'}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {enabled
+                ? `Checking every site except ${allowedCount} allowed`
+                : 'Nothing is being blocked right now'}
             </span>
           </div>
-          <div className="flex items-center gap-1.5">
-            {FROZEN_PRESETS.map(({ mins, label }) => {
-              const isConfirming = confirmingMins === mins;
-              return (
-                <button
-                  key={mins}
-                  type="button"
-                  data-mins={mins}
-                  onClick={() => void handleFrozenClick(mins, label)}
-                  className={`frozen-btn inline-flex items-center justify-center rounded-md px-2.5 py-1 text-xs font-medium transition-all cursor-pointer ${
-                    isConfirming
-                      ? 'bg-red-500 text-zinc-950 font-semibold shadow-[0_0_16px_rgba(239,68,68,0.35)]'
-                      : 'border border-zinc-700/80 bg-zinc-900 text-zinc-200 hover:bg-zinc-800 hover:border-zinc-600'
-                  }`}
-                >
-                  {isConfirming ? 'Sure? Uncancellable' : label}
-                </button>
-              );
-            })}
+          <Switch
+            id="popup-enabled-toggle"
+            checked={enabled}
+            disabled={settingsLocked}
+            onChange={handleToggleEnabled}
+            aria-label="Block distracting pages"
+          />
+        </div>
+
+        {/* Focus */}
+        <section className="flex flex-col gap-2.5 rounded-xl border border-border bg-card p-3.5">
+          <div className="flex items-center justify-between">
+            <label htmlFor="focus-goal" className="text-[13px] font-medium">
+              What are you working on?
+            </label>
+            {savedFocusGoal && (
+              <Badge variant="commit" dot>
+                Focusing
+              </Badge>
+            )}
           </div>
-        </div>
-      </section>
+          <div className="flex items-center gap-2">
+            <Input
+              type="text"
+              id="focus-goal"
+              value={focusGoal}
+              disabled={settingsLocked}
+              onChange={(e) => setFocusGoal(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleSubmitFocusGoal();
+                }
+              }}
+              placeholder="e.g. Studying for my Rust exam"
+              className="h-8 text-[13px]"
+            />
+            <Button
+              id="save-focus-goal"
+              variant={focusClearPending ? 'ghost' : 'secondary'}
+              size="sm"
+              disabled={settingsLocked}
+              onClick={handleSubmitFocusGoal}
+              className="shrink-0"
+            >
+              {focusClearPending ? 'Clear' : 'Set'}
+            </Button>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <label
+              htmlFor="use-tab-context"
+              className="cursor-pointer text-xs text-muted-foreground select-none"
+            >
+              Use my open tabs as context
+            </label>
+            <Switch
+              id="use-tab-context"
+              checked={useTabContext}
+              disabled={settingsLocked}
+              onChange={handleToggleTabContext}
+            />
+          </div>
+        </section>
 
-      {/* False-negative active tab training */}
-      <section className="hud-panel rounded-xl border border-zinc-800/90 bg-[#0d0d12]/90 p-3">
-        <div className="flex items-center gap-1.5 mb-2">
-          <WarningCircle className="h-3.5 w-3.5 text-zinc-400" />
-          <span className="text-[11px] font-medium text-zinc-300">
-            Active Tab Centroid Correction
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <Select
-            id="report-category"
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            disabled={settingsLocked}
-            className="h-8 flex-1 min-w-0 text-xs py-1 px-2.5"
-          >
-            {labels.map((label) => (
-              <option key={label} value={label}>
-                {label}
-              </option>
-            ))}
-          </Select>
-          <Button
-            id="report-fn"
-            variant="secondary"
-            size="sm"
-            onClick={() => void handleReportFn()}
-            disabled={settingsLocked}
-            title={
-              settingsLocked
-                ? 'Locked — corrections are disabled until the lock ends'
-                : 'Records a correction SmartBlocker learns from'
-            }
-            className="h-8 px-2.5 text-xs shrink-0"
-          >
-            Should've been blocked
-          </Button>
-        </div>
-      </section>
+        {/* Frozen Turkey */}
+        <section className="flex flex-col gap-2.5 rounded-xl border border-border bg-card p-3.5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <span className="text-[13px] font-medium">Frozen Turkey</span>
+              <span className="text-xs text-muted-foreground">Force blocking on. Can't be undone.</span>
+            </div>
+            <div className="flex shrink-0 items-center gap-1 rounded-lg border border-border bg-background p-0.5">
+              {FROZEN_PRESETS.map(({ mins, label }) => {
+                const isConfirming = confirmingMins === mins;
+                return (
+                  <button
+                    key={mins}
+                    type="button"
+                    data-mins={mins}
+                    aria-pressed={isConfirming}
+                    onClick={() => void handleFrozenClick(mins, label)}
+                    className={`frozen-btn h-7 min-w-10 cursor-pointer rounded-md px-2 text-xs font-medium tabular-nums transition-colors ${
+                      isConfirming
+                        ? 'bg-accent text-accent-foreground'
+                        : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                    }`}
+                  >
+                    {isConfirming ? 'Sure?' : label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          {confirmingPreset && (
+            <p className="m-0 text-xs text-accent-soft">
+              Click again to lock for {confirmingPreset.label}. You won't be able to cancel it.
+            </p>
+          )}
+        </section>
 
-      {/* Diagnostics & Telemetry Actions */}
-      <section className="hud-panel flex flex-col gap-2">
-        <div className="grid grid-cols-3 gap-1.5">
-          <Button
-            id="test-pair"
-            variant="default"
-            size="sm"
-            onClick={() => void handleTestPair()}
-            className="h-8 text-xs px-2"
-          >
-            <Flask weight="bold" className="h-3.5 w-3.5" />
-            Test Pair
-          </Button>
-          <Button
-            id="scan-history"
-            variant="secondary"
-            size="sm"
-            onClick={() => void handleScanHistory()}
-            className="h-8 text-xs px-2"
-          >
-            <ClockCounterClockwise className="h-3.5 w-3.5" />
-            Scan History
-          </Button>
-          <Button
-            id="latency-log"
-            variant="secondary"
-            size="sm"
-            onClick={() => void handleLatencyLog()}
-            className="h-8 text-xs px-2"
-          >
-            <Gauge className="h-3.5 w-3.5" />
-            Latency Log
-          </Button>
-        </div>
+        {/* Missed one? */}
+        <section className="flex flex-col gap-2.5 rounded-xl border border-border bg-card p-3.5">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[13px] font-medium">Should this tab have been blocked?</span>
+            <span className="text-xs text-muted-foreground">Pick what it is — SmartBlocker learns from it.</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Select
+              id="report-category"
+              aria-label="Category"
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              disabled={settingsLocked}
+              className="h-8 flex-1 text-[13px]"
+            >
+              {labels.map((label) => (
+                <option key={label} value={label}>
+                  {label.charAt(0).toUpperCase() + label.slice(1)}
+                </option>
+              ))}
+            </Select>
+            <Button
+              id="report-fn"
+              variant="secondary"
+              size="sm"
+              onClick={() => void handleReportFn()}
+              disabled={settingsLocked}
+              title={
+                settingsLocked
+                  ? 'Locked — corrections are disabled until the lock ends'
+                  : 'Records a correction SmartBlocker learns from'
+              }
+              className="shrink-0"
+            >
+              Report
+            </Button>
+          </div>
+        </section>
 
-        {/* Status feedback line */}
-        <div
-          id="status"
-          className="min-h-[16px] text-[11px] font-medium text-emerald-400 px-0.5"
-        >
+        <div id="status" role="status" className="min-h-4 px-0.5 text-xs text-muted-foreground">
           {statusText}
         </div>
+      </div>
 
-        {/* Telemetry Console */}
-        <div className="relative rounded-xl border border-zinc-800/90 bg-[#050507] p-3">
-          <div className="flex items-center justify-between mb-1.5 pb-1.5 border-b border-zinc-900">
-            <span className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-zinc-500">
-              <Sparkle className="h-3 w-3 text-zinc-400" />
-              Inference & Telemetry Stream
-            </span>
-            <span className="text-[10px] font-mono text-zinc-600">q8 / WASM</span>
+      {/* Diagnostics — demoted, but visible (e2e clicks these) */}
+      <footer className="flex flex-col gap-2 border-t border-border px-4 py-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs text-faint">Diagnostics</span>
+          <div className="flex items-center gap-0.5">
+            <Button id="test-pair" variant="ghost" size="xs" onClick={() => void handleTestPair()}>
+              <Flask className="size-3.5" />
+              Test
+            </Button>
+            <Button id="scan-history" variant="ghost" size="xs" onClick={() => void handleScanHistory()}>
+              <ClockCounterClockwise className="size-3.5" />
+              History
+            </Button>
+            <Button id="latency-log" variant="ghost" size="xs" onClick={() => void handleLatencyLog()}>
+              <Gauge className="size-3.5" />
+              Latency
+            </Button>
           </div>
-          <pre
-            id="out"
-            className="m-0 max-h-[190px] overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-zinc-300"
-          >
-            {outText}
-          </pre>
         </div>
-      </section>
+        <pre
+          id="out"
+          className="m-0 max-h-[180px] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-card p-2.5 font-mono text-[11px] leading-relaxed tabular-nums text-muted-foreground empty:hidden"
+        >
+          {outText}
+        </pre>
+      </footer>
     </main>
   );
 }

@@ -9,7 +9,9 @@
     "build:chrome": "vite build -c vite.config.background.ts --mode chrome && vite build -c vite.config.offscreen.ts --mode chrome && vite build -c vite.config.popup.ts --mode chrome && vite build -c vite.config.options.ts --mode chrome && vite build -c vite.config.blocked.ts --mode chrome && node scripts/copy-assets.mjs chrome",
     "build:firefox": "vite build -c vite.config.background.ts --mode firefox && vite build -c vite.config.popup.ts --mode firefox && vite build -c vite.config.options.ts --mode firefox && vite build -c vite.config.blocked.ts --mode firefox && node scripts/copy-assets.mjs firefox",
     "typecheck": "tsc --noEmit",
-    "eval": "node scripts/eval.mjs"
+    "eval": "node scripts/eval.mjs",
+    "build:site": "vite build -c vite.config.site.ts",
+    "deploy:site": "npx wrangler pages deploy dist-site --project-name=smartblocker"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",

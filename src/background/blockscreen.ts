@@ -24,6 +24,9 @@ export function showBlockScreen(
   ms: number,
   locked: boolean,
   nonce: string,
+  /** User's block threshold (0..1) — draws the meter tick. Optional so older
+   *  callers / re-ensure paths keep working without it. */
+  threshold?: number,
 ): void {
   // Re-injection on the same document (SPA nav, sub-frame re-ensure): retire
   // the previous instance's observer + listeners through the isolated-world
@@ -106,23 +109,40 @@ export function showBlockScreen(
   document.addEventListener('play', onMediaPlay, true);
   document.addEventListener('playing', onMediaPlay, true);
 
+  // ── Lamplight block screen (docs/design-notes.md §5) ──────────────────────
+  // Inline styles only: host pages have no extension CSS. Hexes mirror
+  // src/styles/tokens.css. Full-bleed, no card; "Stay focused" is primary.
   const svgNs = 'http://www.w3.org/2000/svg';
-  const createShieldIcon = () => {
+  const createMark = () => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText =
+      'display:flex;align-items:center;gap:8px;font-size:12px;font-weight:500;color:#7d7768;' +
+      'letter-spacing:0.01em;margin-bottom:44px';
+    const sq = document.createElement('span');
+    sq.style.cssText =
+      'display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;' +
+      'border-radius:5px;background:#efe8d8';
     const svg = document.createElementNS(svgNs, 'svg');
     svg.setAttribute('viewBox', '0 0 24 24');
-    svg.setAttribute('width', isCompact ? '18' : '24');
-    svg.setAttribute('height', isCompact ? '18' : '24');
+    svg.setAttribute('width', '12');
+    svg.setAttribute('height', '12');
     svg.setAttribute('fill', 'none');
-    svg.setAttribute('stroke', '#f87171');
-    svg.setAttribute('stroke-width', '1.75');
+    svg.setAttribute('stroke', '#1c1405');
+    svg.setAttribute('stroke-width', '2.5');
     svg.setAttribute('stroke-linecap', 'round');
     svg.setAttribute('stroke-linejoin', 'round');
-    const path1 = document.createElementNS(svgNs, 'path');
-    path1.setAttribute('d', 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z');
-    const path2 = document.createElementNS(svgNs, 'path');
-    path2.setAttribute('d', 'M9.5 9.5l5 5M14.5 9.5l-5 5');
-    svg.append(path1, path2);
-    return svg;
+    const body = document.createElementNS(svgNs, 'rect');
+    body.setAttribute('x', '5');
+    body.setAttribute('y', '11');
+    body.setAttribute('width', '14');
+    body.setAttribute('height', '10');
+    body.setAttribute('rx', '2');
+    const shackle = document.createElementNS(svgNs, 'path');
+    shackle.setAttribute('d', 'M8 11V7a4 4 0 0 1 8 0v4');
+    svg.append(body, shackle);
+    sq.appendChild(svg);
+    wrap.append(sq, document.createTextNode('SmartBlocker'));
+    return wrap;
   };
 
   // --- Root overlay host (page can target this element by id, so EVERY
@@ -136,88 +156,113 @@ export function showBlockScreen(
     'visibility:visible !important;opacity:1 !important;pointer-events:auto !important;' +
     'transform:none !important;filter:none !important;clip-path:none !important;' +
     'width:auto !important;height:auto !important;margin:0 !important;' +
-    'background:radial-gradient(circle at 50% 0%, rgba(220,38,38,0.12), rgba(7,7,9,0.98) 62%), #070709 !important;' +
-    'color:#fafafa !important;' +
+    'background:radial-gradient(ellipse 70% 50% at 50% -10%, rgba(232,163,61,0.08), rgba(232,163,61,0) 70%), #0e0c09 !important;' +
+    'color:#f4efe4 !important;' +
     (isCompact
       ? 'justify-content:flex-start !important;overflow-y:auto !important;overflow-x:hidden !important;padding:10px 12px !important;'
       : 'justify-content:center !important;padding:32px !important;') +
-    'font-family:Geist,Outfit,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;' +
+    'font-family:Geist,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;' +
     'box-sizing:border-box !important;text-align:center !important;-webkit-font-smoothing:antialiased';
   // Open shadow root: page document.querySelector/CSS stops at this boundary.
   const shadow = host.attachShadow({ mode: 'open' });
 
-  // --- Editorial monolith card container ---
+  // --- Centered column (no card: the pause IS the page) ---
   const card = document.createElement('div');
   card.style.cssText =
-    (isCompact
-      ? 'max-width:420px;width:100%;gap:8px;padding:14px 16px;border-radius:14px;margin:auto;'
-      : 'max-width:540px;width:100%;gap:18px;padding:42px 36px;border-radius:24px;') +
-    'display:flex;flex-direction:column;align-items:center;' +
-    'background:rgba(13,13,18,0.94);border:1px solid rgba(255,255,255,0.09);' +
-    'box-shadow:0 32px 90px rgba(0,0,0,0.85);backdrop-filter:blur(24px);box-sizing:border-box';
+    (isCompact ? 'max-width:420px;margin:auto;' : 'max-width:520px;') +
+    'width:100%;display:flex;flex-direction:column;align-items:center;box-sizing:border-box';
 
-  // --- Icon / badge ---
-  const badge = document.createElement('div');
-  badge.style.cssText =
-    (isCompact ? 'width:32px;height:32px;border-radius:10px;' : 'width:52px;height:52px;border-radius:16px;') +
-    'background:rgba(239,68,68,0.12);' +
-    'border:1px solid rgba(239,68,68,0.32);display:flex;align-items:center;justify-content:center;' +
-    'flex-shrink:0';
-  badge.appendChild(createShieldIcon());
-
-  // --- Category pill ---
+  // --- Eyebrow: what was matched ---
+  const niceLabel = label ? label.charAt(0).toUpperCase() + label.slice(1) : '';
   const pill = document.createElement('div');
   pill.style.cssText =
-    'display:inline-flex;align-items:center;gap:6px;' +
-    'background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.35);' +
-    (isCompact ? 'border-radius:999px;padding:3px 10px;font-size:10px;' : 'border-radius:999px;padding:5px 14px;font-size:12px;') +
-    'font-weight:600;color:#fca5a5;letter-spacing:0.03em;text-transform:uppercase';
-  pill.textContent = label + ' — ' + Math.round(score * 100) + '% confidence';
+    (isCompact ? 'font-size:11px;margin-bottom:4px;' : 'font-size:13px;margin-bottom:14px;') +
+    'font-weight:500;color:#a29a89;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  pill.textContent = /^blocked rule/i.test(label) ? niceLabel : 'Blocked · ' + niceLabel;
 
   // --- Headline ---
   const headline = document.createElement('div');
   headline.style.cssText =
-    (isCompact ? 'font-size:15px;' : 'font-size:28px;') +
-    'font-weight:600;line-height:1.15;letter-spacing:-0.025em;color:#fafafa;margin-top:2px';
-  headline.textContent = isSubFrame
-    ? 'Smart Blocker intercepted this embed'
-    : 'Smart Blocker intercepted this page';
+    (isCompact ? 'font-size:17px;margin-bottom:4px;' : 'font-size:34px;margin-bottom:14px;') +
+    'font-weight:600;line-height:1.1;letter-spacing:-0.03em;color:#f4efe4;text-wrap:balance';
+  headline.textContent = isSubFrame ? 'This embed can wait.' : 'This one can wait.';
 
-  // --- Page title ---
+  // --- Page title (attacker-influenced: text nodes only) ---
   const pageTitle = document.createElement('div');
   pageTitle.style.cssText =
-    (isCompact
-      ? 'font-size:12px;max-height:2.8em;overflow:hidden;line-height:1.35;'
-      : 'font-size:15px;line-height:1.55;') +
-    'font-weight:400;color:#a1a1aa;max-width:460px;word-break:break-word';
+    (isCompact ? 'font-size:12px;margin-bottom:10px;' : 'font-size:15px;margin-bottom:36px;') +
+    'display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;' +
+    'font-weight:400;line-height:1.5;color:#a29a89;max-width:440px;word-break:break-word';
   const titleLabel = document.createTextNode('“');
   const titleText = document.createTextNode(title);
   const titleEnd = document.createTextNode('”');
   pageTitle.append(titleLabel, titleText, titleEnd);
 
-  // --- Latency meta ---
+  // --- Threshold Meter (signature): score fill + amber tick at threshold ---
+  const scorePct = Math.max(0, Math.min(100, Math.round(score * 100)));
+  const hasThreshold = typeof threshold === 'number' && threshold > 0 && threshold < 1;
+  const meter = document.createElement('div');
+  meter.style.cssText =
+    (isCompact ? 'max-width:260px;gap:6px;margin-bottom:10px;' : 'max-width:340px;gap:8px;margin-bottom:28px;') +
+    'width:100%;display:flex;flex-direction:column';
+  const meterRow = document.createElement('div');
+  meterRow.style.cssText =
+    'display:flex;justify-content:space-between;align-items:baseline;font-size:12px;font-variant-numeric:tabular-nums';
+  const conf = document.createElement('span');
+  conf.style.cssText = 'color:#f4efe4;font-weight:500';
+  conf.textContent = scorePct + '% confidence';
+  meterRow.appendChild(conf);
+  const track = document.createElement('div');
+  track.style.cssText = 'position:relative;height:8px;width:100%';
+  const trackBase = document.createElement('div');
+  trackBase.style.cssText =
+    'position:absolute;left:0;right:0;top:3px;height:2px;border-radius:2px;background:#2e2718';
+  const trackFill = document.createElement('div');
+  trackFill.style.cssText =
+    'position:absolute;left:0;top:3px;height:2px;border-radius:2px;background:#f4efe4;width:' + scorePct + '%';
+  track.append(trackBase, trackFill);
+  if (hasThreshold) {
+    const tPct = Math.round((threshold as number) * 100);
+    const th = document.createElement('span');
+    th.style.cssText = 'color:#7d7768';
+    th.textContent = 'blocks at ' + tPct + '%';
+    meterRow.appendChild(th);
+    const tick = document.createElement('div');
+    tick.style.cssText =
+      'position:absolute;top:-2px;width:2px;height:12px;margin-left:-1px;border-radius:1px;' +
+      'background:#e8a33d;box-shadow:0 0 0 2px #0e0c09;left:' + tPct + '%';
+    track.appendChild(tick);
+  }
+  meter.append(meterRow, track);
+
+  // --- Latency meta (only when a real classification ran) ---
   const meta = document.createElement('div');
   meta.style.cssText =
-    (isCompact ? 'font-size:10px;' : 'font-size:11px;') +
-    'font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;' +
-    'color:#71717a;letter-spacing:0.04em;text-transform:uppercase';
-  meta.textContent = 'Local ONNX verdict in ' + Math.round(ms) + 'ms';
+    (isCompact ? 'font-size:10px;margin-top:8px;' : 'font-size:12px;margin-top:24px;') +
+    'color:#7d7768;font-variant-numeric:tabular-nums';
+  meta.textContent = 'Checked on-device in ' + Math.round(ms) + 'ms';
 
   // --- Button row ---
   const btnRow = document.createElement('div');
   btnRow.style.cssText =
-    'display:flex;flex-direction:column;' +
-    (isCompact ? 'gap:6px;margin-top:4px;max-width:320px;' : 'gap:10px;margin-top:10px;max-width:380px;') +
-    'width:100%';
+    'display:flex;flex-direction:column;width:100%;' +
+    (isCompact ? 'gap:6px;max-width:300px;' : 'gap:8px;max-width:340px;');
 
   // Locked mode (timer/password/frozen/schedule lock active): no bypass —
   // the override and dismiss buttons are never attached, only "close tab" / "hide embed".
+  // Amber = commitment (never red: a lock is a promise, not a punishment).
   const lockNote = document.createElement('div');
   lockNote.style.cssText =
-    (isCompact ? 'font-size:11px;padding:6px 10px;' : 'font-size:12px;padding:10px 14px;') +
-    'font-weight:500;color:#fca5a5;background:rgba(239,68,68,0.1);' +
-    'border:1px solid rgba(239,68,68,0.28);border-radius:10px;letter-spacing:0.01em';
+    (isCompact ? 'font-size:11px;padding:6px 10px;' : 'font-size:13px;padding:10px 14px;') +
+    'font-weight:500;color:#f2cd8b;background:rgba(232,163,61,0.10);' +
+    'border:1px solid rgba(232,163,61,0.30);border-radius:8px;margin-bottom:4px';
   lockNote.textContent = 'Smart Blocker is locked — bypass is disabled';
+
+  const btnBase =
+    'box-sizing:border-box;margin:0;width:100%;font-family:inherit;line-height:1.3;height:auto;' +
+    'min-height:min-content;white-space:normal;word-break:break-word;text-transform:none;' +
+    'letter-spacing:normal;cursor:pointer;transition:background-color .15s,border-color .15s,color .15s;' +
+    (isCompact ? 'padding:7px 12px;font-size:12px;border-radius:8px;' : 'padding:11px 18px;font-size:14px;border-radius:8px;');
 
   // Re-mount observer: if the page removes the host or re-parents it into a
   // wrapper (to hide it behind transforms/overflow), put it straight back as
@@ -225,7 +270,10 @@ export function showBlockScreen(
   // page. Guarded so our own re-append doesn't loop, and inert after a
   // legitimate dismissal.
   const remount = new MutationObserver(() => {
-    if (dismissed) return;
+    if (dismissed || typeof chrome === 'undefined' || !chrome.runtime?.id) {
+      remount.disconnect();
+      return;
+    }
     try {
       if (host.parentNode !== document.documentElement) {
         document.documentElement.appendChild(host);
@@ -259,20 +307,18 @@ export function showBlockScreen(
     });
   };
 
-  // PRIMARY: send override correction, then dismiss. High-contrast white button on dark card.
+  // SECONDARY: send override correction, then dismiss.
   const btnOverride = document.createElement('button');
   btnOverride.style.cssText =
-    'box-sizing:border-box;margin:0;' +
-    (isCompact ? 'padding:8px 12px;font-size:12px;border-radius:8px;' : 'padding:13px 20px;font-size:14px;border-radius:10px;') +
-    'border:none;cursor:pointer;background:#fafafa;color:#09090b;font-weight:600;' +
-    'font-family:inherit;transition:background .15s,transform .15s;line-height:1.3;height:auto;min-height:min-content;' +
-    'width:100%;white-space:normal;word-break:break-word;text-transform:none;letter-spacing:-0.01em;';
+    btnBase + 'background:transparent;color:#f4efe4;border:1px solid rgba(244,239,228,0.16);font-weight:500;';
   btnOverride.textContent = 'This is actually productive — let me through';
   btnOverride.addEventListener('mouseenter', () => {
-    btnOverride.style.background = '#ffffff';
+    btnOverride.style.background = 'rgba(244,239,228,0.06)';
+    btnOverride.style.borderColor = 'rgba(244,239,228,0.28)';
   });
   btnOverride.addEventListener('mouseleave', () => {
-    btnOverride.style.background = '#fafafa';
+    btnOverride.style.background = 'transparent';
+    btnOverride.style.borderColor = 'rgba(244,239,228,0.16)';
   });
   btnOverride.addEventListener('click', (e) => {
     // Synthetic clicks dispatched by the blocked PAGE are not user decisions.
@@ -285,30 +331,24 @@ export function showBlockScreen(
     host.remove();
   });
 
-  // SECONDARY: close the tab outright on top-level pages, or permanently kill
-  // the embedded player inside sub-frames without destroying the host tab.
+  // PRIMARY (ivory): close the tab outright on top-level pages, or permanently
+  // kill the embedded player inside sub-frames without destroying the host tab.
   const btnStay = document.createElement('button');
   btnStay.style.cssText =
-    'box-sizing:border-box;margin:0;' +
-    (isCompact ? 'padding:7px 12px;font-size:12px;border-radius:8px;' : 'padding:12px 20px;font-size:14px;border-radius:10px;') +
-    'cursor:pointer;background:rgba(24,24,32,0.9);color:#e4e4e7;' +
-    'border:1px solid rgba(255,255,255,0.14);font-weight:500;' +
-    'font-family:inherit;transition:border-color .15s,background .15s;line-height:1.3;height:auto;min-height:min-content;' +
-    'width:100%;white-space:normal;word-break:break-word;text-transform:none;letter-spacing:normal;';
+    btnBase + 'background:#efe8d8;color:#1c1405;border:1px solid #efe8d8;font-weight:600;';
   btnStay.textContent = isSubFrame ? 'Stay focused (disable embed)' : 'Stay focused (close tab)';
   btnStay.addEventListener('mouseenter', () => {
-    btnStay.style.background = 'rgba(39,39,48,0.95)';
-    btnStay.style.borderColor = 'rgba(255,255,255,0.28)';
+    btnStay.style.background = '#f4efe4';
   });
   btnStay.addEventListener('mouseleave', () => {
-    btnStay.style.background = 'rgba(24,24,32,0.9)';
-    btnStay.style.borderColor = 'rgba(255,255,255,0.14)';
+    btnStay.style.background = '#efe8d8';
   });
   btnStay.addEventListener('click', (e) => {
     if (!e.isTrusted) return;
     if (isSubFrame) {
       pauseMedia(document, true);
       btnRow.remove();
+      meter.remove();
       headline.textContent = 'Embedded media disabled';
       return;
     }
@@ -320,18 +360,13 @@ export function showBlockScreen(
   // TERTIARY: dismiss only — no correction recorded, no tab action.
   const btnDismiss = document.createElement('button');
   btnDismiss.style.cssText =
-    'box-sizing:border-box;margin:0;' +
-    (isCompact ? 'padding:4px 10px;font-size:11px;border-radius:8px;' : 'padding:9px 20px;font-size:13px;border-radius:10px;') +
-    'cursor:pointer;background:transparent;color:#71717a;' +
-    'border:none;font-weight:400;' +
-    'font-family:inherit;transition:color .15s;line-height:1.3;height:auto;min-height:min-content;' +
-    'width:100%;white-space:normal;word-break:break-word;text-transform:none;letter-spacing:normal;';
+    btnBase + 'background:transparent;color:#7d7768;border:1px solid transparent;font-weight:400;';
   btnDismiss.textContent = 'Dismiss';
   btnDismiss.addEventListener('mouseenter', () => {
-    btnDismiss.style.color = '#d4d4d8';
+    btnDismiss.style.color = '#a29a89';
   });
   btnDismiss.addEventListener('mouseleave', () => {
-    btnDismiss.style.color = '#71717a';
+    btnDismiss.style.color = '#7d7768';
   });
   btnDismiss.addEventListener('click', (e) => {
     if (!e.isTrusted) return;
@@ -343,9 +378,11 @@ export function showBlockScreen(
   if (locked) {
     btnRow.append(lockNote, btnStay);
   } else {
-    btnRow.append(btnOverride, btnStay, btnDismiss);
+    btnRow.append(btnStay, btnOverride, btnDismiss);
   }
-  card.append(badge, pill, headline, pageTitle, meta, btnRow);
+  if (!isSubFrame) card.appendChild(createMark());
+  card.append(pill, headline, pageTitle, meter, btnRow);
+  if (ms > 0) card.appendChild(meta);
   shadow.appendChild(card);
   document.documentElement.appendChild(host);
 }
@@ -366,7 +403,7 @@ export function applyPreBlockCurtain(timeoutMs: number): void {
   curtain.style.cssText =
     'position:fixed !important;inset:0 !important;z-index:2147483646 !important;' +
     'visibility:visible !important;opacity:1 !important;transform:none !important;' +
-    'background:#070709 !important;pointer-events:none !important;transition:opacity .12s ease';
+    'background:#0e0c09 !important;pointer-events:none !important;transition:opacity .12s ease';
 
   const pauseAll = () => {
     document.querySelectorAll('video, audio').forEach((el) => {
@@ -507,85 +544,85 @@ export function showClassifierUnavailableScreen(title: string): void {
   document.addEventListener('play', onMediaPlay, true);
   document.addEventListener('playing', onMediaPlay, true);
 
+  // Lamplight fail-closed variant (docs/design-notes.md §5): same full-bleed
+  // column as showBlockScreen, amber instead of a verdict, NO score/meter.
   const svgNs = 'http://www.w3.org/2000/svg';
-  const warningIcon = () => {
+  const createMark = () => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText =
+      'display:flex;align-items:center;gap:8px;font-size:12px;font-weight:500;color:#7d7768;' +
+      'letter-spacing:0.01em;margin-bottom:44px';
+    const sq = document.createElement('span');
+    sq.style.cssText =
+      'display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;' +
+      'border-radius:5px;background:#efe8d8';
     const svg = document.createElementNS(svgNs, 'svg');
     svg.setAttribute('viewBox', '0 0 24 24');
-    svg.setAttribute('width', isCompact ? '18' : '24');
-    svg.setAttribute('height', isCompact ? '18' : '24');
+    svg.setAttribute('width', '12');
+    svg.setAttribute('height', '12');
     svg.setAttribute('fill', 'none');
-    svg.setAttribute('stroke', '#fbbf24');
-    svg.setAttribute('stroke-width', '1.75');
+    svg.setAttribute('stroke', '#1c1405');
+    svg.setAttribute('stroke-width', '2.5');
     svg.setAttribute('stroke-linecap', 'round');
     svg.setAttribute('stroke-linejoin', 'round');
-    const p1 = document.createElementNS(svgNs, 'path');
-    p1.setAttribute('d', 'M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z');
-    const p2 = document.createElementNS(svgNs, 'path');
-    p2.setAttribute('d', 'M12 9v4M12 17h.01');
-    svg.append(p1, p2);
-    return svg;
+    const body = document.createElementNS(svgNs, 'rect');
+    body.setAttribute('x', '5');
+    body.setAttribute('y', '11');
+    body.setAttribute('width', '14');
+    body.setAttribute('height', '10');
+    body.setAttribute('rx', '2');
+    const shackle = document.createElementNS(svgNs, 'path');
+    shackle.setAttribute('d', 'M8 11V7a4 4 0 0 1 8 0v4');
+    svg.append(body, shackle);
+    sq.appendChild(svg);
+    wrap.append(sq, document.createTextNode('SmartBlocker'));
+    return wrap;
   };
 
   const host = document.createElement('div');
   host.id = 'smartblocker-overlay';
   host.setAttribute('data-smartblocker-context', isSubFrame ? 'subframe' : 'top');
   host.setAttribute('data-smartblocker-reason', 'classifier-unavailable');
-  // Amber (not the normal red) so an unavailable-classifier block is instantly
-  // distinguishable from a category block — in screenshots, logs, and tests.
+  // Amber glow (vs the near-neutral normal screen) so an unavailable-classifier
+  // block is instantly distinguishable — in screenshots, logs, and tests.
   host.style.cssText =
     'position:fixed !important;inset:0 !important;z-index:2147483647 !important;' +
     'display:flex !important;flex-direction:column !important;align-items:center !important;' +
     'visibility:visible !important;opacity:1 !important;pointer-events:auto !important;' +
     'transform:none !important;filter:none !important;clip-path:none !important;' +
     'width:auto !important;height:auto !important;margin:0 !important;' +
-    'background:radial-gradient(circle at 50% 0%, rgba(217,119,6,0.18), rgba(7,7,9,0.985) 62%), #070709 !important;' +
-    'color:#fafafa !important;' +
+    'background:radial-gradient(ellipse 70% 50% at 50% -10%, rgba(232,163,61,0.16), rgba(232,163,61,0) 70%), #0e0c09 !important;' +
+    'color:#f4efe4 !important;' +
     (isCompact
       ? 'justify-content:flex-start !important;overflow-y:auto !important;overflow-x:hidden !important;padding:10px 12px !important;'
       : 'justify-content:center !important;padding:32px !important;') +
-    'font-family:Geist,Outfit,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;' +
+    'font-family:Geist,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;' +
     'box-sizing:border-box !important;text-align:center !important;-webkit-font-smoothing:antialiased';
   const shadow = host.attachShadow({ mode: 'open' });
 
   const card = document.createElement('div');
   card.style.cssText =
-    (isCompact
-      ? 'max-width:420px;width:100%;gap:8px;padding:14px 16px;border-radius:14px;margin:auto;'
-      : 'max-width:540px;width:100%;gap:18px;padding:42px 36px;border-radius:24px;') +
-    'display:flex;flex-direction:column;align-items:center;' +
-    'background:rgba(13,13,18,0.94);border:1px solid rgba(251,191,36,0.28);' +
-    'box-shadow:0 32px 90px rgba(0,0,0,0.85);backdrop-filter:blur(24px);box-sizing:border-box';
-
-  const badge = document.createElement('div');
-  badge.style.cssText =
-    (isCompact ? 'width:32px;height:32px;border-radius:10px;' : 'width:52px;height:52px;border-radius:16px;') +
-    'background:rgba(251,191,36,0.12);' +
-    'border:1px solid rgba(251,191,36,0.4);display:flex;align-items:center;justify-content:center;' +
-    'flex-shrink:0';
-  badge.appendChild(warningIcon());
+    (isCompact ? 'max-width:420px;margin:auto;' : 'max-width:520px;') +
+    'width:100%;display:flex;flex-direction:column;align-items:center;box-sizing:border-box';
 
   const pill = document.createElement('div');
   pill.style.cssText =
-    'display:inline-flex;align-items:center;gap:6px;' +
-    'background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.42);' +
-    (isCompact ? 'border-radius:999px;padding:3px 10px;font-size:10px;' : 'border-radius:999px;padding:5px 14px;font-size:12px;') +
-    'font-weight:600;color:#fcd34d;letter-spacing:0.03em;text-transform:uppercase';
+    (isCompact ? 'font-size:11px;margin-bottom:4px;' : 'font-size:13px;margin-bottom:14px;') +
+    'font-weight:500;color:#f2cd8b';
   pill.textContent = 'Classifier unavailable — fail-closed';
 
   const headline = document.createElement('div');
   headline.style.cssText =
-    (isCompact ? 'font-size:15px;' : 'font-size:28px;') +
-    'font-weight:600;line-height:1.15;letter-spacing:-0.025em;color:#fafafa;margin-top:2px';
-  headline.textContent = isSubFrame
-    ? 'Smart Blocker can’t verify this embed'
-    : 'Smart Blocker can’t verify this page';
+    (isCompact ? 'font-size:17px;margin-bottom:4px;' : 'font-size:34px;margin-bottom:14px;') +
+    'font-weight:600;line-height:1.1;letter-spacing:-0.03em;color:#f4efe4;text-wrap:balance';
+  headline.textContent = isSubFrame ? 'Can’t verify this embed.' : 'Can’t verify this page.';
 
   const body = document.createElement('div');
   body.style.cssText =
     (isCompact
-      ? 'font-size:12px;max-height:6.2em;overflow:hidden;line-height:1.45;'
-      : 'font-size:14px;line-height:1.6;') +
-    'font-weight:400;color:#a1a1aa;max-width:460px;word-break:break-word';
+      ? 'font-size:12px;max-height:6.2em;overflow:hidden;line-height:1.45;margin-bottom:6px;'
+      : 'font-size:15px;line-height:1.55;margin-bottom:12px;') +
+    'font-weight:400;color:#a29a89;max-width:460px;word-break:break-word;text-wrap:pretty';
   const bodyText = document.createTextNode(
     'A lock is active and the on-device classifier could not run, so Smart Blocker is ' +
       'failing closed instead of letting this through unchecked. It keeps retrying ' +
@@ -595,8 +632,8 @@ export function showClassifierUnavailableScreen(title: string): void {
 
   const pageTitle = document.createElement('div');
   pageTitle.style.cssText =
-    (isCompact ? 'font-size:11px;' : 'font-size:13px;') +
-    'font-weight:400;color:#71717a;max-width:460px;word-break:break-word;line-height:1.4';
+    (isCompact ? 'font-size:11px;margin-bottom:10px;' : 'font-size:13px;margin-bottom:32px;') +
+    'font-weight:400;color:#7d7768;max-width:460px;word-break:break-word;line-height:1.4';
   if (title) {
     const titleLabel = document.createTextNode('“');
     const titleText = document.createTextNode(title);
@@ -606,13 +643,16 @@ export function showClassifierUnavailableScreen(title: string): void {
 
   const note = document.createElement('div');
   note.style.cssText =
-    (isCompact ? 'font-size:11px;padding:6px 10px;' : 'font-size:12px;padding:10px 14px;') +
-    'font-weight:500;color:#fcd34d;background:rgba(251,191,36,0.1);' +
-    'border:1px solid rgba(251,191,36,0.3);border-radius:10px;letter-spacing:0.01em';
+    (isCompact ? 'font-size:11px;padding:6px 10px;' : 'font-size:13px;padding:10px 14px;') +
+    'font-weight:500;color:#f2cd8b;background:rgba(232,163,61,0.10);' +
+    'border:1px solid rgba(232,163,61,0.30);border-radius:8px;margin-bottom:4px';
   note.textContent = 'Smart Blocker is locked — bypass is disabled';
 
   const remount = new MutationObserver(() => {
-    if (dismissed) return;
+    if (dismissed || typeof chrome === 'undefined' || !chrome.runtime?.id) {
+      remount.disconnect();
+      return;
+    }
     try {
       if (host.parentNode !== document.documentElement) {
         document.documentElement.appendChild(host);
@@ -637,20 +677,17 @@ export function showClassifierUnavailableScreen(title: string): void {
 
   const btnStay = document.createElement('button');
   btnStay.style.cssText =
-    'box-sizing:border-box;margin:0;' +
-    (isCompact ? 'padding:7px 12px;font-size:12px;border-radius:8px;' : 'padding:12px 20px;font-size:14px;border-radius:10px;') +
-    'cursor:pointer;background:rgba(24,24,32,0.9);color:#e4e4e7;' +
-    'border:1px solid rgba(255,255,255,0.14);font-weight:500;' +
-    'font-family:inherit;transition:border-color .15s,background .15s;line-height:1.3;height:auto;min-height:min-content;' +
-    'white-space:normal;word-break:break-word;text-transform:none;letter-spacing:normal;';
+    'box-sizing:border-box;margin:0;width:100%;font-family:inherit;line-height:1.3;height:auto;' +
+    'min-height:min-content;white-space:normal;word-break:break-word;text-transform:none;' +
+    'letter-spacing:normal;cursor:pointer;transition:background-color .15s;' +
+    (isCompact ? 'padding:7px 12px;font-size:12px;border-radius:8px;' : 'padding:11px 18px;font-size:14px;border-radius:8px;') +
+    'background:#efe8d8;color:#1c1405;border:1px solid #efe8d8;font-weight:600;';
   btnStay.textContent = isSubFrame ? 'Stay focused (disable embed)' : 'Stay focused (close tab)';
   btnStay.addEventListener('mouseenter', () => {
-    btnStay.style.background = 'rgba(39,39,48,0.95)';
-    btnStay.style.borderColor = 'rgba(255,255,255,0.28)';
+    btnStay.style.background = '#f4efe4';
   });
   btnStay.addEventListener('mouseleave', () => {
-    btnStay.style.background = 'rgba(24,24,32,0.9)';
-    btnStay.style.borderColor = 'rgba(255,255,255,0.14)';
+    btnStay.style.background = '#efe8d8';
   });
   btnStay.addEventListener('click', (e) => {
     if (!e.isTrusted) return;
@@ -684,11 +721,11 @@ export function showClassifierUnavailableScreen(title: string): void {
 
   const btnRow = document.createElement('div');
   btnRow.style.cssText =
-    'display:flex;flex-direction:column;' +
-    (isCompact ? 'gap:6px;margin-top:4px;max-width:320px;' : 'gap:10px;margin-top:10px;max-width:380px;') +
-    'width:100%';
+    'display:flex;flex-direction:column;width:100%;' +
+    (isCompact ? 'gap:6px;max-width:300px;' : 'gap:8px;max-width:340px;');
   btnRow.append(note, btnStay);
-  card.append(badge, pill, headline, body, pageTitle, btnRow);
+  if (!isSubFrame) card.appendChild(createMark());
+  card.append(pill, headline, body, pageTitle, btnRow);
   shadow.appendChild(card);
   document.documentElement.appendChild(host);
 }

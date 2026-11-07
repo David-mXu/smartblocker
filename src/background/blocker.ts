@@ -1,6 +1,6 @@
 import { api } from '../shared/api';
 import { LATENCY_LOG_MAX } from '../shared/config';
-import { getSettings } from '../shared/settings';
+import { getSettings, type Settings } from '../shared/settings';
 import { getLockStatus } from '../shared/lock';
 import type { LockStatus } from '../shared/lock-math';
 import { isOverridden } from '../shared/overrides';
@@ -47,8 +47,11 @@ type BlockDecisionInput = Pick<
 //    trigger, with a per-tab last-title guard against title flicker.
 
 const armedAt = new Map<number, number>(); // tabId -> nav commit epoch ms
-const lastClassified = new Map<number, string>();
+const armedUrl = new Map<number, string>(); // tabId -> latest armed URL
+const lastClassified = new Map<number, string>(); // tabId -> `${url}|${title}`
 const inFlightKey = new Map<number, string>();
+const metaRecheckTimers = new Map<number, ReturnType<typeof setTimeout>>();
+const spaCheckTimers = new Map<number, ReturnType<typeof setTimeout>>();
 // Bumped on every arm() (i.e. every committed/SPA navigation). onTitle
 // captures it before its async classify() work and checks it again just
 // before injecting — if the user has since navigated away (e.g. hit back
@@ -400,6 +403,48 @@ function clearCurtain(tabId: number, frameId?: number): void {
     .catch(() => {});
 }
 
+function clearOverlay(tabId: number, frameId?: number): void {
+  const target = frameId !== undefined ? { tabId, frameIds: [frameId] } : { tabId };
+  void api.scripting
+    .executeScript({
+      target,
+      func: clearBlockScreen,
+    })
+    .catch(() => {});
+}
+
+function isYouTubeVideoPage(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const h = u.hostname.toLowerCase().replace(/^(?:www|m|music)\./, '');
+    if (h !== 'youtube.com' && h !== 'youtube-nocookie.com') return false;
+    return /^\/(?:watch|shorts\/|embed\/|live\/|v\/)/i.test(u.pathname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True when `url` is a YouTube browsing/discovery surface (homepage `/`,
+ * channel pages `/@...`, `/channel/...`, `/c/...`, `/user/...`, library/sub
+ * feeds `/feed/...`, playlists `/playlist`, or `/results` search pages) rather
+ * than an actual video playback page (`/watch`, `/shorts/`, `/live/`, `/embed/`).
+ */
+function isYouTubeBrowsingSurface(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const h = u.hostname.toLowerCase().replace(/^(?:www|m|music)\./, '');
+    if (h !== 'youtube.com') return false;
+    if (isYouTubeVideoPage(url)) return false;
+    return (
+      u.pathname === '/' ||
+      /^\/(?:@|channel\/|c\/|user\/|feed\/|results\b|playlist\b)/i.test(u.pathname)
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function maybeCurtain(tabId: number, url: string, gen: number): Promise<void> {
   try {
     const settings = await getSettings();
@@ -408,9 +453,11 @@ async function maybeCurtain(tabId: number, url: string, gen: number): Promise<vo
     if (isWhitelisted(url, settings.whitelist)) return;
     if (navGeneration.get(tabId) !== gen) return;
 
+    const isBlocklistMatch = matchedBlocklistEntry(url, null, settings.blocklist) !== null;
+    if (!isBlocklistMatch && isYouTubeBrowsingSurface(url)) return;
+
     const host = hostnameOf(url);
     const isTarget = isHighRiskOrRecentlyBlocked(host);
-    const isBlocklistMatch = matchedBlocklistEntry(url, null, settings.blocklist) !== null;
 
     if (isBlocklistMatch || isTarget) {
       await api.scripting.executeScript({
@@ -424,15 +471,47 @@ async function maybeCurtain(tabId: number, url: string, gen: number): Promise<vo
   }
 }
 
+function clearTabTimers(tabId: number): void {
+  const mt = metaRecheckTimers.get(tabId);
+  if (mt) {
+    clearTimeout(mt);
+    metaRecheckTimers.delete(tabId);
+  }
+  const st = spaCheckTimers.get(tabId);
+  if (st) {
+    clearTimeout(st);
+    spaCheckTimers.delete(tabId);
+  }
+}
+
 function arm(tabId: number, url: string) {
   clearSubFrameStateForTab(tabId);
+  clearTabTimers(tabId);
   if (isClassifiableUrl(url)) {
     armedAt.set(tabId, Date.now());
+    armedUrl.set(tabId, url);
     lastClassified.delete(tabId);
     inFlightKey.delete(tabId);
     const nextGen = (navGeneration.get(tabId) ?? 0) + 1;
     navGeneration.set(tabId, nextGen);
     void maybeCurtain(tabId, url, nextGen);
+
+    // SPA fallback: if changeInfo.title fired just BEFORE onHistoryStateUpdated
+    // (or never fires because the title didn't change, e.g. returning to YouTube
+    // homepage), ensure onTitle still runs for the newly-armed URL.
+    const timer = setTimeout(async () => {
+      spaCheckTimers.delete(tabId);
+      if (navGeneration.get(tabId) !== nextGen) return;
+      if (lastClassified.has(tabId) || inFlightKey.has(tabId)) return;
+      try {
+        const tab = await api.tabs.get(tabId);
+        if (!tab?.url || !isClassifiableUrl(tab.url)) return;
+        await onTitle(tabId, tab.title ?? '', tab.url);
+      } catch {
+        // tab closed or unreachable
+      }
+    }, 320);
+    spaCheckTimers.set(tabId, timer);
   }
 }
 
@@ -517,13 +596,13 @@ async function logSample(sample: LatencySample) {
 async function gatherMeta(
   tabId: number,
   frameId?: number,
-): Promise<{ channel?: string; context?: string; fallbackTitle?: string }> {
+): Promise<{ channel?: string; context?: string; fallbackTitle?: string; metaStale?: boolean }> {
   try {
     const target = frameId !== undefined ? { tabId, frameIds: [frameId] } : { tabId };
     const [inj] = await api.scripting.executeScript({ target, func: extractMeta });
     return (
       (inj?.result as
-        | { channel?: string; context?: string; fallbackTitle?: string }
+        | { channel?: string; context?: string; fallbackTitle?: string; metaStale?: boolean }
         | undefined) ?? {}
     );
   } catch {
@@ -549,11 +628,15 @@ async function onSubFrame(
     const settings = await getSettings();
     const lock = await getLockStatus();
     if (!settings.enabled && !lock.forceBlocking) {
+      subFrameBlockedVerdict.delete(key);
       clearCurtain(tabId, frameId);
+      clearOverlay(tabId, frameId);
       return;
     }
     if (isWhitelisted(url, settings.whitelist)) {
+      subFrameBlockedVerdict.delete(key);
       clearCurtain(tabId, frameId);
+      clearOverlay(tabId, frameId);
       return;
     }
 
@@ -587,6 +670,7 @@ async function onSubFrame(
             0,
             priorBlocked.locked,
             await mintOverrideToken(),
+            settings.blockThreshold,
           ],
         })
         .catch(() => {});
@@ -835,6 +919,7 @@ async function onSubFrame(
               Date.now() - tStart,
               lock.settingsLocked,
               await mintOverrideToken(),
+              settings.blockThreshold,
             ],
           });
         }
@@ -845,6 +930,7 @@ async function onSubFrame(
     } else {
       subFrameBlockedVerdict.delete(key);
       clearCurtain(tabId, frameId);
+      clearOverlay(tabId, frameId);
     }
 
     await logSample({
@@ -868,7 +954,7 @@ async function onSubFrame(
 
 async function onTitle(tabId: number, rawTitle: string, url: string) {
   const initialTitle = cleanTitle(rawTitle);
-  if (initialTitle && lastClassified.get(tabId) === initialTitle) return;
+  if (initialTitle && lastClassified.get(tabId) === `${url}|${initialTitle}`) return;
   const flightToken = `${url}|${initialTitle ?? ''}`;
   if (inFlightKey.get(tabId) === flightToken) return;
   inFlightKey.set(tabId, flightToken);
@@ -880,24 +966,42 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
     if (!settings.enabled && !lock.forceBlocking) {
       armedAt.delete(tabId);
       clearCurtain(tabId);
+      clearOverlay(tabId);
+      void clearForceRedirectRule(tabId, url);
       return; // master switch off — never classify or block (unless a Frozen
       //         Turkey session or schedule window forces blocking on)
     }
     if (isWhitelisted(url, settings.whitelist)) {
       armedAt.delete(tabId);
       clearCurtain(tabId);
+      clearOverlay(tabId);
+      void clearForceRedirectRule(tabId, url);
       // Even on whitelisted workspaces (e.g. Google AI Studio, Gemini, Docs,
       // Notion), scan for embedded distraction videos/iframes inside the page.
       void runPageSanitizer(tabId);
       return;
     }
 
-    const tTitle = Date.now();
-    const pageDelayMs = tTitle - (armedAt.get(tabId) ?? tTitle);
-    armedAt.delete(tabId);
-
     // Deterministic blocklist check with the initial clean title (or null if generic/empty)
     let blocklistHit = matchedBlocklistEntry(url, initialTitle, settings.blocklist);
+
+    // Allow YouTube browsing/discovery surfaces (homepage, channel pages, feeds,
+    // search results) unless explicitly matched by a deterministic blocklist rule,
+    // so users can search/browse YouTube and only get blocked on distracting videos.
+    if (!blocklistHit && isYouTubeBrowsingSurface(url)) {
+      armedAt.delete(tabId);
+      lastClassified.set(tabId, `${url}|${initialTitle ?? 'youtube'}`);
+      clearCurtain(tabId);
+      clearOverlay(tabId);
+      void clearForceRedirectRule(tabId, url);
+      return;
+    }
+
+    const tTitle = Date.now();
+    const pageDelayMs = tTitle - (armedAt.get(tabId) ?? tTitle);
+    if (initialTitle) {
+      armedAt.delete(tabId);
+    }
 
     let title: string | null = initialTitle;
     let result: BlockDecisionInput;
@@ -946,7 +1050,7 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
 
     if (blocklistHit) {
       title = initialTitle ?? urlFallbackTitle(url) ?? '';
-      if (title) lastClassified.set(tabId, title);
+      if (title) lastClassified.set(tabId, `${url}|${title}`);
       result = {
         label: `blocked rule: "${blocklistHit}"`,
         score: 1,
@@ -959,7 +1063,30 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
       // URL fallbacks (hostname as channel, path hint prepended) live in
       // shared/url-signals.ts so the offline evaluator builds identical input.
       const meta = await gatherMeta(tabId);
-      title = initialTitle ?? cleanTitle(meta.fallbackTitle) ?? urlFallbackTitle(url);
+      const domTitle = cleanTitle(meta.fallbackTitle);
+
+      // On YouTube video pages (/watch, /shorts, /live), if both document.title
+      // and the active DOM h1 are still generic ("YouTube") or empty because the
+      // SPA hasn't hydrated the video title yet, do NOT classify the bare
+      // hostname ("youtube.com") — wait for the real video title to land.
+      if (isYouTubeVideoPage(url) && !initialTitle && !domTitle) {
+        const prevTimer = metaRecheckTimers.get(tabId);
+        if (prevTimer) clearTimeout(prevTimer);
+        const timer = setTimeout(async () => {
+          metaRecheckTimers.delete(tabId);
+          try {
+            const tab = await api.tabs.get(tabId);
+            if (!tab?.url || tab.url !== url) return;
+            await onTitle(tabId, tab.title ?? '', tab.url);
+          } catch {
+            // ignore
+          }
+        }, 350);
+        metaRecheckTimers.set(tabId, timer);
+        return;
+      }
+
+      title = initialTitle ?? domTitle ?? urlFallbackTitle(url);
 
       if (!title && !meta.channel && !meta.context) {
         clearCurtain(tabId);
@@ -979,13 +1106,41 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
         return;
       }
 
-      if (title && lastClassified.get(tabId) === title) {
+      if (title && lastClassified.get(tabId) === `${url}|${title}`) {
         clearCurtain(tabId);
         void runPageSanitizer(tabId);
         return;
       }
 
-      lastClassified.set(tabId, title ?? url);
+      lastClassified.set(tabId, `${url}|${title ?? url}`);
+
+      // If YouTube's Polymer DOM was still mid-transition (meta.metaStale) when
+      // the title event fired, schedule a one-shot re-check once the active
+      // ytd-watch-metadata channel & description finish rendering.
+      if (meta.metaStale && isYouTubeVideoPage(url)) {
+        const prevTimer = metaRecheckTimers.get(tabId);
+        if (prevTimer) clearTimeout(prevTimer);
+        const timer = setTimeout(async () => {
+          metaRecheckTimers.delete(tabId);
+          if (armedUrl.get(tabId) && armedUrl.get(tabId) !== url) return;
+          try {
+            const freshMeta = await gatherMeta(tabId);
+            if (
+              (freshMeta.channel && freshMeta.channel !== meta.channel) ||
+              (freshMeta.context && freshMeta.context !== meta.context) ||
+              (freshMeta.fallbackTitle && cleanTitle(freshMeta.fallbackTitle) !== title)
+            ) {
+              lastClassified.delete(tabId);
+              inFlightKey.delete(tabId);
+              const tab = await api.tabs.get(tabId);
+              await onTitle(tabId, tab?.title ?? rawTitle, tab?.url ?? url);
+            }
+          } catch {
+            // ignore
+          }
+        }, 450);
+        metaRecheckTimers.set(tabId, timer);
+      }
 
       blocklistHit = matchedBlocklistEntry(url, title, settings.blocklist);
       if (blocklistHit) {
@@ -1101,9 +1256,14 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
     // The user may have navigated again (e.g. pressed back) while classify()
     // was still running — arm() would have bumped the generation. Painting a
     // block screen for a page the user already left is worse than a missed
-    // block, so drop the stale verdict instead of injecting.
+    // block, so drop the stale verdict if the tab moved to a different URL.
+    // (If onHistoryStateUpdated bumped navGeneration for the SAME URL right
+    // after changeInfo.title, keep the verdict!)
     if (blocked && navGeneration.get(tabId) !== myGeneration) {
-      blocked = false;
+      const latestUrl = armedUrl.get(tabId);
+      if (latestUrl && latestUrl !== url) {
+        blocked = false;
+      }
     }
 
     let injectMs = 0;
@@ -1160,6 +1320,7 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
                 Date.now() - tTitle,
                 lock.settingsLocked,
                 await mintOverrideToken(),
+                settings.blockThreshold,
               ],
             });
           }
@@ -1174,6 +1335,7 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
       // when none exists, so non-force modes stay cheap).
       void clearForceRedirectRule(tabId, url);
       clearCurtain(tabId);
+      clearOverlay(tabId);
       void runPageSanitizer(tabId);
     }
 
@@ -1199,14 +1361,18 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
 }
 
 /** Re-evaluate every open tab and embedded sub-frame — used by the lock
- *  enforcer when a blocking lock starts mid-session, so already-open
- *  distracting tabs and embedded videos get blocked without waiting for a
- *  navigation. Mostly title-cache hits: cheap. */
+ *  enforcer when a blocking lock starts mid-session, and when settings change
+ *  in storage.local, so already-open distracting tabs and embedded videos get
+ *  blocked (or unblocked) without waiting for a navigation. */
 export async function sweepOpenTabs(): Promise<void> {
   const tabs = await api.tabs.query({});
+  // Evaluate active/foreground tabs first so the user sees instant feedback
+  // when toggling protection or categories in the Popup or Options page.
+  tabs.sort((a, b) => Number(Boolean(b.active)) - Number(Boolean(a.active)));
   for (const t of tabs) {
     if (t.id === undefined || !t.url || !isClassifiableUrl(t.url)) continue;
     lastClassified.delete(t.id); // bypass the title-flicker guard
+    inFlightKey.delete(t.id);
     await onTitle(t.id, t.title ?? '', t.url).catch(() => {});
 
     let frames: { frameId: number; url: string; errorOccurred?: boolean }[] = [];
@@ -1219,17 +1385,50 @@ export async function sweepOpenTabs(): Promise<void> {
       if (f.frameId === 0 || f.errorOccurred || !isClassifiableUrl(f.url)) continue;
       const key = subFrameKey(t.id, f.frameId);
       subFrameLastClassified.delete(key);
+      subFrameInFlightKey.delete(key);
       subFrameBlockedVerdict.delete(key);
       await onSubFrame(t.id, f.frameId, f.url, 'completed').catch(() => {});
     }
   }
 }
 
+const SETTINGS_SWEEP_KEYS: (keyof Settings)[] = [
+  'enabled',
+  'blockedLabels',
+  'blockThreshold',
+  'blocklist',
+  'whitelist',
+  'focusGoal',
+  'useTabContext',
+];
+
+let settingsSweepTimer: ReturnType<typeof setTimeout> | undefined;
+
 export function initBlocker() {
   // P2: force-mode DNR redirect lifecycle (unlock/expiry release, tab-close
   // cleanup, SW-restart session-rule reconciliation). Registers its own
   // listeners synchronously per MV3 rules; a no-op if DNR is unavailable.
   initForceRedirectLifecycle();
+
+  api.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes['settings']) return;
+    const oldVal = changes['settings'].oldValue as Partial<Settings> | undefined;
+    const newVal = changes['settings'].newValue as Partial<Settings> | undefined;
+    if (!newVal) return;
+    const shouldSweep =
+      !oldVal ||
+      SETTINGS_SWEEP_KEYS.some(
+        (k) => JSON.stringify(oldVal[k]) !== JSON.stringify(newVal[k]),
+      );
+    if (shouldSweep) {
+      if (settingsSweepTimer) clearTimeout(settingsSweepTimer);
+      settingsSweepTimer = setTimeout(() => {
+        settingsSweepTimer = undefined;
+        void sweepOpenTabs();
+      }, 80);
+    }
+  });
+
   api.webNavigation.onCommitted.addListener((d) => {
     if (d.frameId === 0) {
       arm(d.tabId, d.url);
@@ -1269,7 +1468,9 @@ export function initBlocker() {
     }
   });
   api.tabs.onRemoved.addListener((tabId) => {
+    clearTabTimers(tabId);
     armedAt.delete(tabId);
+    armedUrl.delete(tabId);
     lastClassified.delete(tabId);
     inFlightKey.delete(tabId);
     navGeneration.delete(tabId);

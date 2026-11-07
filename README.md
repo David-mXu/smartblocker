@@ -49,9 +49,11 @@ plan is in [`ROADMAP.md`](ROADMAP.md). What works today:
    The **desktop companion** (`companion/`, Rust) turns the soft lock into
    hard OS-level enforcement — see below.
 7. **A UI worth living in.** Popup, options page, and block screen are a
-   Dark-First Editorial design system in React 19 + Tailwind CSS v4 +
-   shadcn/ui + GSAP (scroll-triggered options-page narrative, animated HUD
-   popup), with real extension and companion tray icons.
+   Dark-First design system in React 19 + Tailwind CSS v4 + shadcn/ui
+   (compact settings dashboard, animated HUD popup), with real extension
+   and companion tray icons. The scroll-triggered editorial showcase lives
+   on the standalone marketing site (`site/`, GSAP narrative) instead of
+   inside settings.
 
 Nothing ever leaves your machine (the model, ~35MB one-time, is downloaded
 from the Hugging Face Hub and cached; all inference and history analysis are
@@ -118,6 +120,7 @@ more process sniffing can solve.
 ```sh
 npm install
 npm run build        # -> dist/chrome (also Edge) and dist/firefox
+npm run build:site   # -> dist-site (standalone marketing landing page)
 ```
 
 ## Try it

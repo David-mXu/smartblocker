@@ -113,6 +113,21 @@ try {
   console.log(`${fontsOk ? 'PASS' : 'FAIL'} self-hosted Geist + Geist Mono load in popup:`, popupFonts);
   if (!fontsOk) process.exitCode = 1;
 
+  // fonts.load() proves the font CAN load, not that the page USES it. Chrome
+  // injects an unlayered extension-page stylesheet (body font + 75% size)
+  // that beats anything inside Tailwind's @layer base — the 2026-11-07 bug
+  // where every surface silently rendered in the system font at 12px.
+  // Assert the COMPUTED body font so that regression can't hide again.
+  for (const [name, pg] of [['popup', popup]]) {
+    const body = await pg.evaluate(() => ({
+      family: getComputedStyle(document.body).fontFamily,
+      size: getComputedStyle(document.body).fontSize,
+    }));
+    const ok = /^"?Geist"?,/.test(body.family) && body.size === '14px';
+    console.log(`${ok ? 'PASS' : 'FAIL'} ${name} <body> computes to Geist 14px (not Chrome's injected default):`, body);
+    if (!ok) process.exitCode = 1;
+  }
+
   const opts = await context.newPage();
   sniff(opts, 'options');
   await opts.goto(`chrome-extension://${extensionId}/options.html`);
@@ -141,11 +156,23 @@ try {
     { geist: optsState.geist, mono: optsState.mono },
   );
   if (!optsFontsOk) process.exitCode = 1;
-
-  const imgsOk =
-    optsState.imgCount > 0 && optsState.remoteImgs.length === 0 && optsState.brokenImgs === 0;
+  const optsBody = await opts.evaluate(() => ({
+    family: getComputedStyle(document.body).fontFamily,
+    size: getComputedStyle(document.body).fontSize,
+  }));
+  const optsBodyOk = /^"?Geist"?,/.test(optsBody.family) && optsBody.size === '14px';
   console.log(
-    `${imgsOk ? 'PASS' : 'FAIL'} options showcase images are all local & render ` +
+    `${optsBodyOk ? 'PASS' : 'FAIL'} options <body> computes to Geist 14px (not Chrome's injected default):`,
+    optsBody,
+  );
+  if (!optsBodyOk) process.exitCode = 1;
+
+  // The showcase SVGs moved to the standalone site/ on 2026-11-07, so the
+  // options page may legitimately have zero <img>s; the privacy invariant is
+  // that any image present is local and renders.
+  const imgsOk = optsState.remoteImgs.length === 0 && optsState.brokenImgs === 0;
+  console.log(
+    `${imgsOk ? 'PASS' : 'FAIL'} options images (if any) are all local & render ` +
       `(${optsState.imgCount} imgs, remote: ${JSON.stringify(optsState.remoteImgs)}, broken: ${optsState.brokenImgs})`,
   );
   if (!imgsOk) process.exitCode = 1;

@@ -260,7 +260,12 @@ Design facts that matter later:
     SERP/chatbot-embed sanitizer (`src/content/sanitize-page.ts`).
 - **UI refresh ✅ (2026-10-26):** React 19 + Tailwind CSS v4 + shadcn/ui +
   GSAP editorial surfaces (popup + options + block screen), real extension
-  and companion icons.
+  and companion icons. **(2026-11-07):** AIDA showcase moved out of the
+  options page into the standalone `site/` landing page; the options page is
+  now a conventional settings dashboard (same DOM IDs, e2e-safe).
+- **Landing site scaffold ✅ (2026-11-07):** `site/` — Vite + React +
+  Tailwind + GSAP port of the editorial showcase; `npm run build:site` →
+  `dist-site/`.
 - **Firefox parity ✅:** MV3 event-page keepalive in `lock-enforcer.ts`
   (event-page suspension can no longer stall enforcement or impersonate a
   dead extension to the companion watchdog) + incognito-access warning UI.
@@ -271,6 +276,9 @@ Design facts that matter later:
   - Open-source GitHub release + Chrome Web Store beta listing (privacy
     policy exists as `PRIVACY.md`).
   - Watch RAM/battery, false-positive rate, and model download UX in the wild.
+  - Deploy the `site/` landing page (`npm run deploy:site` → Cloudflare
+    Pages project `smartblocker`; custom domain later), then link it from
+    the store listing + README.
   - Marketing: Show HN, r/ADHD, r/productivity, Product Hunt. Hook: *"Stop
     blocking the whole internet. Start blocking your bad habits."*
 - Telemetry-free by default; the ONLY network write is the explicit opt-in

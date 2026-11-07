@@ -198,20 +198,34 @@ Commit and push when appropriate.
   - `history-ingester.ts` scans chrome.history; `index.ts` wires listeners,
     first-run onboarding, and the `OVERRIDE` / `REPORT_FN` / `CLOSE_TAB`
     handlers.
+- **UI design system: read `docs/design-notes.md` ("Lamplight") before any
+  UI change** — tokens, type/spacing scale, component specs, amber-means-
+  commitment rule, block-screen spec, and the DOM-ID/strings contract the
+  e2e suites depend on (§7). Body typography in `src/styles/globals.css` is
+  deliberately UNLAYERED: Chrome injects an unlayered extension-page
+  stylesheet that beats Tailwind's `@layer base` (that silently forced the
+  system font at 12px until 2026-11-07).
 - `src/popup/` (`PopupApp.tsx`, `popup.ts`, `popup.html`) — React + Tailwind CSS v4 +
-  `shadcn/ui` (`src/components/ui/`) + GSAP diagnostic and focus HUD: Focus Context
-  (System 1.5), Frozen Turkey quick-commit presets, Test Pair, History Scan,
-  Latency Log, and **"Should've been blocked"** false-negative report (`REPORT_FN`).
+  `shadcn/ui` (`src/components/ui/`) status-first popup (no entrance
+  animation): protection status, focus goal, Frozen Turkey presets,
+  **"Should've been blocked"** report (`REPORT_FN`), and a quiet diagnostics
+  footer (Test Pair, History Scan, Latency Log → `#out`).
   Surfaces an **incognito-access warning** when the extension lacks
   private-window access — without it, private windows are an enforcement
   blind spot (the companion also flags private launches, but an extension
   that can see them blocks far earlier).
-- `src/options/` (`OptionsApp.tsx`, `options.ts`, `options.html`) — full-viewport
-  Dark-First Editorial Command Center & onboarding page built with React,
-  `shadcn/ui`, `@phosphor-icons/react`, and GSAP `ScrollTrigger` following
-  `docs/design-notes.md` (floating glass-pill nav, Editorial Split Hero, 5-card
-  Gapless Bento Control Matrix, GSAP pinned/scrubbing architecture showcase,
-  and commit footer). Preserves all E2E DOM IDs and lock-state disabling rules.
+- `src/options/` (`OptionsApp.tsx`, `options.ts`, `options.html`) — settings
+  page as ONE surface (`src/components/ui/settings.tsx`: Section → Group →
+  Row; no nested cards) with a sticky scroll-spy section nav: blocking +
+  sensitivity, categories, focus, sites, commitment locks, focus hours,
+  companion, history review, learning & privacy. No GSAP/marketing content — the
+  editorial showcase moved to `site/` on 2026-11-07. Preserves all E2E DOM IDs
+  and lock-state disabling rules.
+- `site/` — standalone public marketing landing page (Vite + React + Tailwind +
+  GSAP). Hosts the ported AIDA editorial showcase from the former options page
+  (hero, marquee, scrubbed manifesto, pinned chapters, 3-stage accordion) with
+  CTAs to GitHub releases. Build: `npm run build:site` → `dist-site/`; deploy:
+  `npm run deploy:site` (Cloudflare Pages, run only with explicit approval).
 - `src/content/extract-meta.ts` — self-contained injected function that scrapes
   channel/subreddit + description snippet from the page DOM; falls back to
   `og:site_name`/`og:description`/`description` meta on generic sites. On

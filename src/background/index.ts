@@ -17,7 +17,7 @@ import type {
 } from '../shared/messages';
 import { classify } from './classifier';
 import { consumeOverrideToken } from './override-tokens';
-import { evaluateSubItems, initBlocker } from './blocker';
+import { evaluateSubItems, initBlocker, sweepOpenTabs } from './blocker';
 import { getCompanionSnapshot, initCompanionBridge } from './companion';
 import { deleteSharedFeedback, getExistingInstallId, initFeedbackUploader } from './feedback-uploader';
 import { initLockEnforcer } from './lock-enforcer';
@@ -145,6 +145,7 @@ api.runtime.onMessage.addListener(
           extVersion: api.runtime.getManifest().version,
           ts: Date.now(),
         });
+        void sweepOpenTabs();
         sendResponse({ ok: true });
       })().catch((e) => sendResponse({ ok: false, error: String(e) }));
       return true;

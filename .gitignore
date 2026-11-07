@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-site/
 .e2e-profile/
 .e2e-profile-p1/
 .e2e-profile-p2/
@@ -23,3 +24,5 @@ scripts/feedback-candidates.json
 # wrangler local state (local d1 sqlite, dev servers)
 .wrangler/
 **/.wrangler/
+.design-work/
+.ux-shots/
