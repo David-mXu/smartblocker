@@ -4,7 +4,11 @@ Smart distraction blocker: a fully-local AI model classifies page titles and
 blocks off-topic content without blocking whole sites.
 **SmartBlocker watches every `http(s)` site except the user's whitelist** (domain +
 subdomain match, seeded with a safe default list in `config.ts`
-`DEFAULT_WHITELIST`; user-editable on the options page). It also supports an
+`DEFAULT_WHITELIST`; user-editable on the options page). **Search engines are
+deliberately NOT whitelisted** (2026-11-07): a `google.com` root exempted Google
+News, image viewers and inline video previews — the standard YouTube bypass — so only
+productive Google subdomains (`GOOGLE_PRODUCTIVE_HOSTS`) are listed, and
+existing stored lists migrate once via `settings.ts` `whitelistVersion`. It also supports an
 **opt-in deterministic blocklist** (`config.ts`/`settings.ts` `blocklist`,
 empty by default): substring matches against the URL + title skip the ML
 classifier entirely and block instantly. **The full multi-phase roadmap lives
@@ -462,6 +466,15 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
 
 ## Gotchas
 
+- **SERPs are masked in place by `src/content/sanitize-page.ts`**, not just
+  page-classified. Google's entity hero ("MrBeast · American YouTuber" +
+  image collage + `VisualDigest*` YouTube tiles) is a stack of `#rcnt > div`
+  rows ABOVE and OUTSIDE `#center_col`, so `#rso`-scoped selectors never see
+  it — the entity pass masks those rows as one group (leader bar + silent
+  followers). A DOM-agnostic leftover-link sweep then masks the largest
+  "pure" tile around any remaining video/social/gaming/gambling link. When
+  Google changes markup, inspect the live DOM (browser-use) before adding
+  selectors.
 - **Browser blocking is a post-navigation overlay with selective pre-curtain.**
   `blocker.ts` listens for navigation, title changes, and `status === 'complete'`.
   On deterministic blocklist hits, mixed high-risk hosts (YouTube, Reddit, X,

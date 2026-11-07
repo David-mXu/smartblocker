@@ -38,17 +38,46 @@ export const MODEL_REVISION = '2a4f614a701367a02d51389039afc998faeda637';
 
 export const HYPOTHESIS_TEMPLATE = 'This web page is about {}.';
 
+/** Productive Google subdomains whitelisted in place of the `google.com` root
+ *  (shared by DEFAULT_WHITELIST and the settings.ts v2 migration). */
+export const GOOGLE_PRODUCTIVE_HOSTS: readonly string[] = [
+  'mail.google.com',
+  'docs.google.com',
+  'drive.google.com',
+  'calendar.google.com',
+  'meet.google.com',
+  'classroom.google.com',
+  'keep.google.com',
+  'scholar.google.com',
+  'cloud.google.com',
+  'colab.research.google.com',
+  'gemini.google.com',
+  'aistudio.google.com',
+  'accounts.google.com',
+  'myaccount.google.com',
+];
+
+/** Search-engine roots that USED to be in DEFAULT_WHITELIST (v1). The
+ *  settings.ts v2 migration strips them from existing installs once. */
+export const LEGACY_SEARCH_WHITELIST = ['google.com', 'bing.com', 'duckduckgo.com'];
+
 // Default whitelist: sites that are never classified or blocked out of the box.
-// SmartBlocker now watches ALL http(s) sites; these essentials (search, mail, docs,
+// SmartBlocker now watches ALL http(s) sites; these essentials (mail, docs,
 // dev/work tools, localhost) are exempted so common productive pages are never
 // false-positive blocked. Matched by domain + subdomains (see isWhitelisted in
-// titles.ts) — "google.com" also exempts mail.google.com, docs.google.com, etc.
-// The user edits this list from the options page.
+// titles.ts). The user edits this list from the options page.
+//
+// Search engines are deliberately NOT whitelisted (2026-11-07): a root entry
+// like "google.com" exempts EVERY *.google.com surface — Google News, image
+// viewers, inline video previews — which became the go-to
+// bypass for watching YouTube without visiting youtube.com. SERPs are instead
+// classified like any page, and the in-page sanitizer masks their distracting
+// modules. Only the productive Google Workspace subdomains are listed below.
+// Bump WHITELIST_VERSION (settings.ts) whenever a change here must also
+// reach EXISTING installs' stored whitelists.
 export const DEFAULT_WHITELIST: string[] = [
-  // Search
-  'google.com',
-  'bing.com',
-  'duckduckgo.com',
+  // Google Workspace / productive Google surfaces (NOT the google.com root)
+  ...GOOGLE_PRODUCTIVE_HOSTS,
   // Mail
   'outlook.com',
   'outlook.live.com',

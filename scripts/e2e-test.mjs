@@ -391,6 +391,16 @@ try {
   const mixedSerpHtml = `<!doctype html><html><head><title>nvidia rtx 5090 - Google Search</title></head><body>
     <textarea name="q">nvidia rtx 5090</textarea>
     <div id="tads"><h3>Sponsored Products</h3><div>14-inch Gaming Rig $2,999</div></div>
+    <div id="rcnt">
+    <div class="SLPe5b" id="hero-title">
+      <div data-attrid="title">Linus Sebastian</div>
+      <div data-attrid="subtitle">Canadian YouTuber</div>
+    </div>
+    <div class="SLPe5b" id="hero-digest">
+      <div data-attrid="VisualDigestWebResult"><a href="https://www.youtube.com/channel/UCXuqSBlHAE6Xw-yeJA0Tunw">Linus Tech Tips - YouTube</a></div>
+      <div data-attrid="VisualDigestVideoResult"><a href="https://www.youtube.com/watch?v=hero0000001">I Built The Fastest PC Ever</a></div>
+    </div>
+    <div id="center_col">
     <div id="rso">
       <div class="MjjYud" id="card-nvidia">
         <a href="https://www.nvidia.com/en-us/geforce/graphics-cards/50-series/rtx-5090/"><h3>GeForce RTX 5090 Technical Specifications & CUDA Architecture</h3></a>
@@ -421,6 +431,18 @@ try {
         <a href="https://www.reddit.com/r/AmItheAsshole/comments/abc123/aita_wedding/"><h3>AITA for refusing to pay for my sister wedding after bridezilla drama</h3></a>
         <div class="VwiC3b">Reddit · r/AmItheAsshole · 4.2K comments · Family wedding drama and relationship gossip thread.</div>
       </div>
+    </div>
+    <div id="botstuff">
+      <div data-attrid="kc:/common/topic:social media presence" id="sweep-social">
+        <a href="https://www.youtube.com/@LinusTechTips">YouTube</a>
+        <a href="https://www.instagram.com/linustech">Instagram</a>
+      </div>
+      <div data-hveid="mixed1" id="sweep-mixed">
+        <a id="sweep-mixed-nvidia" href="https://www.nvidia.com/en-us/geforce/">NVIDIA GeForce product page</a>
+        <span><a id="sweep-mixed-yt" href="https://www.youtube.com/watch?v=mixed000001">RTX 5090 unboxing</a></span>
+      </div>
+    </div>
+    </div>
     </div>
   </body></html>`;
 
@@ -460,6 +482,18 @@ try {
     aitaMasked: !!document.getElementById('card-aita')?.getAttribute('data-smartblocker-masked'),
     nvidiaVisible: !document.getElementById('card-nvidia')?.getAttribute('data-smartblocker-masked'),
     tpuVisible: !document.getElementById('card-techpowerup')?.getAttribute('data-smartblocker-masked'),
+    // Entity hero (outside #center_col): both rows masked, ONE bar total.
+    heroTitleMasked: !!document.getElementById('hero-title')?.getAttribute('data-smartblocker-masked'),
+    heroDigestMasked: !!document.getElementById('hero-digest')?.getAttribute('data-smartblocker-masked'),
+    heroBars:
+      document.querySelectorAll('#hero-title > .smartblocker-mask-bar, #hero-digest > .smartblocker-mask-bar').length,
+    // Leftover-link sweep: pure social row masked; in a mixed tile only the
+    // YouTube link is masked and the NVIDIA link stays visible.
+    sweepSocialMasked: !!document.getElementById('sweep-social')?.getAttribute('data-smartblocker-masked'),
+    sweepMixedTileVisible: !document.getElementById('sweep-mixed')?.getAttribute('data-smartblocker-masked'),
+    sweepMixedYtMasked: !!document
+      .getElementById('sweep-mixed-yt')
+      ?.closest('[data-smartblocker-masked]'),
   }));
 
   const serpMaskOk =
@@ -471,7 +505,13 @@ try {
     serpMaskState.bestbuyMasked &&
     serpMaskState.aitaMasked &&
     serpMaskState.nvidiaVisible &&
-    serpMaskState.tpuVisible;
+    serpMaskState.tpuVisible &&
+    serpMaskState.heroTitleMasked &&
+    serpMaskState.heroDigestMasked &&
+    serpMaskState.heroBars === 1 &&
+    serpMaskState.sweepSocialMasked &&
+    serpMaskState.sweepMixedTileVisible &&
+    serpMaskState.sweepMixedYtMasked;
 
   console.log(
     `${serpMaskOk ? 'PASS' : 'FAIL'} mixed Google SERP masks distracting shelves/cards while keeping tech specs visible:`,

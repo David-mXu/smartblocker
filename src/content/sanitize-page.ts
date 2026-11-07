@@ -14,8 +14,10 @@
 //    Baidu, Yandex, Naver, Ecosia): masks unpredictable injected SERP modules
 //    (Videos, Short videos, Top stories/News, Sponsored/Popular products,
 //    What people are saying/Discussions and forums, Movies/Cast/Watch panels,
-//    Games from Google) and distracting organic result cards without blocking
-//    the user's entire search tab.
+//    Games from Google), distracting organic result cards, the entity hero /
+//    knowledge panel ("MrBeast · American YouTuber"), and — as a DOM-agnostic
+//    backstop — any leftover link to a known distraction host, without
+//    blocking the user's entire search tab.
 
 export interface SanitizePageOptions {
   blockedLabels: string[];
@@ -272,9 +274,22 @@ export function sanitizePage(opts: SanitizePageOptions): {
     kind: 'serp-shelf' | 'serp-card' | 'embed',
     reason: string,
     unloadIframes = true,
+    followers: Element[] = [],
   ): boolean {
     const currentState = el.getAttribute('data-smartblocker-masked');
     if (currentState === 'revealed' || currentState === kind) return false;
+    // Followers: sibling pieces of ONE logical module (e.g. Google's entity
+    // hero, split across several #rcnt rows) hidden together under a single
+    // bar instead of one bar per row. No bar of their own — the leader's
+    // "Show" reveals them all.
+    for (let i = 0; i < followers.length; i++) {
+      const f = followers[i];
+      if (f === el || f.getAttribute('data-smartblocker-masked') === 'revealed') continue;
+      ensureMaskCss(f.getRootNode());
+      f.setAttribute('data-smartblocker-masked', kind);
+      f.setAttribute('data-smartblocker-reason', reason);
+      if (unloadIframes) pauseAndUnloadMedia(f);
+    }
     ensureMaskCss(el.getRootNode());
     if (el.shadowRoot) ensureMaskCss(el.shadowRoot);
     el.setAttribute('data-smartblocker-masked', kind);
@@ -310,7 +325,14 @@ export function sanitizePage(opts: SanitizePageOptions): {
         ev.preventDefault();
         ev.stopPropagation();
         el.setAttribute('data-smartblocker-masked', 'revealed');
-        const subRoots = collectOpenRoots(el);
+        for (let i = 0; i < followers.length; i++) {
+          followers[i].setAttribute('data-smartblocker-masked', 'revealed');
+        }
+        const subRoots: DeepRoot[] = [];
+        const revealRoots = [el, ...followers];
+        for (let i = 0; i < revealRoots.length; i++) {
+          subRoots.push(...collectOpenRoots(revealRoots[i]));
+        }
         const iframes = queryAllDeep('iframe', subRoots);
         for (let i = 0; i < iframes.length; i++) {
           const f = iframes[i] as HTMLIFrameElement;
@@ -917,6 +939,184 @@ export function sanitizePage(opts: SanitizePageOptions): {
           });
         }
       }
+
+      const memesOrSocial =
+        blockedSet.has('memes and entertainment') || blockedSet.has('social media and networking');
+
+      // 4. Entity hero / knowledge panel ("MrBeast · American YouTuber" + image
+      // collage + "MrBeast - YouTube" + latest-video tiles). On Google's
+      // current desktop layout the hero is a stack of #rcnt rows ABOVE and
+      // OUTSIDE #center_col, so every #rso-scoped pass above misses it.
+      // Deterministic subtitle match first, ML verdict otherwise; a
+      // distracting entity masks all of its hero rows under ONE bar.
+      const ENTITY_SOCIAL_RE =
+        /\b(?:youtubers?|youtube (?:personality|channel|star|creator)|(?:twitch |live |video game )?streamers?|tiktokers?|tiktok (?:star|personality|creator)|instagram (?:star|influencer|personality)|(?:social media|internet|online|media) (?:personality|celebrity|influencer|star)|influencers?|content creators?|vloggers?|internet memes?)\b/i;
+      const ENTITY_GAME_RE =
+        /\b(?:video games?|game series|mobile games?|esports?|e-sports|(?:professional|pro) gamers?|battle royale|mmorpg|first-person shooter)\b/i;
+      const ENTITY_GAMBLING_RE =
+        /\b(?:online casinos?|casinos?|sportsbooks?|online gambling|betting (?:company|site|exchange))\b/i;
+
+      const entityHeroTargets = (titleEl: Element): Element[] => {
+        const rcnt = document.getElementById('rcnt');
+        const centerCol = document.getElementById('center_col');
+        if (rcnt && centerCol && centerCol.parentElement === rcnt) {
+          let row: Element | null = titleEl;
+          while (row && row.parentElement !== rcnt) row = row.parentElement;
+          if (
+            row &&
+            row !== centerCol &&
+            row.id !== 'rhs' &&
+            !row.querySelector('#rso, #center_col, #rhs') &&
+            // Hero rows sit ABOVE the results column.
+            row.compareDocumentPosition(centerCol) & Node.DOCUMENT_POSITION_FOLLOWING
+          ) {
+            const rows: Element[] = [row];
+            const kids = rcnt.children;
+            for (let k = 0; k < kids.length; k++) {
+              const c = kids[k];
+              if (c === centerCol) break; // only rows preceding the results column
+              if (c === row || c.tagName !== 'DIV') continue;
+              if (c.querySelector('#rso, #center_col, #rhs, [data-attrid="title"]')) continue;
+              if (!textOf(c) && !c.querySelector('img, a[href]')) continue;
+              rows.push(c);
+            }
+            return rows;
+          }
+        }
+        // Classic layouts: the entity card is a #rhs block / kp-wholepage box.
+        const box = titleEl.closest('#rhs > div, .kp-wholepage, [data-kpid]');
+        if (
+          !box ||
+          box.querySelector('#rso, #center_col') ||
+          box.querySelectorAll('div.MjjYud h3').length > 1
+        ) {
+          return [];
+        }
+        return [box];
+      };
+
+      const entityTitles = document.querySelectorAll('[data-attrid="title"]');
+      for (let i = 0; i < entityTitles.length; i++) {
+        const titleEl = entityTitles[i];
+        const targets = entityHeroTargets(titleEl);
+        if (targets.length === 0) continue;
+        const leader = targets[0];
+        if (targets.some((t) => t.closest('[data-smartblocker-masked]'))) continue;
+        if (leader.getAttribute('data-smartblocker-state')) continue; // verdict pending/allowed
+        const entTitle = textOf(titleEl);
+        if (!entTitle) continue;
+        let subtitle = '';
+        let description = '';
+        for (let t = 0; t < targets.length; t++) {
+          if (!subtitle) subtitle = textOf(targets[t].querySelector('[data-attrid="subtitle"]'));
+          if (!description) {
+            description = textOf(targets[t].querySelector('[data-attrid="description"]'));
+          }
+        }
+        const followers = targets.slice(1);
+        const entLabel = subtitle ? `${entTitle} — ${subtitle}` : entTitle;
+
+        let entReason: string | null = null;
+        const entBl = matchesBlocklist(location.href, entLabel, activeOpts.blocklist);
+        if (entBl) {
+          entReason = `blocked rule "${entBl}" (${entTitle})`;
+        } else if (ENTITY_SOCIAL_RE.test(subtitle) && memesOrSocial) {
+          entReason = `Search entity panel (${entLabel})`;
+        } else if (ENTITY_GAME_RE.test(subtitle) && blockedSet.has('video games')) {
+          entReason = `Search entity panel (${entLabel})`;
+        } else if (ENTITY_GAMBLING_RE.test(subtitle) && blockedSet.has('gambling and betting')) {
+          entReason = `Search entity panel (${entLabel})`;
+        }
+        if (entReason) {
+          if (maskElement(leader, 'serp-shelf', entReason, true, followers)) maskedShelves++;
+          continue;
+        }
+        // Ambiguous entity (e.g. "Python — Programming language" vs
+        // "Fortnite — 2017 video game" phrased oddly): ask the classifier.
+        const itemId = nextId('sb-entity');
+        leader.setAttribute('data-smartblocker-id', itemId);
+        leader.setAttribute('data-smartblocker-state', 'evaluated');
+        for (let f = 0; f < followers.length; f++) {
+          followers[f].setAttribute('data-smartblocker-follow', itemId);
+        }
+        pendingEval.push({
+          id: itemId,
+          url: location.href,
+          title: entTitle,
+          channel: 'Search entity panel',
+          context: [subtitle, description].filter(Boolean).join('. ').slice(0, 260),
+          kind: 'serp-card',
+        });
+      }
+
+      // 5. Leftover-link sweep: SERP modules change markup constantly, so as a
+      // DOM-agnostic backstop mask any remaining link to a known distraction
+      // host (entity-hero video tiles, social-profile rows, Q&A answers, …).
+      // The masked unit is the largest enclosing "tile" whose external links
+      // ALL point at distraction-type hosts — never a container that also
+      // holds a productive result.
+      const SWEEP_STOP_SEL =
+        '#rso, #center_col, #rhs, #rcnt, #search, #main, #botstuff, #b_results, #b_content, #b_context, #links, body, html';
+      const SWEEP_TILE_SEL = '[data-attrid], [data-hveid], g-inner-card, .MjjYud, li, article';
+      const isSerpInternalHost = (h: string): boolean =>
+        h === hostLower ||
+        /^(?:google\.[a-z.]+|bing\.com|duckduckgo\.com|(?:[a-z0-9-]+\.)?gstatic\.com|(?:support|policies|accounts|maps|translate|lens|myactivity)\.google\.[a-z.]+)$/i.test(
+          h,
+        );
+      const sweepReason = (h: string): string | null => {
+        if (VIDEO_SOCIAL_HOST_RE.test(h) && memesOrSocial) return `video / social link (${h})`;
+        if (GAMING_HOST_RE.test(h) && blockedSet.has('video games')) {
+          return `video games link (${h})`;
+        }
+        if (GAMBLING_HOST_RE.test(h) && blockedSet.has('gambling and betting')) {
+          return `gambling link (${h})`;
+        }
+        return null;
+      };
+      const isDistractionTypeHost = (h: string): boolean =>
+        VIDEO_SOCIAL_HOST_RE.test(h) ||
+        GAMING_HOST_RE.test(h) ||
+        GAMBLING_HOST_RE.test(h) ||
+        STREAMING_MOVIE_HOST_RE.test(h) ||
+        SHOPPING_HOST_RE.test(h);
+      const linkHost = (a: Element): string =>
+        normHost(resolveResultHref((a as HTMLAnchorElement).getAttribute('href') || ''));
+      const linksArePure = (el: Element): boolean => {
+        const as = el.querySelectorAll('a[href]');
+        for (let k = 0; k < as.length; k++) {
+          const h = linkHost(as[k]);
+          if (!h || isSerpInternalHost(h)) continue;
+          if (!isDistractionTypeHost(h)) return false;
+        }
+        return true;
+      };
+      const sweepTile = (a: Element): Element => {
+        let best: Element = a;
+        let el = a.parentElement;
+        for (let d = 0; el && d < 12; d++) {
+          if (el.matches(SWEEP_STOP_SEL) || el.querySelector('#rso, #center_col, #rhs')) break;
+          if (textOf(el).length > 1500 || !linksArePure(el)) break;
+          if (el.matches(SWEEP_TILE_SEL)) {
+            best = el;
+            if (el.hasAttribute('data-attrid')) break; // Google's own tile boundary
+          }
+          el = el.parentElement;
+        }
+        return best;
+      };
+
+      const sweepLinks = document.querySelectorAll(
+        '#rcnt a[href], #botstuff a[href], #b_content a[href], #links a[href], section[data-testid="mainline"] a[href], section[data-area="mainline"] a[href]',
+      );
+      for (let i = 0; i < sweepLinks.length; i++) {
+        const a = sweepLinks[i];
+        if (a.closest('[data-smartblocker-masked]')) continue;
+        const reason = sweepReason(linkHost(a));
+        if (!reason) continue;
+        const tile = sweepTile(a);
+        if (tile.closest('[data-smartblocker-masked]')) continue;
+        if (maskElement(tile, 'serp-card', reason)) maskedCards++;
+      }
     }
 
     // Dispatch pending embeds & SERP cards to the background service worker
@@ -940,11 +1140,15 @@ export function sanitizePage(opts: SanitizePageOptions): {
                   r.id.startsWith('sb-facade') ||
                   r.id.startsWith('sb-chatlink');
                 const titleHint = r.resolvedTitle ? `"${r.resolvedTitle.slice(0, 48)}" — ` : '';
+                const followers = Array.from(
+                  document.querySelectorAll(`[data-smartblocker-follow="${r.id}"]`),
+                );
                 maskElement(
                   target,
                   isEmbed ? 'embed' : 'serp-card',
                   `${titleHint}${r.label}`,
                   true,
+                  followers,
                 );
               } else {
                 target.setAttribute('data-smartblocker-state', 'allowed');

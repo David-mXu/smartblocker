@@ -6,7 +6,9 @@ import {
   BLOCKED_LABELS,
   BLOCK_THRESHOLD,
   DEFAULT_WHITELIST,
+  GOOGLE_PRODUCTIVE_HOSTS,
   LABELS,
+  LEGACY_SEARCH_WHITELIST,
 } from './config';
 import { getLockStatus } from './lock';
 
@@ -23,6 +25,12 @@ export interface Settings {
   onboarded: boolean;
   /** Hostnames never classified/blocked. Matched by domain + subdomains. */
   whitelist: string[];
+  /**
+   * Schema version of `whitelist` — lets a default-list change (e.g. the v2
+   * removal of search engines) reach existing installs exactly ONCE, so an
+   * entry the user deliberately re-adds afterwards is respected.
+   */
+  whitelistVersion: number;
   /**
    * Deterministic block rules: substrings matched against the full URL + page
    * title. A match blocks immediately, skipping the ML classifier entirely.
@@ -63,6 +71,10 @@ export interface Settings {
   resolveEmbedTitles: boolean;
 }
 
+/** v1: original list (search engines whitelisted). v2 (2026-11-07): search
+ *  roots removed, `google.com` replaced by its productive subdomains. */
+export const WHITELIST_VERSION = 2;
+
 export const DEFAULTS: Settings = {
   labels: [...LABELS],
   blockedLabels: [...BLOCKED_LABELS],
@@ -70,6 +82,7 @@ export const DEFAULTS: Settings = {
   enabled: true,
   onboarded: false,
   whitelist: [...DEFAULT_WHITELIST],
+  whitelistVersion: WHITELIST_VERSION,
   blocklist: [],
   shareFeedback: false,
   deletedBuiltinLabels: [],
@@ -117,12 +130,48 @@ function migrateLabels(stored: Partial<Settings> | undefined): Pick<Settings, 'l
   };
 }
 
+/**
+ * Bring a stored whitelist up to WHITELIST_VERSION. Runs at READ time (like
+ * migrateLabels), so it also applies while settings are locked — safe, since
+ * it only ever shrinks the exemption set (stricter, never looser) — and is
+ * persisted by the next setSettings(). v1 → v2: strip the legacy search-engine
+ * roots (whitelisting "google.com" exempted Google News, image viewers and
+ * inline video previews — the standard YouTube bypass) and, if "google.com"
+ * was present, keep its productive subdomains working by adding them back
+ * explicitly.
+ */
+export function migrateWhitelist(
+  stored: Partial<Settings> | undefined,
+): Pick<Settings, 'whitelist' | 'whitelistVersion'> {
+  if (!stored?.whitelist) {
+    return { whitelist: [...DEFAULT_WHITELIST], whitelistVersion: WHITELIST_VERSION };
+  }
+  const version = stored.whitelistVersion ?? 1;
+  if (version >= WHITELIST_VERSION) {
+    return { whitelist: stored.whitelist, whitelistVersion: version };
+  }
+  const norm = (e: string) => e.trim().toLowerCase().replace(/^www\./, '');
+  const legacy = new Set(LEGACY_SEARCH_WHITELIST);
+  const hadGoogleRoot = stored.whitelist.some((e) => norm(e) === 'google.com');
+  const next = stored.whitelist.filter((e) => !legacy.has(norm(e)));
+  if (hadGoogleRoot) {
+    const present = new Set(next.map(norm));
+    for (const h of GOOGLE_PRODUCTIVE_HOSTS) if (!present.has(h)) next.push(h);
+  }
+  return { whitelist: next, whitelistVersion: WHITELIST_VERSION };
+}
+
 /** Read settings (cached), falling back to DEFAULTS for any missing field. */
 export async function getSettings(): Promise<Settings> {
   if (cache) return cache;
   const stored = await api.storage.local.get(STORAGE_KEY);
   const storedSettings = stored[STORAGE_KEY] as Partial<Settings> | undefined;
-  cache = { ...DEFAULTS, ...storedSettings, ...migrateLabels(storedSettings) };
+  cache = {
+    ...DEFAULTS,
+    ...storedSettings,
+    ...migrateLabels(storedSettings),
+    ...migrateWhitelist(storedSettings),
+  };
   return cache;
 }
 

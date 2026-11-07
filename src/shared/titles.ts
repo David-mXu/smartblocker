@@ -62,12 +62,11 @@ export function isSearchEngineResultsUrl(parsed: URL): boolean {
  * Is this URL exempt from blocking? Domain + subdomain match: a whitelist entry
  * of "github.com" exempts github.com AND gist.github.com, but not notgithub.com.
  *
- * Search-engine root domains in the whitelist ("google.com", "bing.com",
- * "duckduckgo.com") still exempt productive subdomains (docs.google.com,
- * mail.google.com, drive.google.com, scholar.google.com, cloud.google.com) and
- * blank search homepages, but do NOT exempt active search query pages
- * (?q=..., /shopping, /videos) so distracting searches and embedded SERP
- * widgets are still classified.
+ * Search engines are no longer in DEFAULT_WHITELIST (config.ts), but a user
+ * may add one back: a search-engine root entry ("google.com", "bing.com")
+ * still exempts its subdomains and blank search homepages, but NEVER active
+ * search query pages (?q=..., /shopping, /videos) or Play/Store surfaces, so
+ * distracting searches and embedded SERP widgets are always classified.
  */
 export function isWhitelisted(url: string | undefined, whitelist: string[]): boolean {
   if (!url) return false;
