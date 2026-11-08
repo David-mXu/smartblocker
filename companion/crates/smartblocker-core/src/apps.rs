@@ -10,6 +10,11 @@
 //! session, not stop a distraction). Browsers are kept but TAGGED, so the
 //! UI can explain they're handled by browser protection instead.
 //!
+//! Sorted by how present each app is on the desktop ([`AppState`]), then by
+//! name, so what the user is looking at comes first and the long tail of
+//! helpers comes last. Windows-only signal: elsewhere everything reads as
+//! background.
+//!
 //! Read-only: uses its own `sysinfo::System`, never `SysinfoSource`, so a UI
 //! refresh can't disturb the enforcer's recorded-PID immunity set.
 
@@ -21,6 +26,19 @@ use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use crate::browsers::{classify, BrowserClass};
 use crate::enforcer::PROTECTED_STEMS;
 
+/// How present an app is on the desktop. Declared in display order, so the
+/// derived `Ord` makes the most present state the smallest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AppState {
+    /// Has a taskbar-style window showing on the current desktop.
+    Visible,
+    /// Has a taskbar-style window, but minimized or on another virtual desktop.
+    Open,
+    /// No taskbar-style window (helpers, services, apps closed to the tray).
+    Background,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunningApp {
@@ -31,6 +49,8 @@ pub struct RunningApp {
     /// Supported or incompatible browser (closed by browser protection, not
     /// the app blocklist).
     pub is_browser: bool,
+    /// The most present state across this app's processes.
+    pub state: AppState,
 }
 
 /// Exact stems of OS / desktop-session plumbing (Windows + Linux).
@@ -155,11 +175,41 @@ const SYSTEM_PREFIXES: &[&str] = &[
     "kded",
 ];
 
-/// One process as the summarizer sees it: (exe stem, has readable exe path).
+/// One process as the summarizer sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppProc {
     pub stem: String,
     pub has_exe: bool,
+    pub state: AppState,
+}
+
+/// What the OS reports about one top-level window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowFacts {
+    pub shown: bool,
+    pub titled: bool,
+    /// Passes the taskbar test: not owned, tool or no-activate, unless the
+    /// window explicitly asks for a taskbar button.
+    pub on_taskbar: bool,
+    pub minimized: bool,
+    /// `DWMWA_CLOAKED` value (0 = not cloaked).
+    pub cloaked: u32,
+}
+
+/// `DWM_CLOAKED_APP`: the app hid this window itself, so it isn't "open".
+const CLOAKED_BY_APP: u32 = 1;
+
+/// The state one window implies, or `None` if it isn't a window a user would
+/// recognize as an open app (most top-level windows are invisible plumbing).
+pub fn window_state(w: &WindowFacts) -> Option<AppState> {
+    if !w.shown || !w.titled || !w.on_taskbar || w.cloaked == CLOAKED_BY_APP {
+        return None;
+    }
+    if w.minimized || w.cloaked != 0 {
+        Some(AppState::Open)
+    } else {
+        Some(AppState::Visible)
+    }
 }
 
 fn normalize_stem(raw: &str) -> String {
@@ -170,9 +220,10 @@ pub fn is_system_stem(stem: &str) -> bool {
     SYSTEM_STEMS.contains(&stem) || SYSTEM_PREFIXES.iter().any(|p| stem.starts_with(p))
 }
 
-/// Pure core: filter, dedupe with counts, tag browsers, sort by name.
+/// Pure core: filter, dedupe with counts, tag browsers, sort by state then
+/// name.
 pub fn summarize_apps(procs: &[AppProc]) -> Vec<RunningApp> {
-    let mut counts: BTreeMap<String, u32> = BTreeMap::new();
+    let mut seen: BTreeMap<String, (u32, AppState)> = BTreeMap::new();
     for p in procs {
         if !p.has_exe {
             continue;
@@ -181,16 +232,130 @@ pub fn summarize_apps(procs: &[AppProc]) -> Vec<RunningApp> {
         if stem.is_empty() || PROTECTED_STEMS.contains(&stem.as_str()) || is_system_stem(&stem) {
             continue;
         }
-        *counts.entry(stem).or_insert(0) += 1;
+        let entry = seen.entry(stem).or_insert((0, AppState::Background));
+        entry.0 += 1;
+        entry.1 = entry.1.min(p.state);
     }
-    counts
+    let mut apps: Vec<RunningApp> = seen
         .into_iter()
-        .map(|(name, count)| RunningApp {
+        .map(|(name, (count, state))| RunningApp {
             is_browser: classify(&name, &[]) != BrowserClass::Unrelated,
             name,
             count,
+            state,
         })
-        .collect()
+        .collect();
+    // Stable, so each state keeps the map's name order.
+    apps.sort_by_key(|a| a.state);
+    apps
+}
+
+#[cfg(windows)]
+mod win {
+    //! Top-level window survey. Callbacks must not panic: unwinding across
+    //! `extern "system"` aborts the process.
+
+    use std::collections::HashMap;
+
+    use windows_sys::core::BOOL;
+    use windows_sys::Win32::Foundation::{HWND, LPARAM};
+    use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumChildWindows, EnumWindows, GetClassNameW, GetWindow, GetWindowLongW,
+        GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, GWL_EXSTYLE,
+        GW_OWNER, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    };
+
+    use super::{window_state, AppState, WindowFacts};
+
+    /// UWP apps draw inside a frame owned by ApplicationFrameHost; the app's
+    /// own process only appears as a child of this window class.
+    const UWP_FRAME_CLASS: &str = "ApplicationFrameWindow";
+
+    fn merge(states: &mut HashMap<u32, AppState>, pid: u32, state: AppState) {
+        let slot = states.entry(pid).or_insert(state);
+        *slot = (*slot).min(state);
+    }
+
+    unsafe fn window_pid(hwnd: HWND) -> u32 {
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        pid
+    }
+
+    unsafe fn is_uwp_frame(hwnd: HWND) -> bool {
+        let mut buf = [0u16; 64];
+        let len = GetClassNameW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+        len > 0 && String::from_utf16_lossy(&buf[..len as usize]) == UWP_FRAME_CLASS
+    }
+
+    unsafe fn facts(hwnd: HWND) -> WindowFacts {
+        let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        let owned = !GetWindow(hwnd, GW_OWNER).is_null();
+        let hidden_from_taskbar = owned || ex & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) != 0;
+        let mut cloaked = 0u32;
+        let hr = DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED as u32,
+            (&mut cloaked as *mut u32).cast(),
+            size_of::<u32>() as u32,
+        );
+        WindowFacts {
+            shown: IsWindowVisible(hwnd) != 0,
+            titled: GetWindowTextLengthW(hwnd) > 0,
+            on_taskbar: !hidden_from_taskbar || ex & WS_EX_APPWINDOW != 0,
+            minimized: IsIconic(hwnd) != 0,
+            cloaked: if hr == 0 { cloaked } else { 0 },
+        }
+    }
+
+    unsafe extern "system" fn collect_child_pid(child: HWND, lparam: LPARAM) -> BOOL {
+        let pids = &mut *(lparam as *mut Vec<u32>);
+        pids.push(window_pid(child));
+        1
+    }
+
+    unsafe extern "system" fn visit_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let states = &mut *(lparam as *mut HashMap<u32, AppState>);
+        if let Some(state) = window_state(&facts(hwnd)) {
+            let pid = window_pid(hwnd);
+            merge(states, pid, state);
+            if is_uwp_frame(hwnd) {
+                let mut children: Vec<u32> = Vec::new();
+                EnumChildWindows(
+                    hwnd,
+                    Some(collect_child_pid),
+                    &mut children as *mut Vec<u32> as LPARAM,
+                );
+                for child in children.into_iter().filter(|c| *c != pid) {
+                    merge(states, child, state);
+                }
+            }
+        }
+        1
+    }
+
+    pub fn window_states() -> HashMap<u32, AppState> {
+        let mut states: HashMap<u32, AppState> = HashMap::new();
+        // SAFETY: `states` outlives the synchronous enumeration, and the
+        // callback is the only user of the pointer while it runs.
+        unsafe {
+            EnumWindows(
+                Some(visit_window),
+                &mut states as *mut HashMap<u32, AppState> as LPARAM,
+            );
+        }
+        states
+    }
+}
+
+#[cfg(windows)]
+use win::window_states;
+
+/// No window signal off Windows (the companion UI is Windows-only).
+#[cfg(not(windows))]
+fn window_states() -> std::collections::HashMap<u32, AppState> {
+    Default::default()
 }
 
 /// Snapshot the live process table (exe paths only — no cmdlines).
@@ -201,18 +366,27 @@ pub fn list_running_apps() -> Vec<RunningApp> {
         true,
         ProcessRefreshKind::nothing().with_exe(UpdateKind::OnlyIfNotSet),
     );
+    let windows = window_states();
     let procs: Vec<AppProc> = sys
         .processes()
-        .values()
-        .map(|p| match p.exe().and_then(|path| path.file_stem()) {
-            Some(stem) => AppProc {
-                stem: stem.to_string_lossy().into_owned(),
-                has_exe: true,
-            },
-            None => AppProc {
-                stem: p.name().to_string_lossy().into_owned(),
-                has_exe: false,
-            },
+        .iter()
+        .map(|(pid, p)| {
+            let state = windows
+                .get(&pid.as_u32())
+                .copied()
+                .unwrap_or(AppState::Background);
+            match p.exe().and_then(|path| path.file_stem()) {
+                Some(stem) => AppProc {
+                    stem: stem.to_string_lossy().into_owned(),
+                    has_exe: true,
+                    state,
+                },
+                None => AppProc {
+                    stem: p.name().to_string_lossy().into_owned(),
+                    has_exe: false,
+                    state,
+                },
+            }
         })
         .collect();
     summarize_apps(&procs)
@@ -226,6 +400,21 @@ mod tests {
         AppProc {
             stem: stem.into(),
             has_exe: true,
+            state: AppState::Background,
+        }
+    }
+
+    fn with_state(stem: &str, state: AppState) -> AppProc {
+        AppProc { state, ..p(stem) }
+    }
+
+    fn window() -> WindowFacts {
+        WindowFacts {
+            shown: true,
+            titled: true,
+            on_taskbar: true,
+            minimized: false,
+            cloaked: 0,
         }
     }
 
@@ -246,30 +435,112 @@ mod tests {
                 RunningApp {
                     name: "brave".into(),
                     count: 1,
-                    is_browser: true
+                    is_browser: true,
+                    state: AppState::Background,
                 },
                 RunningApp {
                     name: "discord".into(),
                     count: 1,
-                    is_browser: false
+                    is_browser: false,
+                    state: AppState::Background,
                 },
                 RunningApp {
                     name: "msedge".into(),
                     count: 2,
-                    is_browser: true
+                    is_browser: true,
+                    state: AppState::Background,
                 },
                 RunningApp {
                     name: "steam".into(),
                     count: 2,
-                    is_browser: false
+                    is_browser: false,
+                    state: AppState::Background,
                 },
                 RunningApp {
                     name: "steamwebhelper".into(),
                     count: 1,
-                    is_browser: false
+                    is_browser: false,
+                    state: AppState::Background,
                 },
             ]
         );
+    }
+
+    #[test]
+    fn sorts_visible_then_open_then_background_and_by_name_within() {
+        let apps = summarize_apps(&[
+            p("anki"),
+            with_state("zoom", AppState::Visible),
+            with_state("slack", AppState::Open),
+            with_state("code", AppState::Visible),
+            with_state("notion", AppState::Open),
+            p("spotify"),
+        ]);
+        assert_eq!(
+            apps.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(),
+            vec!["code", "zoom", "notion", "slack", "anki", "spotify"]
+        );
+    }
+
+    #[test]
+    fn most_present_process_decides_regardless_of_order() {
+        for procs in [
+            [
+                p("code"),
+                with_state("code", AppState::Visible),
+                with_state("code", AppState::Open),
+            ],
+            [
+                with_state("code", AppState::Open),
+                with_state("code", AppState::Visible),
+                p("code"),
+            ],
+        ] {
+            let apps = summarize_apps(&procs);
+            assert_eq!(apps.len(), 1);
+            assert_eq!(apps[0].count, 3);
+            assert_eq!(apps[0].state, AppState::Visible);
+        }
+    }
+
+    #[test]
+    fn window_states_follow_what_the_user_can_see() {
+        assert_eq!(window_state(&window()), Some(AppState::Visible));
+        let minimized = WindowFacts {
+            minimized: true,
+            ..window()
+        };
+        assert_eq!(window_state(&minimized), Some(AppState::Open));
+        // DWM_CLOAKED_SHELL: parked on another virtual desktop.
+        let other_desktop = WindowFacts {
+            cloaked: 2,
+            ..window()
+        };
+        assert_eq!(window_state(&other_desktop), Some(AppState::Open));
+    }
+
+    #[test]
+    fn plumbing_windows_do_not_count_as_open() {
+        for w in [
+            WindowFacts {
+                shown: false,
+                ..window()
+            },
+            WindowFacts {
+                titled: false,
+                ..window()
+            },
+            WindowFacts {
+                on_taskbar: false,
+                ..window()
+            },
+            WindowFacts {
+                cloaked: 1,
+                ..window()
+            },
+        ] {
+            assert_eq!(window_state(&w), None, "{w:?}");
+        }
     }
 
     #[test]
@@ -290,6 +561,7 @@ mod tests {
             AppProc {
                 stem: "ghostapp".into(),
                 has_exe: false,
+                state: AppState::Background,
             },
             p("spotify"),
         ]);
@@ -313,11 +585,12 @@ mod tests {
             name: "x".into(),
             count: 1,
             is_browser: true,
+            state: AppState::Open,
         })
         .unwrap();
         assert_eq!(
             v,
-            serde_json::json!({ "name": "x", "count": 1, "isBrowser": true })
+            serde_json::json!({ "name": "x", "count": 1, "isBrowser": true, "state": "open" })
         );
     }
 
@@ -331,7 +604,7 @@ mod tests {
             assert!(a.count >= 1);
         }
         let mut sorted = apps.clone();
-        sorted.sort_by(|a, b| a.name.cmp(&b.name));
+        sorted.sort_by(|a, b| a.state.cmp(&b.state).then_with(|| a.name.cmp(&b.name)));
         assert_eq!(apps, sorted);
     }
 }

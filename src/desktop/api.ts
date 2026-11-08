@@ -61,11 +61,15 @@ export interface DesktopStatus {
   autostart: boolean;
 }
 
+/** visible: window on screen · open: minimized or on another desktop · background: no window. */
+export type AppState = 'visible' | 'open' | 'background';
+
 export interface RunningApp {
   /** Lowercase exe stem, no ".exe". */
   name: string;
   count: number;
   isBrowser: boolean;
+  state: AppState;
 }
 
 /** One raw events.log line (`<ms> <kind> <detail>`), newest first. */

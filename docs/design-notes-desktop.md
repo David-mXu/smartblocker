@@ -50,6 +50,15 @@ Blocked-app entries and the running-apps picker share
 suffix like `agy.exe.1793826601058390500`), so a picked name keeps matching
 after the app updates itself.
 
+## Running-apps order
+
+The picker lists every running app in three groups, each sorted by name:
+**On your screen** (a taskbar-style window showing), **Open, not on your screen**
+(minimized or on another virtual desktop), **Running in the background** (no such
+window). An app takes the most present state of any of its processes.
+`apps.rs window_state` decides per window. Browsers stay off the list (Browsers
+page), and OS plumbing stays off because closing it would break the session.
+
 ## Test mode
 
 Debug builds only, plus env `SMARTBLOCKER_TEST_MODE=1`: scratch data dir,
@@ -60,7 +69,7 @@ browsers open: the watchdog closes browsers with no connected extension.
 
 ## Known gaps
 
-- The running-apps picker lists background helpers (`Appactions`, `Cmd`, …). The
-  fix is listing only apps with a visible window.
+- Apps closed to the system tray count as background: Windows has no supported
+  way to list tray icons.
 - Tray menu items, the quit guard, normal-mode toasts, real `install_integration`
   and a release build are not yet exercised (see the learning note).

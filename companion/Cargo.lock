@@ -3208,6 +3208,7 @@ dependencies = [
  "serde_json",
  "sysinfo",
  "tempfile",
+ "windows-sys 0.61.2",
  "winreg 0.56.0",
 ]
 

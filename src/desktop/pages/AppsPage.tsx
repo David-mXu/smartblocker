@@ -3,7 +3,7 @@ import { ArrowsClockwise, LockSimple, MagnifyingGlass, X } from '@phosphor-icons
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { SettingsGroup, SettingsSection } from '../../components/ui/settings';
-import { errorText, invoke, type RunningApp } from '../api';
+import { errorText, invoke, type AppState, type RunningApp } from '../api';
 import { friendlyAppName, normalizeAppName, splitAppNames } from '../apps';
 import { lockedUntilText } from '../format';
 import { FormMessage, LockedNote, Page, type Message } from '../components/Page';
@@ -12,6 +12,12 @@ import { useStatus } from '../useDesktop';
 // Blocked apps: the list the companion closes during any lock. Add-only while
 // locked (the Rust command refuses removals; the UI disables them up front
 // and still surfaces the refusal text if a lock starts mid-click).
+
+const RUNNING_GROUPS: { state: AppState; label: string }[] = [
+  { state: 'visible', label: 'On your screen' },
+  { state: 'open', label: 'Open, not on your screen' },
+  { state: 'background', label: 'Running in the background' },
+];
 
 export function AppsPage() {
   const { status, now, refresh } = useStatus();
@@ -199,7 +205,7 @@ function RunningAppsPicker({
   return (
     <SettingsSection
       title="Add from running apps"
-      description="Apps open on this computer right now."
+      description="Everything running on this computer, starting with what’s on your screen."
       aside={
         <Button variant="ghost" size="xs" onClick={() => void load()} disabled={loading} aria-label="Refresh running apps">
           <ArrowsClockwise className={loading ? 'size-3.5 animate-spin' : 'size-3.5'} aria-hidden />
@@ -236,33 +242,44 @@ function RunningAppsPicker({
             {q ? `Nothing running matches “${query}”. You can still add it by name above.` : 'No apps found.'}
           </p>
         ) : (
-          <ul id="running-list" aria-label="Running apps" className="m-0 flex max-h-[264px] list-none flex-col divide-y divide-border overflow-y-auto p-0">
-            {visible.map((a) => {
-              const isBlocked = blocked.includes(a.name);
+          <div id="running-list" className="max-h-[320px] overflow-y-auto">
+            {RUNNING_GROUPS.map(({ state, label }) => {
+              const rows = visible.filter((a) => a.state === state);
+              if (rows.length === 0) return null;
               return (
-                <li key={a.name} className="running-row flex h-10 shrink-0 items-center justify-between gap-3 pl-4 pr-2">
-                  <span className="flex min-w-0 items-baseline gap-2">
-                    <span className="truncate text-sm">{friendlyAppName(a.name)}</span>
-                    <span className="truncate font-mono text-xs text-faint">{a.name}.exe</span>
-                  </span>
-                  {isBlocked ? (
-                    <span className="pr-2.5 text-xs text-faint">Already blocked</span>
-                  ) : (
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      className="running-add"
-                      aria-label={`Add ${friendlyAppName(a.name)}`}
-                      disabled={saving}
-                      onClick={() => onAdd(a.name)}
-                    >
-                      Add
-                    </Button>
-                  )}
-                </li>
+                <section key={state} aria-label={label}>
+                  <h4 className="sticky top-0 z-10 m-0 flex items-baseline justify-between gap-3 border-b border-border bg-card px-4 py-1.5 text-xs font-medium text-muted-foreground">
+                    {label}
+                    <span className="font-normal tabular-nums text-faint">{rows.length}</span>
+                  </h4>
+                  <ul className="m-0 flex list-none flex-col divide-y divide-border p-0">
+                    {rows.map((a) => (
+                      <li key={a.name} className="running-row flex h-10 shrink-0 items-center justify-between gap-3 pl-4 pr-2">
+                        <span className="flex min-w-0 items-baseline gap-2">
+                          <span className="truncate text-sm">{friendlyAppName(a.name)}</span>
+                          <span className="truncate font-mono text-xs text-faint">{a.name}.exe</span>
+                        </span>
+                        {blocked.includes(a.name) ? (
+                          <span className="pr-2.5 text-xs text-faint">Already blocked</span>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            className="running-add"
+                            aria-label={`Add ${friendlyAppName(a.name)}`}
+                            disabled={saving}
+                            onClick={() => onAdd(a.name)}
+                          >
+                            Add
+                          </Button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
               );
             })}
-          </ul>
+          </div>
         )}
       </SettingsGroup>
       {browsersHidden > 0 && (
