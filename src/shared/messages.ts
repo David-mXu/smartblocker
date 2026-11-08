@@ -1,5 +1,6 @@
 // popup/options/offscreen <-> background message contract.
 import type { CompanionSnapshot } from './companion-protocol';
+import type { UsageStatsExport } from './usage-stats';
 import type { BreakMode } from './breaks';
 import type { LockStatus } from './lock-math';
 import type { SubItemEvalRequest, SubItemEvalResult } from '../content/sanitize-page';
@@ -24,6 +25,9 @@ export interface Override {
 }
 
 export type Request =
+  // Local-only idle-aware aggregates; export shape contains no URLs or titles.
+  | { type: 'GET_USAGE_STATS' }
+  | { type: 'CLEAR_USAGE_STATS' }
   | { type: 'TEST_PAIR' }
   | { type: 'SCAN_HISTORY' }
   // Offscreen-document RPC: pure inference primitives, so the offscreen worker
@@ -92,6 +96,12 @@ export interface DeleteSharedFeedbackResponse {
   ok: boolean;
   /** Rows the worker reported deleted (0 is normal if nothing was shared). */
   deleted?: number;
+  error?: string;
+}
+
+export interface UsageStatsResponse {
+  ok: boolean;
+  stats?: UsageStatsExport;
   error?: string;
 }
 

@@ -8,7 +8,7 @@ import { getLockState, getLockStatus } from '../shared/lock';
 import type { LockStatus } from '../shared/lock-math';
 import { getPendingFocusSession, type PendingFocusSession } from '../shared/focus-session';
 import { getTabStatus, type TabStatus } from '../shared/tab-status';
-import { isClassifiableUrl, isWhitelisted, matchedBlocklistEntry } from '../shared/titles';
+import { isClassifiableUrl, matchedBlocklistEntry, matchingWhitelistEntries } from '../shared/titles';
 import { hostnameOf } from '../shared/url-signals';
 import { inlineLabel, NEUTRAL_LABEL_PREFIX } from '../shared/labels';
 import type { CompanionSnapshot } from '../shared/companion-protocol';
@@ -174,19 +174,7 @@ export interface PageView {
   allowedBy: string[];
 }
 
-function whitelistMatches(host: string, whitelist: string[]): string[] {
-  const h = host.toLowerCase();
-  return whitelist.filter((entry) => {
-    const e = entry
-      .trim()
-      .toLowerCase()
-      .replace(/^[a-z]+:\/\//, '')
-      .replace(/\/.*$/, '')
-      .replace(/^www\./, '');
-    return e !== '' && (h === e || h.endsWith('.' + e));
-  });
-}
-
+// Matching rules come from the same URL-aware shared API as the allow verdict.
 function describeNonWeb(url: string): string {
   if (!url) return '';
   try {
@@ -264,14 +252,15 @@ export function derivePageView(data: PopupData): PageView {
     };
   }
 
-  if (isWhitelisted(url, settings.whitelist)) {
+  const allowedBy = matchingWhitelistEntries(url, settings.whitelist);
+  if (allowedBy.length > 0) {
     return {
       ...BASE,
       where: host,
       tone: 'allowed',
       headline: 'Always allowed',
       detail: 'It’s on your allowed sites, so it’s never checked.',
-      allowedBy: whitelistMatches(host, settings.whitelist),
+      allowedBy,
     };
   }
 

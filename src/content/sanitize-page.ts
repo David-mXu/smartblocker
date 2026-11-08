@@ -412,11 +412,54 @@ export function sanitizePage(opts: SanitizePageOptions): {
       .trim();
   }
 
+  // Local mirror of shared/titles.ts: sanitizePage is serialized, so this
+  // ordered-literal implementation must remain self-contained (no imports).
+  function matchesOrderedWildcard(haystack: string, rawPattern: string, anchored: boolean): boolean {
+    const pattern = rawPattern.replace(/\*+/g, '*');
+    if (!pattern.includes('*')) return anchored ? haystack === pattern : haystack.includes(pattern);
+    if (!pattern.replace(/[\s*]/g, '')) return false;
+
+    let body = pattern;
+    let start = 0;
+    let end = haystack.length;
+    if (anchored && !body.startsWith('*')) {
+      const star = body.indexOf('*');
+      const prefix = body.slice(0, star);
+      if (!haystack.startsWith(prefix)) return false;
+      start = prefix.length;
+      body = body.slice(star);
+    }
+    if (anchored && !body.endsWith('*')) {
+      const star = body.lastIndexOf('*');
+      const suffix = body.slice(star + 1);
+      if (!haystack.endsWith(suffix)) return false;
+      end = haystack.length - suffix.length;
+      if (end < start) return false;
+      body = body.slice(0, star + 1);
+    }
+
+    let cursor = start;
+    for (const literal of body.split('*')) {
+      if (!literal) continue;
+      const found = haystack.indexOf(literal, cursor);
+      if (found < 0 || found + literal.length > end) return false;
+      cursor = found + literal.length;
+    }
+    return true;
+  }
+
   function matchesBlocklist(url: string, title: string, list: string[]): string | null {
-    const hay = `${url} ${title}`.toLowerCase();
+    if (!url || !Array.isArray(list)) return null;
+    const hay = `${url} ${title ?? ''}`.toLowerCase();
     for (let i = 0; i < list.length; i++) {
-      const needle = (list[i] ?? '').trim().toLowerCase();
-      if (needle && hay.includes(needle)) return list[i].trim();
+      if (typeof list[i] !== 'string') continue;
+      const needle = list[i].trim().toLowerCase();
+      if (!needle) continue;
+      if (!needle.includes('*')) {
+        if (hay.includes(needle)) return list[i].trim();
+      } else if (matchesOrderedWildcard(hay, needle, false)) {
+        return list[i].trim();
+      }
     }
     return null;
   }

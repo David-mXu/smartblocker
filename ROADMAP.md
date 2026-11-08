@@ -483,10 +483,30 @@ without giving up our architectural ones.
 
 ### Batch 3 — retention + admin (bigger surfaces)
 
+> ✅ **2026-11-08 status:** item **9 is complete**, and item **13's
+> extension-side wildcard block/allow grammar is complete**. The item 13 daemon
+> CLI remains separate, and item 14 accountability-partner codes are unchanged.
+> The completed Batch 3 scope is shipped on `main`; unrelated search/research
+> work was preserved outside this change through path/hunk-specific staging.
+> Final gates: **22** wildcard tests, **22**
+> usage-statistics tests, all Batch 1/2 pure suites, **161** Rust tests,
+> clippy/fmt, typecheck, and Chrome/Firefox builds pass. The **15,874-case** eval
+> reports **PASS: no regressions** with no per-case changes and unchanged input
+> files. The final two consecutive Playwright reruns report **E2E: ALL PASSED**.
+> One earlier concurrent attempt failed only the YouTube page-visibility timing
+> assertion despite correct individual verdicts; it did not reproduce on either
+> unchanged rerun, so no root cause is claimed.
+
 9. **Idle-aware usage statistics + dashboard** (per-day per-site/category
    counters + "pages silenced this week" + override-rate; JSON export;
    computed from tab events, not `chrome.history`, so incognito-inclusive
    and history-clear-independent — CT parity).
+   **Complete (2026-11-08):** bounded local-day aggregates,
+   conservative focus/idle active-time accounting, seven-day counters and
+   override rate, per-day site/category tables, aggregate-only JSON export, and
+   confirmed clearing are integrated. Rule-derived labels collapse to the
+   generic `blocked by rule` category before storage. See
+   `docs/learning-notes/2026-11-08-idle-aware-usage-statistics.md`.
 10. **Breaks v2: Allowance / Reward / Sessions / Pomodoro** (escalating
     cost per use — Opal Waiting-Room pattern).
 11. **Multi-browser onboarding + "Fix extensions" surface** (companion
@@ -497,7 +517,13 @@ without giving up our architectural ones.
     `policy_enforce` after the Phase 3 store listing.
 13. **Wildcard list grammar** (`*` anywhere in blocklist/whitelist rules —
     CT-compatible) + **CLI on the daemon socket** (`block start|stop|toggle`,
-    `lock`, partner codes) for automation tools.
+    `lock`) for automation tools; accountability-partner codes remain item 14.
+    **Extension-side wildcard grammar complete (2026-11-08):**
+    star-free legacy behavior is preserved; wildcard blocking uses ordered
+    literals, constrained allows remain anchored, SERP guards precede allows,
+    and popup allow display/removal uses the shared matcher. The **daemon CLI
+    remains open**, and partner codes belong to item 14. See
+    `docs/learning-notes/2026-11-08-wildcard-list-grammar.md`.
 14. **Per-category schedules** (then per-list after the multi-list UI
     redesign) and **accountability-partner unlock codes** (offline-signed,
     24 h partner-activation delay).

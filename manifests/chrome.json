@@ -34,6 +34,7 @@
     "alarms",
     "declarativeNetRequest",
     "history",
+    "idle",
     "nativeMessaging",
     "notifications",
     "offscreen",

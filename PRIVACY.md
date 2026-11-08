@@ -3,7 +3,7 @@
 **SmartBlocker is local-first.** Page classification runs entirely on your device
 (a small model via Transformers.js/ONNX WASM). Your browsing — URLs, titles,
 history, whitelist, blocklist, settings — never leaves your machine.
-SmartBlocker has no analytics, no tracking, and no telemetry. It makes network
+SmartBlocker has no third-party analytics, no behavioral tracking, and no telemetry. It makes network
 requests in exactly three situations — a one-time model download, and two
 off-by-default opt-ins — every one of them enumerated in "Network requests"
 below. Nothing else ever leaves your machine.
@@ -49,6 +49,38 @@ correction record **on your device** (`storage.local`, capped at 500):
 The classifier learns from these records locally (they refine its category
 prototypes). You can view the count, **export them as JSON**, or **clear them**
 at any time from the options page.
+
+## Local usage statistics (idle-aware)
+
+The options **Usage** page reports approximate active time, per-local-day
+hostname/category totals, distinct blocked page decisions, and completed
+block-screen overrides. It is computed from tab, window-focus, system-idle, and
+existing per-tab verdict events — **never from `chrome.history`**. The separate
+history-review feature still runs only when explicitly requested.
+
+These aggregates stay in this browser profile's `storage.local` under
+`usageStats:v1`. Stored fields are local calendar dates, hostnames, category
+names, active-time totals, decision/action counters, a foreground checkpoint,
+and bounded opaque navigation IDs used to suppress duplicate blocked statuses.
+There are no full URLs, paths, query strings, page titles, scores, rule text, or
+page-history log. Rule-derived verdict labels collapse to the generic
+**blocked by rule** category before they can enter a checkpoint or daily bucket.
+Host/category maps and duplicate IDs are bounded, aggregates
+are pruned after **35 local days**, and no usage data is sent over the network.
+JSON export is a manual download of those same local aggregates. Opaque
+checkpoints and duplicate-suppression IDs are omitted from the exported file.
+
+**Incognito/private access is intentionally included** whenever the extension is
+allowed to run there. Usage aggregates do not depend on browser history, so
+clearing history does not remove them. **Options → Usage → Clear usage** purges
+this local namespace after a second-click confirmation; new activity starts a
+fresh set of aggregates afterward.
+
+Active time is deliberately approximate and privacy-preserving: only the
+focused window's active http/https tab while the system reports active can
+accrue it. Idle/background gaps, worker/browser restarts, and stale checkpoints
+are conservatively discarded. If focus or idle APIs are unavailable, event
+counters still work but active-time accrual stops rather than guessing.
 
 ## Opt-in sharing (default: OFF)
 

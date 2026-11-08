@@ -16,6 +16,7 @@ import type {
   SharedFeedbackInfoResponse,
   SubItemsResponse,
   TestPairResponse,
+  UsageStatsResponse,
 } from '../shared/messages';
 import { classify } from './classifier';
 import { consumeOverrideToken } from './override-tokens';
@@ -35,6 +36,12 @@ import { initResumeEnforcer } from './resume-enforcer';
 import { scanHistory } from './history-ingester';
 import { initFocusSessionCommitter } from '../shared/focus-session';
 import { recordTabStatus } from '../shared/tab-status';
+import {
+  clearUsageStatsSnapshot,
+  getUsageStatsSnapshot,
+  initUsageStats,
+  recordUsageOverrideAction,
+} from './usage-stats';
 
 console.log('[SmartBlocker] background started');
 
@@ -56,6 +63,7 @@ initLockEnforcer();
 initResumeEnforcer(); // registers runtime.onStartup here (auto-resume, constraint #4)
 initCompanionBridge();
 initFocusSessionCommitter();
+initUsageStats();
 
 // First-run onboarding: open the 3-step welcome wizard (options.html#welcome)
 // so the user picks what to block. Plain options.html never forces the
@@ -76,7 +84,8 @@ api.runtime.onMessage.addListener(
         | CompanionStatusResponse
         | SubItemsResponse
         | SharedFeedbackInfoResponse
-        | DeleteSharedFeedbackResponse,
+        | DeleteSharedFeedbackResponse
+        | UsageStatsResponse,
     ) => void,
   ) => {
     // Defense-in-depth (red-team #34): only this extension's own contexts
@@ -116,7 +125,14 @@ api.runtime.onMessage.addListener(
         // minted at injection is consumed once, so replayed or forged
         // OVERRIDE messages can't write overrides or feedback.
         if (!(await consumeOverrideToken(msg.nonce))) return;
-        await addOverride(msg.title, hostnameOf(sender.tab?.url ?? msg.url ?? ''));
+        const overrideUrl = sender.tab?.url ?? msg.url ?? '';
+        await addOverride(msg.title, hostnameOf(overrideUrl));
+        // Count only this authenticated user action, never an "overridden"
+        // status produced by an old allow rule or a page-supplied event. A
+        // local stats outage must not interrupt the existing override flow.
+        await recordUsageOverrideAction({ url: overrideUrl, category: msg.label ?? '' }).catch(
+          (error) => console.warn('[SmartBlocker] usage override counter failed:', error),
+        );
         // Popup "This page" card: reflect the override immediately.
         if (sender.tab?.id !== undefined && sender.tab.url) {
           void recordTabStatus(sender.tab.id, {
@@ -231,6 +247,18 @@ api.runtime.onMessage.addListener(
     if (msg?.type === 'CANCEL_BREAK') {
       cancelConfiguredBreak()
         .then((status) => sendResponse({ ok: true, status }))
+        .catch((e) => sendResponse({ ok: false, error: String(e) }));
+      return true;
+    }
+    if (msg?.type === 'GET_USAGE_STATS') {
+      getUsageStatsSnapshot()
+        .then((stats) => sendResponse({ ok: true, stats }))
+        .catch((e) => sendResponse({ ok: false, error: String(e) }));
+      return true;
+    }
+    if (msg?.type === 'CLEAR_USAGE_STATS') {
+      clearUsageStatsSnapshot()
+        .then((stats) => sendResponse({ ok: true, stats }))
         .catch((e) => sendResponse({ ok: false, error: String(e) }));
       return true;
     }

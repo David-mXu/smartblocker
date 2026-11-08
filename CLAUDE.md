@@ -3,15 +3,15 @@
 Smart distraction blocker: a fully-local AI model classifies page titles and
 blocks off-topic content without blocking whole sites.
 **SmartBlocker watches every `http(s)` site except the user's whitelist** (domain +
-subdomain match, seeded with a safe default list in `config.ts`
-`DEFAULT_WHITELIST`; user-editable on the options page). **Search engines are
+subdomain match plus safe fully-anchored host/URL wildcards, seeded with a safe
+default list in `config.ts` `DEFAULT_WHITELIST`; user-editable on the options page). **Search engines are
 deliberately NOT whitelisted** (2026-11-07): a `google.com` root exempted Google
 News, image viewers and inline video previews — the standard YouTube bypass — so only
 productive Google subdomains (`GOOGLE_PRODUCTIVE_HOSTS`) are listed, and
 existing stored lists migrate once via `settings.ts` `whitelistVersion`. It also supports an
 **opt-in deterministic blocklist** (`config.ts`/`settings.ts` `blocklist`,
-empty by default): substring matches against the URL + title skip the ML
-classifier entirely and block instantly. A sibling **title rules** list
+empty by default): substring matches with optional `*` ordered-literal gaps
+against the URL + title skip the ML classifier entirely and block instantly. A sibling **title rules** list
 (`settings.ts` `titleRules`, `shared/rules.ts`, empty by default) does
 title-only substring matching with optional `*` wildcards at the same ladder
 position, labeled `title rule: "…"`. Two **channel lists**
@@ -99,9 +99,17 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   derivations (`src/shared/resume.ts` — also erasable-syntax-only and
   Node-imported; its runtime import of lock-math carries an explicit `.ts`
   extension, enabled by tsconfig `allowImportingTsExtensions`).
+- `node scripts/usage-stats-test.mjs` — idle-aware usage local-midnight/DST,
+  counter-deduplication, retention/export, batched persistence/restart recovery,
+  and mocked browser-event integration (`src/shared/usage-stats.ts` is the pure
+  erasable-syntax-only core; `src/background/usage-stats-tracker.ts` is also
+  directly Node-tested with in-memory storage).
 - `node scripts/rules-test.mjs` — pure unit tests for the deterministic rule
   core: title-rule compiler/matcher + channel rules (`src/shared/rules.ts`,
   same type-stripping constraints).
+- `node scripts/wildcards-test.mjs` — pure unit tests for URL/title blocklist
+  and whitelist wildcard grammar + legacy normalization, safe allow rejection,
+  popup shared-API wiring, and direct serialized-sanitizer matcher parity.
 - `node scripts/rta-test.mjs` — pure unit tests for the opt-in adult-site
   deterministic rule (`src/shared/rules.ts` `isAdultHost`, same
   erasable-syntax-only constraint) plus a source tripwire for the in-page
@@ -243,9 +251,17 @@ Commit and push when appropriate.
     if Chrome reaps it despite the open port (else the companion watchdog
     would false-positive). Snapshot cached in storage.local
     `companionSnapshot` for the options page (`GET_COMPANION_STATUS`).
-  - `history-ingester.ts` scans chrome.history; `index.ts` wires listeners,
-    first-run onboarding, and the `OVERRIDE` / `REPORT_FN` / `CLOSE_TAB`
-    handlers.
+  - `usage-stats.ts` + `usage-stats-tracker.ts` — idle/focus-gated active-time
+    checkpoints and local-day host/category counters from tab events + existing
+    `storage.session` verdicts, never `chrome.history`. One-minute heartbeat,
+    15-second write batching, 135-second stale-gap discard, restart-only
+    recovery, 35-local-day retention, bounded duplicate IDs and bucket maps.
+    Authenticated OVERRIDE actions increment the override numerator; blocked
+    page/navigation decisions increment pages-silenced once. New local key:
+    `usageStats:v1`; no URLs/titles/score/rule text or network telemetry.
+  - `history-ingester.ts` scans chrome.history (only the explicitly triggered
+    history-review feature); `index.ts` wires listeners, first-run onboarding,
+    and the `OVERRIDE` / `REPORT_FN` / `CLOSE_TAB` handlers.
 - **UI design system: read `docs/design-notes.md` ("Lamplight") before any
   UI change** — tokens, type/spacing scale, component specs, amber-means-
   commitment rule, block-screen spec, and the DOM-ID/strings contract the
@@ -269,7 +285,8 @@ Commit and push when appropriate.
   `pages/*`, `welcome/*`) — sidebar settings, ONE page at a time via hash
   routes: `#blocking` (switch, strictness presets, categories, history
   review), `#sites` (`ListEditor` Always allow / Always block), `#focus`,
-  `#locks` (+ incognito-access warning), `#schedule` (focus hours),
+  `#locks` (+ incognito-access warning), `#schedule` (focus hours), `#usage`
+  (idle-aware local-day host/category dashboard + JSON export/clear),
   `#companion`, `#privacy`, `#advanced` (exact threshold slider +
   diagnostics: Test classifier / Scan history / Latency log → `#out`), and
   `#welcome` — the 3-step first-run wizard (`onInstalled` opens it; plain

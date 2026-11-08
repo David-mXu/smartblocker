@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   CalendarBlank,
+  ChartLineUp,
   Desktop,
   Globe,
   LockSimple,
@@ -23,6 +24,7 @@ import { SchedulePage } from './pages/SchedulePage';
 import { CompanionPage } from './pages/CompanionPage';
 import { PrivacyPage } from './pages/PrivacyPage';
 import { AdvancedPage } from './pages/AdvancedPage';
+import { UsagePage } from './pages/UsagePage';
 
 // Options shell: slim header + sidebar + ONE page at a time, hash-routed
 // (options.html#sites). #welcome renders the first-run wizard full-page.
@@ -41,6 +43,7 @@ const PAGES: PageDef[] = [
   { id: 'focus', label: 'Focus', icon: Target, Component: FocusPage },
   { id: 'locks', label: 'Locks', icon: LockSimple, Component: LocksPage },
   { id: 'schedule', label: 'Focus hours', icon: CalendarBlank, Component: SchedulePage },
+  { id: 'usage', label: 'Usage', icon: ChartLineUp, Component: UsagePage },
   { id: 'companion', label: 'Desktop app', icon: Desktop, Component: CompanionPage },
   { id: 'privacy', label: 'Privacy & data', icon: ShieldCheck, Component: PrivacyPage },
   { id: 'advanced', label: 'Advanced', icon: SlidersHorizontal, Component: AdvancedPage },

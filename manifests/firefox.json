@@ -36,6 +36,7 @@
     "alarms",
     "declarativeNetRequest",
     "history",
+    "idle",
     "nativeMessaging",
     "notifications",
     "scripting",

@@ -32,7 +32,7 @@ export function SitesPage({ state }: { state: OptionsState }) {
     >
       <SettingsSection
         title="Always allow"
-        description="Subdomains are included — github.com also allows gist.github.com. Allowed sites are never checked."
+        description="Subdomains are included — github.com also allows gist.github.com. Use * for a wildcard within a specific site, like *.github.com or github.com/*/pulls. Allowed sites are never checked."
         aside={
           <span className="text-xs tabular-nums text-faint">
             {settings.whitelist.length} {settings.whitelist.length === 1 ? 'site' : 'sites'}
@@ -70,7 +70,7 @@ export function SitesPage({ state }: { state: OptionsState }) {
           <div className="flex flex-col gap-2.5 px-4 py-3.5">
             <p className="m-0 text-[13px] text-muted-foreground">
               Matches anywhere in the address or title, ignoring capitals — “/cart” and “black friday”
-              both work.
+              both work. Use * to skip any characters, like “youtube.com*minecraft”.
             </p>
             <ListEditor
               id="blocklist"

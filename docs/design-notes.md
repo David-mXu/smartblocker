@@ -211,8 +211,9 @@ Tint recipe for callouts: `bg-<hue>/10 border-<hue>/30 text-<hue>-soft`.
   context, start a focus session) · Locks `#locks` (timer, password, optional delay/random-text break
   gates, incognito warning; break settings disable while locked) · Focus hours `#schedule` (summary cards, S–M–T–W–T–F–S
   day chips, overnight note, presets "Weekdays 9–5" / "Every evening 7–10 PM")
-  · Desktop app `#companion` · Privacy & data `#privacy` (danger zone last) ·
-  Advanced `#advanced` (exact sensitivity slider; Diagnostics: Test
+  · Usage `#usage` (rolling seven-day silenced pages + override rate, local-day
+  site/category tables, JSON export, two-step clear) · Desktop app `#companion`
+  · Privacy & data `#privacy` (danger zone last) · Advanced `#advanced` (exact sensitivity slider; Diagnostics: Test
   classifier, Scan history, Latency log, `#out`).
 - **Welcome wizard** `#welcome` (`welcome/`): full page, no sidebar, ≤560px
   column, "Step N of 3" bar. 1 "What pulls you off track?" (category rows
@@ -375,6 +376,10 @@ Global: `#banner`, `#lock-status` (visible only when locked, contains
   `#incognito-warning`.
 - `#schedule`: `#schedule-list` (`.schedule-row`, `.day-label`,
   `.schedule-remove`), `#schedule-add`, `#schedule-save`, `#schedule-msg`.
+- `#usage`: `#usage-pages-silenced`, `#usage-override-rate` (dash for an empty
+  denominator), `#usage-active-time`, `#usage-day`, `#usage-sites`,
+  `#usage-categories`, `#usage-export`, `#usage-clear` (second click confirms),
+  `#usage-status`.
 - `#companion`: `#companion-status` ("Get SmartBlocker Companion — coming
   with the Pro release" / "Connected — hardcore mode active…"),
   `#companion-enforcement`, `#companion-grace` (same visibility and truthfulness

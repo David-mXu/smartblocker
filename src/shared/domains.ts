@@ -2,27 +2,36 @@
  * Input normalization for the options/onboarding list editors and the popup's
  * "Always allow this site" action. Pure functions, no browser APIs.
  *
- * - Allowed sites are HOSTNAMES matched by domain + subdomain
+ * - Star-free allowed sites are HOSTNAMES matched by domain + subdomain
  *   (titles.ts isWhitelisted), so anything pasted — a full URL, "www.x.com",
- *   "x.com/path" — is reduced to its bare host.
- * - Always-block entries are SUBSTRINGS of URL + title
+ *   "x.com/path" — is reduced to its bare host. Safe wildcard allow rules are
+ *   retained; *.example.com includes the apex and subdomains, while other
+ *   globs use the fully anchored grammar in titles.ts.
+ * - Always-block entries are URL + title SUBSTRINGS with optional * gaps
  *   (titles.ts matchedBlocklistEntry, which lowercases), so they are only
  *   trimmed + lowercased — "/cart" and "black friday" are valid entries.
  * - Channel entries (the YouTube channel rules) are HANDLES: the leading @ is
  *   optional, stored lowercase (rules.ts normalizeChannelHandle).
  */
-import { normalizeChannelHandle } from './rules';
+import { normalizeChannelHandle } from './rules.ts';
+import { isValidWildcardWhitelistEntry } from './titles.ts';
 
 export type NormalizeResult = { ok: true; value: string } | { ok: false; error: string };
 
 const HOST_RE = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}$/;
 
-/** "https://www.YouTube.com/watch?v=1" → "youtube.com". */
+/** "https://www.YouTube.com/watch?v=1" → "youtube.com"; safe globs stay intact. */
 export function normalizeDomain(input: string): NormalizeResult {
   let raw = input.trim().toLowerCase();
   if (!raw) return { ok: false, error: 'Enter a website, like example.com' };
-  // Allow "*.example.com" wildcards people paste from other blockers.
-  raw = raw.replace(/^\*\./, '');
+  if (raw.includes('*')) {
+    raw = raw.replace(/\*+/g, '*');
+    if (!isValidWildcardWhitelistEntry(raw)) {
+      return { ok: false, error: `"${input.trim()}" needs a specific website host with its wildcard` };
+    }
+    return { ok: true, value: raw };
+  }
+  // Preserve legacy star-free URL/path normalization exactly.
   let host = raw;
   try {
     const withScheme = /^[a-z][a-z0-9+.-]*:\/\//.test(raw) ? raw : `https://${raw}`;

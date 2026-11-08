@@ -206,7 +206,7 @@ export function PopupApp({ initial }: { initial: PopupData | null }) {
   const removeAllowed = async () => {
     if (!settings || !view || view.allowedBy.length === 0) return;
     const drop = new Set(view.allowedBy);
-    if (await saveSettings({ whitelist: settings.whitelist.filter((e) => !drop.has(e)) })) {
+    if (await saveSettings({ whitelist: settings.whitelist.filter((e) => !drop.has(e.trim())) })) {
       setStatusText(`Removed ${view.allowedBy.join(', ')} from your allowed sites. Reload the page to check it.`);
     }
   };
