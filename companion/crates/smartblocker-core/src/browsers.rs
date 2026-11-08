@@ -101,6 +101,11 @@ const NON_BROWSER_HOSTS: &[&str] = &[
 /// run-as-node switch, WebView2's host-exe marker).
 const NON_BROWSER_CMD_MARKERS: &[&str] = &[
     "app.asar",
+    // Electron adds this to every renderer it spawns. Chrome/Edge renderers
+    // never carry it, and a browser only forwards an allowlist of switches
+    // to its renderers, so launching a renamed browser with a fake
+    // `--app-path` doesn't reach the renderer this check reads.
+    "--app-path",
     "--ms-enable-electron-run-as-node",
     "--webview-exe-name",
 ];
@@ -376,6 +381,27 @@ mod tests {
         );
         let c = cmd(&["x", "--utility-sub-type=network.mojom.networkservice"]);
         assert_eq!(classify_process("x", &c, &[]), BrowserClass::Incompatible);
+    }
+
+    #[test]
+    fn electron_apps_are_recognized_by_app_path_without_a_known_stem() {
+        // Real Todoist renderer shape: no app.asar on the command line and
+        // a stem that isn't on the NON_BROWSER_HOSTS list.
+        let todoist = cmd(&[
+            "todoist",
+            "--type=renderer",
+            "--app-path=C:\\Users\\u\\AppData\\Local\\Programs\\todoist\\resources\\app",
+        ]);
+        assert_eq!(
+            classify_process("todoist", &todoist, &[]),
+            BrowserClass::Unrelated
+        );
+        // A renamed real browser's renderer has no --app-path: still caught.
+        let renamed = cmd(&["surf", "--type=renderer", "--renderer-client-id=7"]);
+        assert_eq!(
+            classify_process("surf", &renamed, &[]),
+            BrowserClass::Incompatible
+        );
     }
 
     #[test]

@@ -22,7 +22,9 @@
 //!   friction shouldn't disarm a paying user's lock mid-lock), then NOT
 //!   Pro. The daemon logs every posture transition (`license` events).
 
-use crate::store::CompanionConfig;
+use crate::lock_math::derive_lock_status;
+use crate::store::{CompanionConfig, Store};
+use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Embedded product verification salt (HMAC key). "Public" by design: it
@@ -313,6 +315,145 @@ pub fn is_pro(config: &CompanionConfig) -> bool {
     check(config, now_wall_ms()).pro
 }
 
+/// UI-facing license state (`LicenseInfo.state` in `src/desktop/api.ts`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LicenseState {
+    None,
+    Valid,
+    Expired,
+    Grace,
+    Invalid,
+    DevOpen,
+}
+
+/// What the desktop UI may know about the configured key. Never carries the
+/// full key — only a short `key_hint`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LicenseInfo {
+    pub pro: bool,
+    pub state: LicenseState,
+    /// Expiry of a verified expiring key; `None` for perpetual/absent/invalid.
+    pub expires_at_ms: Option<i64>,
+    /// e.g. `SBPRO1…a3f9`; `None` when no key is configured.
+    pub key_hint: Option<String>,
+}
+
+/// Short, non-reversible label for a stored key: its scheme prefix plus the
+/// last 4 characters (from the HMAC tag on a real key). Keys too short to
+/// hide anything collapse to just the prefix.
+pub fn key_hint(key: &str) -> Option<String> {
+    let key = key.trim();
+    if key.is_empty() {
+        return None;
+    }
+    let prefix = if key.starts_with("SBPRO1.") {
+        "SBPRO1"
+    } else if key.starts_with("sb_pro_") {
+        "sb_pro"
+    } else {
+        ""
+    };
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() < 16 {
+        return Some(format!("{prefix}\u{2026}"));
+    }
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    Some(format!("{prefix}\u{2026}{tail}"))
+}
+
+fn state_of(posture: &str) -> LicenseState {
+    match posture {
+        "pro" => LicenseState::Valid,
+        "pro-grace" => LicenseState::Grace,
+        "free-expired" => LicenseState::Expired,
+        "free-invalid" => LicenseState::Invalid,
+        "dev-open" => LicenseState::DevOpen,
+        _ => LicenseState::None,
+    }
+}
+
+fn license_info_at(key: Option<&str>, now_ms: i64, dev_open: bool) -> LicenseInfo {
+    let check = check_at(key, now_ms, dev_open);
+    let key = key.map(str::trim).filter(|k| !k.is_empty());
+    LicenseInfo {
+        pro: check.pro,
+        state: state_of(check.posture),
+        expires_at_ms: key
+            .and_then(verify_and_payload)
+            .and_then(|p| payload_expiry(&p)),
+        key_hint: key.and_then(key_hint),
+    }
+}
+
+/// The configured key's UI view (the env dev escape hatch resolved here,
+/// same as `check`).
+pub fn license_info(config: &CompanionConfig, now_ms: i64) -> LicenseInfo {
+    license_info_at(config.license_key.as_deref(), now_ms, dev_open())
+}
+
+/// Store (or with `""` clear) the Pro key from the desktop UI. Errors are
+/// user-facing sentences. Rules:
+/// - a non-empty key must verify and not be past its renewal grace;
+/// - while settings are locked, CLEARING or REPLACING an existing key is
+///   refused (the daemon pins the key at lock start and would restore it —
+///   `daemon::heal_license_key`); adding a key when none is set is allowed
+///   (installing a license is strictening, the daemon learns it).
+pub fn set_license_key(store: &Store, key: &str, now_ms: i64) -> Result<LicenseInfo, String> {
+    set_license_key_at(store, key, now_ms, dev_open())
+}
+
+fn set_license_key_at(
+    store: &Store,
+    key: &str,
+    now_ms: i64,
+    dev_open: bool,
+) -> Result<LicenseInfo, String> {
+    let key = key.trim();
+    let mut config = store.load_config();
+    let current = config
+        .license_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|k| !k.is_empty());
+    let locked = derive_lock_status(&store.load_lock_state(), now_ms).settings_locked;
+
+    let next = if key.is_empty() {
+        if current.is_some() && locked {
+            return Err("Locked: the license key can't be removed until the lock ends.".into());
+        }
+        None
+    } else {
+        let Some(payload) = verify_and_payload(key) else {
+            return Err(
+                "That license key isn't valid. Check that you copied the whole key.".into(),
+            );
+        };
+        if let Some(expiry) = payload_expiry(&payload) {
+            if now_ms >= expiry.saturating_add(EXPIRED_GRACE_MS) {
+                return Err("That license key has expired. Renew it to get a new key.".into());
+            }
+        }
+        if locked && current.is_some_and(|c| c != key) {
+            return Err("Locked: the license key can't be changed until the lock ends.".into());
+        }
+        Some(key.to_string())
+    };
+
+    if config.license_key != next {
+        config.license_key = next;
+        store
+            .save_config(&config)
+            .map_err(|e| format!("Couldn't save the license key: {e}"))?;
+    }
+    Ok(license_info_at(
+        config.license_key.as_deref(),
+        now_ms,
+        dev_open,
+    ))
+}
+
 fn now_wall_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -458,5 +599,144 @@ mod tests {
             payload_expiry("pro:a:b:2000000000000"),
             Some(2_000_000_000_000)
         );
+    }
+
+    fn temp_store() -> (tempfile::TempDir, Store) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        (dir, store)
+    }
+
+    #[test]
+    fn license_info_maps_every_posture() {
+        let now = 2_000_000_000_000i64;
+        let perpetual = generate_license_key("user@example.com");
+        let info = license_info_at(Some(&perpetual), now, false);
+        assert_eq!(info.state, LicenseState::Valid);
+        assert!(info.pro);
+        assert_eq!(info.expires_at_ms, None);
+
+        let expiring = generate_expiring_license_key("u", now + 10);
+        let info = license_info_at(Some(&expiring), now, false);
+        assert_eq!(
+            (info.state, info.expires_at_ms),
+            (LicenseState::Valid, Some(now + 10))
+        );
+        let info = license_info_at(Some(&expiring), now + 11, false);
+        assert_eq!((info.state, info.pro), (LicenseState::Grace, true));
+        let info = license_info_at(Some(&expiring), now + 10 + EXPIRED_GRACE_MS, false);
+        assert_eq!((info.state, info.pro), (LicenseState::Expired, false));
+
+        let info = license_info_at(Some("SBPRO1.deadbeef.deadbeef"), now, false);
+        assert_eq!((info.state, info.pro), (LicenseState::Invalid, false));
+        assert_eq!(info.expires_at_ms, None);
+        assert_eq!(
+            license_info_at(None, now, false),
+            LicenseInfo {
+                pro: false,
+                state: LicenseState::None,
+                expires_at_ms: None,
+                key_hint: None
+            }
+        );
+        assert_eq!(
+            license_info_at(Some("  "), now, false).state,
+            LicenseState::None
+        );
+        assert_eq!(
+            license_info_at(None, now, true).state,
+            LicenseState::DevOpen
+        );
+    }
+
+    #[test]
+    fn key_hint_never_reveals_the_key() {
+        let key = generate_license_key("user@example.com");
+        let hint = key_hint(&key).unwrap();
+        assert_eq!(hint, format!("SBPRO1\u{2026}{}", &key[key.len() - 4..]));
+        assert!(hint.chars().count() <= 11);
+        assert!(!hint.contains(&key[7..20]));
+        assert_eq!(key_hint(""), None);
+        assert_eq!(key_hint("   "), None);
+        assert_eq!(key_hint("short"), Some("\u{2026}".into()));
+        assert_eq!(key_hint("sb_pro_7072_ab"), Some("sb_pro\u{2026}".into()));
+        // Multi-byte input can't panic the slicer.
+        assert!(key_hint("ééééééééééééééééééé").is_some());
+        // Serialized info carries only the hint.
+        let info = license_info_at(Some(&key), 0, false);
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(!json.contains(&key));
+        assert!(json.contains("\"keyHint\""));
+        assert!(json.contains("\"expiresAtMs\":null"));
+        assert!(json.contains("\"state\":\"valid\""));
+        assert_eq!(
+            serde_json::to_value(LicenseState::DevOpen).unwrap(),
+            "dev-open"
+        );
+    }
+
+    #[test]
+    fn set_license_key_validates_and_persists_trimmed() {
+        let (_d, store) = temp_store();
+        let now = 2_000_000_000_000i64;
+        let err = set_license_key_at(&store, "SBPRO1.deadbeef.deadbeef", now, false).unwrap_err();
+        assert!(err.contains("isn't valid"), "{err}");
+        assert_eq!(store.load_config().license_key, None);
+
+        let stale = generate_expiring_license_key("u", now - EXPIRED_GRACE_MS - 1);
+        assert!(set_license_key_at(&store, &stale, now, false)
+            .unwrap_err()
+            .contains("expired"));
+
+        let key = generate_license_key("user@example.com");
+        let info = set_license_key_at(&store, &format!("  {key}\n"), now, false).unwrap();
+        assert_eq!(info.state, LicenseState::Valid);
+        assert_eq!(
+            store.load_config().license_key.as_deref(),
+            Some(key.as_str())
+        );
+
+        // In-grace keys are accepted (and reported as grace).
+        let grace = generate_expiring_license_key("u", now - 1);
+        let info = set_license_key_at(&store, &grace, now, false).unwrap();
+        assert_eq!(info.state, LicenseState::Grace);
+
+        // Clearing while unlocked works.
+        let info = set_license_key_at(&store, "", now, false).unwrap();
+        assert_eq!(info.state, LicenseState::None);
+        assert_eq!(store.load_config().license_key, None);
+    }
+
+    #[test]
+    fn set_license_key_respects_the_lock() {
+        let (_d, store) = temp_store();
+        let now = 2_000_000_000_000i64;
+        store
+            .save_lock_state(&crate::lock_math::LockState {
+                timer_until: Some(now + 3_600_000),
+                ..Default::default()
+            })
+            .unwrap();
+        // Adding a key when none is set: allowed while locked.
+        let key = generate_license_key("a");
+        set_license_key_at(&store, &key, now, false).unwrap();
+        // Re-submitting the same key: fine (idempotent).
+        set_license_key_at(&store, &key, now, false).unwrap();
+        // Clearing or swapping: refused, config untouched.
+        assert!(set_license_key_at(&store, "", now, false)
+            .unwrap_err()
+            .contains("can't be removed"));
+        let other = generate_license_key("b");
+        assert!(set_license_key_at(&store, &other, now, false)
+            .unwrap_err()
+            .contains("can't be changed"));
+        assert_eq!(
+            store.load_config().license_key.as_deref(),
+            Some(key.as_str())
+        );
+        // Unlocked again: clearing works.
+        let later = now + 3_600_001;
+        set_license_key_at(&store, "", later, false).unwrap();
+        assert_eq!(store.load_config().license_key, None);
     }
 }

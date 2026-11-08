@@ -7,9 +7,12 @@
 //! `tests/fixtures/lock-cases.json`, which the TS suite
 //! (`scripts/lock-math-test.mjs`) consumes too.
 
+pub mod activity;
+pub mod apps;
 pub mod browsers;
 pub mod daemon;
 pub mod enforcer;
+pub mod focus_session;
 pub mod framing;
 pub mod ipc;
 pub mod license;
@@ -19,5 +22,6 @@ pub mod policy;
 pub mod procwatch;
 pub mod protocol;
 pub mod registration;
+pub mod snapshot;
 pub mod store;
 pub mod supervisor;

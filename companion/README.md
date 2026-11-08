@@ -135,12 +135,25 @@ Prereqs: MSVC toolchain (`rustup default stable-x86_64-pc-windows-msvc`),
 VS 2022 Build Tools ("Desktop development with C++"), WebView2 runtime
 (preinstalled on Win10 21H2+/Win11), `cargo install tauri-cli`.
 
+The UI is React + Vite in `src/desktop/` (spec:
+`docs/design-notes-desktop.md`). `cargo tauri build` runs
+`npm run build:desktop` first, so Node is needed; a plain `cargo build` of the
+shell needs `ui-dist/` built beforehand. If Git's `link.exe` shadows MSVC's,
+build from a shell that has run `vcvars64.bat`.
+
 ```powershell
 cd companion
 cargo build --release -p smartblocker-nm-host   # relay, must sit next to the app
 cargo tauri build                            # from crates/smartblocker-companion
 # put smartblocker-nm-host.exe next to smartblocker-companion.exe, then run the app
 ```
+
+**Safe test mode:** a DEBUG build with `SMARTBLOCKER_TEST_MODE=1` uses a scratch
+data dir and socket, logs kills instead of performing them, and skips registry
+and autostart writes. Use it for anything that starts a lock on a machine with
+real browsers open. Add
+`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333` to drive the
+window with Playwright `connectOverCDP`.
 
 Icons for both the extension (`dist/*/`) and the tray app
 (`crates/smartblocker-companion/icons/`) are real, shipped assets — if the

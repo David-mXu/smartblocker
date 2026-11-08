@@ -130,7 +130,7 @@ pub fn phase_of(status: &LockStatus) -> Phase {
 /// companion processes get recorded (see below), and every other stem match
 /// is treated as a decoy probe. Substring matching remains a gaping hole:
 /// renaming `steam.exe` to `smartblocker-steam.exe` must NOT exempt it.
-const PROTECTED_STEMS: &[&str] = &[
+pub(crate) const PROTECTED_STEMS: &[&str] = &[
     "smartblocker-daemon",
     "smartblocker-companion",
     "smartblocker-nm-host",

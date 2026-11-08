@@ -4,17 +4,23 @@
   "version": "0.1.0",
   "identifier": "dev.davidxu.smartblocker.companion",
   "build": {
-    "frontendDist": "ui"
+    "frontendDist": "ui-dist",
+    "beforeBuildCommand": {
+      "script": "npm run build:desktop",
+      "cwd": "../../.."
+    }
   },
   "app": {
     "withGlobalTauri": true,
     "windows": [
       {
         "label": "main",
-        "title": "SmartBlocker Companion",
-        "width": 500,
-        "height": 680,
-        "resizable": true
+        "title": "SmartBlocker",
+        "width": 900,
+        "height": 620,
+        "resizable": true,
+        "minWidth": 760,
+        "minHeight": 540
       }
     ],
     "security": {
@@ -23,6 +29,10 @@
   },
   "bundle": {
     "active": true,
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"]
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.ico"
+    ]
   }
 }

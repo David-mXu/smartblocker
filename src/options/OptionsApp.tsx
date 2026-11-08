@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   CalendarBlank,
   Desktop,
@@ -91,9 +91,11 @@ export function OptionsApp() {
   const isWelcome = route === 'welcome';
   const page = PAGES.find((p) => p.id === route) ?? PAGES[0];
 
-  // Title + focus follow the route (skip focus on first paint).
+  // Title + focus follow the route (skip focus on first paint). A layout
+  // effect with a direct focus(): deferring it to the next frame let it land
+  // AFTER the user's next interaction and steal focus back.
   const firstRoute = useRef(true);
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.title = isWelcome ? 'Welcome — SmartBlocker' : `${page.label} — SmartBlocker settings`;
     document
       .querySelector('nav[aria-label="Settings pages"] a[aria-current="page"]')
@@ -104,7 +106,7 @@ export function OptionsApp() {
     }
     window.scrollTo(0, 0);
     if (!isWelcome) {
-      requestAnimationFrame(() => document.getElementById('page-heading')?.focus({ preventScroll: true }));
+      document.getElementById('page-heading')?.focus({ preventScroll: true });
     }
   }, [route]);
 

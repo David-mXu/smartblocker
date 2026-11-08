@@ -28,3 +28,4 @@ scripts/feedback-candidates.json
 **/.wrangler/
 .design-work/
 .ux-shots/
+companion/crates/smartblocker-companion/ui-dist/

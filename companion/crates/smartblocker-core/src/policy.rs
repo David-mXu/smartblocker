@@ -102,7 +102,7 @@ pub fn apply_configured_policies(config: &crate::store::CompanionConfig) -> std:
     #[cfg(windows)]
     {
         windows::write_chromium_policies(update_url)?;
-        return Ok(true);
+        Ok(true)
     }
     #[cfg(not(windows))]
     {

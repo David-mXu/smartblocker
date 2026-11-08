@@ -100,8 +100,26 @@ impl ProcessSource for SysinfoSource {
 fn stem_of(p: &sysinfo::Process) -> String {
     p.exe()
         .and_then(|path| path.file_stem())
-        .map(|s| s.to_string_lossy().to_lowercase())
-        .unwrap_or_else(|| p.name().to_string_lossy().to_lowercase())
+        .map(|s| normalize_exe_stem(&s.to_string_lossy()))
+        .unwrap_or_else(|| normalize_exe_stem(&p.name().to_string_lossy()))
+}
+
+/// Canonical app name: lowercase, no `.exe`, and no self-updater version
+/// suffix (`agy.exe.1793826601058390500` → `agy`). The running-apps picker
+/// and the enforcer share this, so a name the user picks keeps matching
+/// after the app updates itself.
+pub fn normalize_exe_stem(raw: &str) -> String {
+    let lower = raw.trim().to_lowercase();
+    if let Some(i) = lower.find(".exe.") {
+        let rest = &lower[i + ".exe.".len()..];
+        if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            return lower[..i].to_string();
+        }
+    }
+    lower
+        .strip_suffix(".exe")
+        .map(str::to_string)
+        .unwrap_or(lower)
 }
 
 /// Cheap liveness probe for one pid (the supervisor thread's "is my
@@ -204,5 +222,25 @@ mod tests {
         assert!(pid_alive(std::process::id()));
         // pid 0 is never a userspace process.
         assert!(!pid_alive(0));
+    }
+}
+
+#[cfg(test)]
+mod normalize_tests {
+    use super::normalize_exe_stem;
+
+    #[test]
+    fn strips_exe_and_self_updater_suffixes() {
+        assert_eq!(normalize_exe_stem("Steam.exe"), "steam");
+        assert_eq!(normalize_exe_stem("  Discord "), "discord");
+        assert_eq!(normalize_exe_stem("agy.exe.1793826601058390500"), "agy");
+        assert_eq!(normalize_exe_stem("app.exe.1.2.3"), "app");
+    }
+
+    #[test]
+    fn leaves_other_dotted_names_alone() {
+        assert_eq!(normalize_exe_stem("my.exe.helper"), "my.exe.helper");
+        assert_eq!(normalize_exe_stem("node.js"), "node.js");
+        assert_eq!(normalize_exe_stem("app.exe."), "app.exe.");
     }
 }

@@ -7,7 +7,9 @@
 
 use std::io;
 
-use interprocess::local_socket::traits::{Stream as _, StreamCommon as _};
+use interprocess::local_socket::traits::Stream as _;
+#[cfg(target_os = "linux")]
+use interprocess::local_socket::traits::StreamCommon as _;
 use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName};
 // Re-exported so the bins never need interprocess as a direct dependency.
 // `traits` carries accept()/incoming()/split() — import `traits::{Listener

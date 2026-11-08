@@ -7,9 +7,15 @@
 use crate::lock_math::LockState;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+
+/// Environment override for the data dir (the desktop app's safe test mode
+/// points it at a scratch folder so a test instance never touches real
+/// lock state). Empty = unset.
+pub const DATA_DIR_ENV: &str = "SMARTBLOCKER_DATA_DIR";
 
 /// Daemon-side configuration (`config.json`), user/e2e-editable.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -65,6 +71,21 @@ impl Store {
         Some(Self::new(dirs.data_dir()))
     }
 
+    /// `SMARTBLOCKER_DATA_DIR` when set and non-empty, else the platform
+    /// default dir. `None` only when neither resolves.
+    pub fn from_env_or_default() -> Option<Self> {
+        Self::from_env_value(std::env::var_os(DATA_DIR_ENV))
+    }
+
+    /// Pure core of [`Store::from_env_or_default`] (tests never mutate the
+    /// process environment — other tests run concurrently).
+    fn from_env_value(value: Option<OsString>) -> Option<Self> {
+        match value {
+            Some(dir) if !dir.is_empty() => Some(Self::new(PathBuf::from(dir))),
+            _ => Self::at_default_dir(),
+        }
+    }
+
     pub fn dir(&self) -> &Path {
         &self.dir
     }
@@ -86,20 +107,36 @@ impl Store {
     }
 
     fn load_or_default<T: DeserializeOwned + Default>(&self, file: &str) -> T {
-        fs::read(self.dir.join(file))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default()
+        self.read_json(file).unwrap_or_default()
     }
 
     fn save<T: Serialize>(&self, file: &str, value: &T) -> io::Result<()> {
+        self.write_json_atomic(file, value)
+    }
+
+    /// Missing or unparseable = `None` (callers decide the fallback).
+    pub(crate) fn read_json<T: DeserializeOwned>(&self, file: &str) -> Option<T> {
+        fs::read(self.dir.join(file))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    }
+
+    /// A fully-written temp file in the data dir, ready to be renamed into
+    /// place (the caller picks clobbering `persist` or `persist_noclobber`).
+    pub(crate) fn temp_json<T: Serialize>(&self, value: &T) -> io::Result<tempfile::NamedTempFile> {
         fs::create_dir_all(&self.dir)?;
         let mut tmp = tempfile::NamedTempFile::new_in(&self.dir)?;
         serde_json::to_writer_pretty(&mut tmp, value)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         tmp.write_all(b"\n")?;
         tmp.flush()?;
-        // Same-dir rename = atomic on every platform we ship.
+        Ok(tmp)
+    }
+
+    /// Atomic write: temp file in the same dir + rename. Same-dir rename is
+    /// atomic on every platform we ship, so readers never see a torn file.
+    pub(crate) fn write_json_atomic<T: Serialize>(&self, file: &str, value: &T) -> io::Result<()> {
+        let tmp = self.temp_json(value)?;
         tmp.persist(self.dir.join(file)).map_err(|e| e.error)?;
         Ok(())
     }
@@ -132,6 +169,9 @@ mod tests {
     }
 
     #[test]
+    // `..default()` covers LockState fields added by in-flight work; on a tree
+    // without them every field is listed and clippy would call it needless.
+    #[allow(clippy::needless_update)]
     fn lock_state_roundtrips() {
         let (_dir, store) = temp_store();
         let state = LockState {
@@ -141,6 +181,7 @@ mod tests {
             password_ts: 4,
             schedules: vec![],
             schedules_updated_at: 5,
+            ..LockState::default()
         };
         store.save_lock_state(&state).unwrap();
         assert_eq!(store.load_lock_state(), state);
@@ -167,6 +208,24 @@ mod tests {
         assert_eq!(loaded.app_blocklist, vec!["x".to_string()]);
         assert!(!loaded.policy_enforce);
         assert!(loaded.extra_incompatible_browsers.is_empty());
+    }
+
+    #[test]
+    fn env_override_wins_and_empty_falls_back_to_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::from_env_value(Some(dir.path().as_os_str().to_owned())).unwrap();
+        assert_eq!(store.dir(), dir.path());
+        // Unset and empty both mean "platform default" (None only when no
+        // home dir resolves, which the default-dir resolver decides).
+        let default = Store::at_default_dir().map(|s| s.dir().to_path_buf());
+        assert_eq!(
+            Store::from_env_value(None).map(|s| s.dir().to_path_buf()),
+            default
+        );
+        assert_eq!(
+            Store::from_env_value(Some(OsString::new())).map(|s| s.dir().to_path_buf()),
+            default
+        );
     }
 
     #[test]

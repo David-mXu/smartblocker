@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::enforcer::{self, Action, ConnInfo, EnforcerState, TickInputs};
+use crate::focus_session;
 use crate::framing::{encode_frame, read_frame};
 use crate::ipc;
 use crate::ipc::traits::{ListenerExt as _, RecvHalf as _, SendHalf as _, Stream as _};
@@ -28,6 +29,7 @@ use crate::protocol::{
     parse_message, CompanionBrowser, CompanionEnforcement, CompanionMessage, CompanionStatus,
     PROTOCOL_VERSION,
 };
+use crate::snapshot::{self, BrowserInfo, StatusSnapshot};
 use crate::store::{CompanionConfig, Store};
 
 /// Poll cadence while ANY lock is armed (process snapshots are taken in
@@ -98,6 +100,8 @@ struct ConnEntry {
     /// Browser kind — set ONLY on an authenticated hello, so a forged
     /// connection's heartbeats can never pacify the watchdog.
     browser: Option<CompanionBrowser>,
+    /// Extension version from the authenticated hello (status snapshot).
+    ext_version: Option<String>,
     /// Presented a pairing token the daemon recognizes. Unauthenticated
     /// connections (the Tauri UI writes lock extensions this way, and any
     /// other local process can connect) get a redacted status, their
@@ -114,6 +118,8 @@ struct Shared {
     lock_state: Mutex<LockState>,
     conns: Mutex<HashMap<u64, Arc<ConnEntry>>>,
     started: Instant,
+    /// Wall clock at daemon start (status snapshot `startedAtMs`).
+    started_wall_ms: i64,
     version: &'static str,
     extra_incompatible: Vec<String>,
     dry_run_kills: bool,
@@ -210,6 +216,20 @@ impl Shared {
     /// (strictening-only, honest clients like the Tauri UI need that) but
     /// can never arm/change/clear the password or rewrite the schedule list.
     fn merge_in(&self, remote: &LockState, from_conn: u64, authed: bool) {
+        self.merge_from(remote, Some(from_conn), authed);
+    }
+
+    /// Daemon-originated lock write (the focus-session commit): the same
+    /// sanitize + merge + persist + broadcast path a peer's `lockStateSync`
+    /// takes, with no sender to skip/reply to. Treated as UNAUTHENTICATED,
+    /// so it can only extend timer/frozen — password + schedules are pinned
+    /// to ours. Broadcasts to every connection only if the merge changed
+    /// state (the loop-free rule).
+    fn merge_local(&self, state: &LockState) {
+        self.merge_from(state, None, false);
+    }
+
+    fn merge_from(&self, remote: &LockState, from_conn: Option<u64>, authed: bool) {
         let mut sanitized = sanitize_lock_state(
             &serde_json::to_value(remote).unwrap_or(Value::Null),
             self.wall_ms(),
@@ -234,7 +254,7 @@ impl Shared {
                 // (DevTools) or rolled back. Push our (stronger) state back
                 // directly so the browser re-locks immediately. A peer simply
                 // echoing our state triggers no reply, so there's no loop.
-                if sanitized != *current {
+                if let (Some(from_conn), true) = (from_conn, sanitized != *current) {
                     self.reply_to(
                         from_conn,
                         &CompanionMessage::LockStateSync {
@@ -256,7 +276,7 @@ impl Shared {
                 v: PROTOCOL_VERSION,
                 lock_state: merged,
             },
-            Some(from_conn),
+            from_conn,
         );
     }
 
@@ -344,13 +364,70 @@ impl Shared {
 
     fn log_event(&self, kind: &str, detail: &str) {
         let line = format!("{} {kind} {detail}\n", self.wall_ms());
-        let path = self.store.dir().join("events.log");
+        let path = self.store.dir().join(crate::activity::EVENTS_FILE);
         let _ = std::fs::create_dir_all(self.store.dir());
         let _ = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(path)
             .and_then(|mut f| io::Write::write_all(&mut f, line.as_bytes()));
+    }
+}
+
+/// Commit a pending focus session whose undo window has closed (see
+/// `focus_session`): claim it atomically, merge `frozen_until` through the
+/// lockStateSync path (persist + broadcast-on-change), THEN drop the claim —
+/// a crash in between re-commits idempotently next tick. Returns whether a
+/// session was committed.
+fn commit_due_focus_session(shared: &Shared, now_wall_ms: i64) -> bool {
+    let Some(session) = focus_session::claim_due_session(&shared.store, now_wall_ms) else {
+        return false;
+    };
+    // An end already in the past (daemon was down through the whole
+    // session) has nothing left to lock.
+    if session.until_ms > now_wall_ms {
+        shared.merge_local(&LockState {
+            frozen_until: Some(session.until_ms),
+            ..LockState::default()
+        });
+    }
+    focus_session::finish_claim(&shared.store);
+    shared.log_event(
+        "focus-session-start",
+        &format!("until {}", session.until_ms),
+    );
+    true
+}
+
+/// The status snapshot from the live connection registry: only browsers
+/// registered by an AUTHENTICATED hello (`browser` is set only there).
+fn build_snapshot(shared: &Shared, now_wall_ms: i64) -> StatusSnapshot {
+    let now_mono = shared.mono_ms();
+    let browsers = {
+        let conns = shared.conns.lock().unwrap();
+        conns
+            .values()
+            .filter(|e| e.authed)
+            .filter_map(|e| {
+                e.browser.map(|kind| BrowserInfo {
+                    kind,
+                    ext_version: e.ext_version.clone().unwrap_or_default(),
+                    last_seen_ms: now_wall_ms - now_mono.saturating_sub(e.last_seen_mono_ms) as i64,
+                })
+            })
+            .collect()
+    };
+    StatusSnapshot {
+        pid: std::process::id(),
+        started_at_ms: shared.started_wall_ms,
+        written_at_ms: now_wall_ms,
+        browsers: snapshot::dedupe_browsers(browsers),
+    }
+}
+
+fn write_status_snapshot(shared: &Shared, now_wall_ms: i64) {
+    if let Err(e) = snapshot::write_snapshot(&shared.store, &build_snapshot(shared, now_wall_ms)) {
+        eprintln!("[daemon] failed to write status snapshot: {e}");
     }
 }
 
@@ -610,6 +687,10 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
         store: opts.store,
         conns: Mutex::new(HashMap::new()),
         started: Instant::now(),
+        started_wall_ms: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0),
         version: env!("CARGO_PKG_VERSION"),
         extra_incompatible: opts.extra_incompatible,
         dry_run_kills: opts.dry_run_kills,
@@ -646,6 +727,12 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
             loop {
                 let now_wall = shared.wall_ms();
                 let now_mono = shared.mono_ms();
+                // Desktop-UI plumbing, every tick (idle or locked): commit a
+                // focus session whose undo window closed (BEFORE deriving the
+                // status, so this very tick enforces it), then refresh the
+                // status snapshot the UI polls.
+                commit_due_focus_session(&shared, now_wall);
+                write_status_snapshot(&shared, now_wall);
                 let lock = shared.lock_state.lock().unwrap().clone();
                 let status = derive_lock_status(&lock, now_wall);
                 let locked = status.settings_locked || status.force_blocking;
@@ -831,6 +918,7 @@ fn serve_connection(id: u64, stream: ipc::Stream, shared: Arc<Shared>) {
         outbound: tx,
         evict: Arc::new(AtomicBool::new(false)),
         browser: None,
+        ext_version: None,
         authed: false,
         last_seen_mono_ms: shared.mono_ms(),
     });
@@ -919,7 +1007,7 @@ fn serve_connection(id: u64, stream: ipc::Stream, shared: Arc<Shared>) {
         // Any well-formed frame counts as liveness for the watchdog — but
         // only an AUTHENTICATED connection's browser registration feeds the
         // health check, so a forged hello can't pacify it.
-        touch(&shared, id, None);
+        touch(&shared, id);
         match parse_message(&frame) {
             Some(CompanionMessage::Hello {
                 browser,
@@ -931,7 +1019,7 @@ fn serve_connection(id: u64, stream: ipc::Stream, shared: Arc<Shared>) {
                 meaningful = true;
                 if shared.authenticate(pairing.as_deref()) {
                     authed = true;
-                    mark_authed(&shared, id, browser);
+                    mark_authed(&shared, id, browser, &ext_version);
                     shared.log_event(
                         "hello",
                         &format!("{browser:?} ext {ext_version} id {extension_id}"),
@@ -1005,13 +1093,23 @@ fn serve_connection(id: u64, stream: ipc::Stream, shared: Arc<Shared>) {
 /// Entries are replaced, not mutated: `ConnEntry` fields are read lock-free
 /// by the enforcement loop via the map snapshot. The queue + eviction flag
 /// carry over (they ARE the connection), identity fields advance.
-fn replace_conn(shared: &Shared, id: u64, browser: Option<CompanionBrowser>, authed: Option<bool>) {
+fn replace_conn(
+    shared: &Shared,
+    id: u64,
+    browser: Option<(CompanionBrowser, String)>,
+    authed: Option<bool>,
+) {
     let mut conns = shared.conns.lock().unwrap();
     if let Some(old) = conns.remove(&id) {
+        let (browser, ext_version) = match browser {
+            Some((kind, version)) => (Some(kind), Some(version)),
+            None => (old.browser, old.ext_version.clone()),
+        };
         let entry = Arc::new(ConnEntry {
             outbound: old.outbound.clone(),
             evict: Arc::clone(&old.evict),
-            browser: browser.or(old.browser),
+            browser,
+            ext_version,
             authed: authed.unwrap_or(old.authed),
             last_seen_mono_ms: shared.started.elapsed().as_millis() as u64,
         });
@@ -1020,14 +1118,19 @@ fn replace_conn(shared: &Shared, id: u64, browser: Option<CompanionBrowser>, aut
 }
 
 /// Update a connection's liveness only (`auth` is sticky once granted).
-fn touch(shared: &Shared, id: u64, browser: Option<CompanionBrowser>) {
-    replace_conn(shared, id, browser, None);
+fn touch(shared: &Shared, id: u64) {
+    replace_conn(shared, id, None, None);
 }
 
 /// Mark a connection authenticated + register its browser kind (once per
 /// hello — re-hellos re-mark the same state).
-fn mark_authed(shared: &Shared, id: u64, browser: CompanionBrowser) {
-    replace_conn(shared, id, Some(browser), Some(true));
+fn mark_authed(shared: &Shared, id: u64, browser: CompanionBrowser, ext_version: &str) {
+    replace_conn(
+        shared,
+        id,
+        Some((browser, ext_version.to_string())),
+        Some(true),
+    );
 }
 
 /// The watchdog supervisor's daemon-vs-squatter liveness probe (red-team #7
@@ -1112,6 +1215,7 @@ mod tests {
             lock_state: Mutex::new(LockState::default()),
             conns: Mutex::new(HashMap::new()),
             started: Instant::now(),
+            started_wall_ms: 0,
             version: "test",
             extra_incompatible: vec![],
             dry_run_kills: true,
@@ -1127,6 +1231,7 @@ mod tests {
                 outbound: tx,
                 evict: Arc::new(AtomicBool::new(false)),
                 browser: None,
+                ext_version: None,
                 authed,
                 last_seen_mono_ms: 0,
             }),
@@ -1867,5 +1972,122 @@ mod tests {
         // Nothing was "restored" for the license.
         let log = std::fs::read_to_string(_dir.path().join("events.log")).unwrap_or_default();
         assert!(!log.contains("licenseKey"), "no restore event: {log}");
+    }
+
+    #[test]
+    fn due_focus_session_commits_through_the_sync_path() {
+        let (_dir, shared) = test_shared();
+        let paired = add_conn(&shared, 1, true);
+        let ui = add_conn(&shared, 2, false);
+        let now = shared.wall_ms();
+        let pending = focus_session::start_pending_session(&shared.store, 60, now).unwrap();
+
+        // Inside the undo window: nothing happens.
+        assert!(!commit_due_focus_session(&shared, now + 1_000));
+        assert_eq!(*shared.lock_state.lock().unwrap(), LockState::default());
+        assert!(frames_in(&paired).is_empty());
+
+        // Due: merged in memory, persisted, broadcast to EVERY connection
+        // (no sender to skip), redacted for the unauthenticated one.
+        assert!(commit_due_focus_session(&shared, pending.commit_at_ms));
+        let expected = Some(pending.until_ms);
+        assert_eq!(shared.lock_state.lock().unwrap().frozen_until, expected);
+        assert_eq!(shared.store.load_lock_state().frozen_until, expected);
+        for outbox in [&paired, &ui] {
+            let frames = frames_in(outbox);
+            assert_eq!(frames.len(), 1);
+            assert_eq!(frames[0]["type"], "lockStateSync");
+            assert_eq!(frames[0]["lockState"]["frozenUntil"], json!(expected));
+        }
+        // Claim resolved: the pending record is gone and no re-commit.
+        assert!(focus_session::read_pending_session(&shared.store).is_none());
+        assert!(!commit_due_focus_session(
+            &shared,
+            pending.commit_at_ms + 5_000
+        ));
+        let log = std::fs::read_to_string(_dir.path().join("events.log")).unwrap();
+        assert!(log.contains("focus-session-start until"), "{log}");
+    }
+
+    #[test]
+    fn focus_commit_that_changes_nothing_is_not_broadcast() {
+        // Loop-free rule: an already-longer frozen lock absorbs the commit.
+        let (_dir, shared) = test_shared();
+        let now = shared.wall_ms();
+        let longer = LockState {
+            frozen_until: Some(now + 10 * 3_600_000),
+            ..LockState::default()
+        };
+        *shared.lock_state.lock().unwrap() = longer.clone();
+        let paired = add_conn(&shared, 1, true);
+        let pending = focus_session::start_pending_session(&shared.store, 60, now).unwrap();
+        assert!(commit_due_focus_session(&shared, pending.commit_at_ms));
+        assert_eq!(*shared.lock_state.lock().unwrap(), longer);
+        assert!(frames_in(&paired).is_empty());
+    }
+
+    #[test]
+    fn focus_commit_cannot_touch_password_or_schedules() {
+        let (_dir, shared) = test_shared();
+        let now = shared.wall_ms();
+        let armed = LockState {
+            password_hash: Some("ab".repeat(32)),
+            password_ts: 7,
+            schedules_updated_at: 3,
+            ..LockState::default()
+        };
+        *shared.lock_state.lock().unwrap() = armed.clone();
+        let pending = focus_session::start_pending_session(&shared.store, 30, now).unwrap();
+        assert!(commit_due_focus_session(&shared, pending.commit_at_ms));
+        let after = shared.lock_state.lock().unwrap().clone();
+        assert_eq!(after.password_hash, armed.password_hash);
+        assert_eq!(after.password_ts, 7);
+        assert_eq!(after.schedules_updated_at, 3);
+        assert_eq!(after.frozen_until, Some(pending.until_ms));
+    }
+
+    #[test]
+    fn focus_session_ended_while_daemon_was_down_commits_nothing() {
+        let (_dir, shared) = test_shared();
+        let now = shared.wall_ms();
+        let pending = focus_session::start_pending_session(&shared.store, 1, now).unwrap();
+        // Daemon comes back after the session's end time.
+        assert!(commit_due_focus_session(&shared, pending.until_ms + 1));
+        assert_eq!(*shared.lock_state.lock().unwrap(), LockState::default());
+        assert!(focus_session::read_pending_session(&shared.store).is_none());
+    }
+
+    #[test]
+    fn snapshot_lists_only_authenticated_browsers() {
+        let (_dir, shared) = test_shared();
+        let _paired = add_conn(&shared, 1, true);
+        let _forged = add_conn(&shared, 2, false);
+        let _ui = add_conn(&shared, 3, false);
+        mark_authed(&shared, 1, CompanionBrowser::Edge, "0.5.0");
+        // A forged (unauthenticated) connection that somehow carries a
+        // browser kind must still not appear.
+        replace_conn(
+            &shared,
+            2,
+            Some((CompanionBrowser::Chrome, "9.9.9".into())),
+            Some(false),
+        );
+        let now = shared.wall_ms();
+        write_status_snapshot(&shared, now);
+        let snap = snapshot::read_live_snapshot(&shared.store, now).unwrap();
+        assert_eq!(snap.pid, std::process::id());
+        assert_eq!(snap.written_at_ms, now);
+        assert_eq!(snap.browsers.len(), 1);
+        let edge = &snap.browsers[0];
+        assert_eq!(edge.kind, CompanionBrowser::Edge);
+        assert_eq!(edge.ext_version, "0.5.0");
+        assert!(edge.last_seen_ms <= now && now - edge.last_seen_ms < 5_000);
+        // A heartbeat (touch) keeps the version; it isn't lost on replace.
+        touch(&shared, 1);
+        let snap = build_snapshot(&shared, now);
+        assert_eq!(snap.browsers[0].ext_version, "0.5.0");
+        // Disconnect → gone from the next snapshot.
+        shared.conns.lock().unwrap().remove(&1);
+        assert!(build_snapshot(&shared, now).browsers.is_empty());
     }
 }
