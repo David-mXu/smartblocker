@@ -10,6 +10,7 @@ import {
   currentWindowEnd,
   deriveLockStatus,
   isInScheduleWindow,
+  makeBreakOperation,
   mergeLockStates,
   nextBoundary,
   sanitizeLockState,
@@ -120,7 +121,16 @@ const NOW = at(2026, 7, 8, 12, 0).getTime(); // Wed noon
 
 test('empty state is unlocked', () => {
   const s = deriveLockStatus(EMPTY_LOCK_STATE, NOW);
-  assert.deepEqual(s, { settingsLocked: false, forceBlocking: false, reasons: [], until: null });
+  assert.deepEqual(s, {
+    breakActive: false,
+    breakStartedAt: null,
+    breakNotBefore: null,
+    breakEndsAt: null,
+    settingsLocked: false,
+    forceBlocking: false,
+    reasons: [],
+    until: null,
+  });
 });
 test('expired timer derives to inactive', () => {
   const s = deriveLockStatus({ ...EMPTY_LOCK_STATE, timerUntil: NOW - 1 }, NOW);
@@ -213,6 +223,26 @@ test('start == end (empty window) is rejected', () => {
 });
 test('out-of-range minutes are rejected', () => {
   assert.notEqual(validateScheduleRule({ ...workdays, endMinutes: 1440 }), null);
+});
+
+// --- break operation construction ---
+test('break operation: delay is pending, leaves lock fields out of the result', () => {
+  assert.deepEqual(makeBreakOperation(NOW, 60_000, 600_000), {
+    breakStartedAt: NOW,
+    breakNotBefore: NOW + 60_000,
+    breakEndsAt: NOW + 660_000,
+    breakUpdatedAt: NOW,
+  });
+});
+test('break operation: immediate mode has a finite active interval', () => {
+  const operation = makeBreakOperation(NOW, 0, 600_000);
+  const state = { ...EMPTY_LOCK_STATE, ...operation };
+  assert.equal(deriveLockStatus(state, NOW).breakActive, true);
+  assert.equal(deriveLockStatus(state, NOW + 600_000).breakActive, false);
+});
+test('break operation: duration and total horizon cannot exceed 24h', () => {
+  assert.equal(makeBreakOperation(NOW, 0, 48 * 3_600_000).breakEndsAt, NOW + 24 * 3_600_000);
+  assert.throws(() => makeBreakOperation(NOW, 24 * 3_600_000, 60_000));
 });
 
 // --- cross-language golden fixtures (shared with the Rust companion) ---

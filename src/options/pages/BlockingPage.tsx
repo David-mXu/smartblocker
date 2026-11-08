@@ -179,6 +179,27 @@ export function BlockingPage({ state }: { state: OptionsState }) {
             }
           />
           <SettingRow
+            label="Typed confirmation for overrides"
+            description={
+              locked ? (
+                <LockedNote reason={lock.reason} className="mt-0.5" />
+              ) : (
+                'Requires a 15-second pause and retyping a sentence before a page is released. Not available while a lock is active.'
+              )
+            }
+            htmlFor="surrender-mode-toggle"
+            control={
+              <Switch
+                id="surrender-mode-toggle"
+                checked={settings.surrenderMode === 'phrase'}
+                disabled={locked}
+                onChange={(e) =>
+                  void save({ surrenderMode: e.target.checked ? 'phrase' : 'off' })
+                }
+              />
+            }
+          />
+          <SettingRow
             label="Turn blocking back on"
             description={
               locked ? (
@@ -251,7 +272,7 @@ export function BlockingPage({ state }: { state: OptionsState }) {
               locked ? (
                 <LockedNote reason={lock.reason} className="mt-0.5" />
               ) : (
-                'Folds away video carousels, games and shopping boxes on Google, Bing and other search engines, so a search doesn’t turn into a detour.'
+                'Folds away distracting YouTube videos, plus video carousels, games and shopping boxes on Google, Bing and other search engines, so a search doesn’t turn into a detour.'
               )
             }
             htmlFor="mask-search-elements-toggle"

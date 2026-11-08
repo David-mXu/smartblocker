@@ -8,8 +8,10 @@ import { NEUTRAL_PREFIX } from '../shared/prototypes';
 import { cleanTitle } from '../shared/titles';
 import { hostnameOf } from '../shared/url-signals';
 import type {
+  BreakResponse,
   CompanionStatusResponse,
   DeleteSharedFeedbackResponse,
+  LockTypeResponse,
   Request,
   SharedFeedbackInfoResponse,
   SubItemsResponse,
@@ -18,9 +20,17 @@ import type {
 import { classify } from './classifier';
 import { consumeOverrideToken } from './override-tokens';
 import { evaluateSubItems, initBlocker, sweepOpenTabs } from './blocker';
+import { cancelConfiguredBreak, requestBreakChallenge, startConfiguredBreak } from './breaks';
 import { getCompanionSnapshot, initCompanionBridge } from './companion';
 import { deleteSharedFeedback, getExistingInstallId, initFeedbackUploader } from './feedback-uploader';
 import { initLockEnforcer } from './lock-enforcer';
+import {
+  attemptRandomTextUnlock,
+  cancelDelayUnlockRpc,
+  completeDelayUnlockRpc,
+  requestRandomTextUnlockChallenge,
+  startDelayUnlockRpc,
+} from './lock-types';
 import { initResumeEnforcer } from './resume-enforcer';
 import { scanHistory } from './history-ingester';
 import { initFocusSessionCommitter } from '../shared/focus-session';
@@ -61,6 +71,8 @@ api.runtime.onMessage.addListener(
     sendResponse: (
       r:
         | TestPairResponse
+        | BreakResponse
+        | LockTypeResponse
         | CompanionStatusResponse
         | SubItemsResponse
         | SharedFeedbackInfoResponse
@@ -172,6 +184,54 @@ api.runtime.onMessage.addListener(
         void sweepOpenTabs();
         sendResponse({ ok: true });
       })().catch((e) => sendResponse({ ok: false, error: String(e) }));
+      return true;
+    }
+    if (msg?.type === 'START_DELAY_UNLOCK') {
+      startDelayUnlockRpc()
+        .then((status) => sendResponse({ ok: true, status }))
+        .catch((e) => sendResponse({ ok: false, error: String(e) }));
+      return true;
+    }
+    if (msg?.type === 'CANCEL_DELAY_UNLOCK') {
+      cancelDelayUnlockRpc()
+        .then((status) => sendResponse({ ok: true, status }))
+        .catch((e) => sendResponse({ ok: false, error: String(e) }));
+      return true;
+    }
+    if (msg?.type === 'COMPLETE_DELAY_UNLOCK') {
+      completeDelayUnlockRpc()
+        .then((status) => sendResponse({ ok: true, status }))
+        .catch((e) => sendResponse({ ok: false, error: String(e) }));
+      return true;
+    }
+    if (msg?.type === 'REQUEST_RANDOM_TEXT_UNLOCK_CHALLENGE') {
+      requestRandomTextUnlockChallenge()
+        .then(({ id, text }) => sendResponse({ ok: true, challengeId: id, text }))
+        .catch((e) => sendResponse({ ok: false, error: String(e) }));
+      return true;
+    }
+    if (msg?.type === 'ATTEMPT_RANDOM_TEXT_UNLOCK') {
+      attemptRandomTextUnlock(msg.challengeId, msg.text)
+        .then((status) => sendResponse({ ok: true, status }))
+        .catch((e) => sendResponse({ ok: false, error: String(e) }));
+      return true;
+    }
+    if (msg?.type === 'REQUEST_BREAK_CHALLENGE') {
+      requestBreakChallenge()
+        .then((text) => sendResponse({ ok: true, text }))
+        .catch((e) => sendResponse({ ok: false, error: String(e) }));
+      return true;
+    }
+    if (msg?.type === 'START_BREAK') {
+      startConfiguredBreak(msg.mode, msg.text)
+        .then((status) => sendResponse({ ok: true, status }))
+        .catch((e) => sendResponse({ ok: false, error: String(e) }));
+      return true;
+    }
+    if (msg?.type === 'CANCEL_BREAK') {
+      cancelConfiguredBreak()
+        .then((status) => sendResponse({ ok: true, status }))
+        .catch((e) => sendResponse({ ok: false, error: String(e) }));
       return true;
     }
     if (msg?.type === 'GET_COMPANION_STATUS') {

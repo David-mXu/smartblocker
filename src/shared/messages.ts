@@ -1,5 +1,7 @@
 // popup/options/offscreen <-> background message contract.
 import type { CompanionSnapshot } from './companion-protocol';
+import type { BreakMode } from './breaks';
+import type { LockStatus } from './lock-math';
 import type { SubItemEvalRequest, SubItemEvalResult } from '../content/sanitize-page';
 
 /** Classifier input. Phase 2 widens it from a bare title to richer page
@@ -46,6 +48,18 @@ export type Request =
   // Options page: delete every feedback record this install shared, via the
   // worker's self-service POST /v1/delete (rate-limited 1/hr per installId).
   | { type: 'DELETE_SHARED_FEEDBACK' }
+  // Explicit-release lock controls. Delay completion and random-text proof
+  // verification are background-only; a page never decides its own gate.
+  | { type: 'START_DELAY_UNLOCK' }
+  | { type: 'CANCEL_DELAY_UNLOCK' }
+  | { type: 'COMPLETE_DELAY_UNLOCK' }
+  | { type: 'REQUEST_RANDOM_TEXT_UNLOCK_CHALLENGE' }
+  | { type: 'ATTEMPT_RANDOM_TEXT_UNLOCK'; challengeId: string; text: string }
+  // Locked popup break controls. Text proof is generated and verified by the
+  // service worker; the page never decides its own gate result.
+  | { type: 'REQUEST_BREAK_CHALLENGE' }
+  | { type: 'START_BREAK'; mode: BreakMode; text?: string }
+  | { type: 'CANCEL_BREAK' }
   // Content sanitizer: batch-classify embedded videos & SERP result cards.
   | { type: 'EVAL_SUBITEMS'; items: SubItemEvalRequest[] };
 
@@ -78,6 +92,23 @@ export interface DeleteSharedFeedbackResponse {
   ok: boolean;
   /** Rows the worker reported deleted (0 is normal if nothing was shared). */
   deleted?: number;
+  error?: string;
+}
+
+export interface BreakResponse {
+  ok: boolean;
+  /** Present only for REQUEST_BREAK_CHALLENGE. */
+  text?: string;
+  status?: LockStatus;
+  error?: string;
+}
+
+export interface LockTypeResponse {
+  ok: boolean;
+  /** Present with a newly minted random-text lock challenge. */
+  challengeId?: string;
+  text?: string;
+  status?: LockStatus;
   error?: string;
 }
 

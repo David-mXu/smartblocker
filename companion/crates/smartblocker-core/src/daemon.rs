@@ -213,8 +213,9 @@ impl Shared {
     /// `authed` = the sender presented a valid pairing token: ordering
     /// metadata and its ordered fields are honored only from authenticated
     /// peers. An anonymous local process may still EXTEND timer/frozen locks
-    /// (strictening-only, honest clients like the Tauri UI need that) but
-    /// can never arm/change/clear the password or rewrite the schedule list.
+    /// (strictening-only, honest clients like the Tauri UI need that) but can
+    /// never arm/change/clear password, schedule, break, delay or random-text
+    /// operations.
     fn merge_in(&self, remote: &LockState, from_conn: u64, authed: bool) {
         self.merge_from(remote, Some(from_conn), authed);
     }
@@ -222,9 +223,9 @@ impl Shared {
     /// Daemon-originated lock write (the focus-session commit): the same
     /// sanitize + merge + persist + broadcast path a peer's `lockStateSync`
     /// takes, with no sender to skip/reply to. Treated as UNAUTHENTICATED,
-    /// so it can only extend timer/frozen — password + schedules are pinned
-    /// to ours. Broadcasts to every connection only if the merge changed
-    /// state (the loop-free rule).
+    /// so it can only extend timer/frozen — every ordered operation is pinned
+    /// to ours. Broadcasts to every connection only if the merge changed state
+    /// (the loop-free rule).
     fn merge_local(&self, state: &LockState) {
         self.merge_from(state, None, false);
     }
@@ -240,10 +241,19 @@ impl Shared {
             if !authed {
                 sanitized.password_hash = current.password_hash.clone();
                 sanitized.password_ts = current.password_ts;
-                // Schedules are ordered by a forgeable stamp — the same
-                // class of write as the password. Pinning them to the
-                // daemon's own collapses the mid-lock wipe (both derived
-                // sides lock alike, stamps tie, the union keeps ours).
+                // Every ordered operation has a forgeable stamp — the same
+                // class of write as the password. Pinning these fields to the
+                // daemon's own makes anonymous operation arm/change/release
+                // attempts collapse to the current state before the merge.
+                sanitized.break_started_at = current.break_started_at;
+                sanitized.break_not_before = current.break_not_before;
+                sanitized.break_ends_at = current.break_ends_at;
+                sanitized.break_updated_at = current.break_updated_at;
+                sanitized.delay_until = current.delay_until;
+                sanitized.delay_duration_ms = current.delay_duration_ms;
+                sanitized.delay_updated_at = current.delay_updated_at;
+                sanitized.random_text_len = current.random_text_len;
+                sanitized.random_text_updated_at = current.random_text_updated_at;
                 sanitized.schedules = current.schedules.clone();
                 sanitized.schedules_updated_at = current.schedules_updated_at;
             }
@@ -1257,6 +1267,22 @@ mod tests {
         }
     }
 
+    fn protected_operation_state(stamp: u64) -> LockState {
+        let at = stamp as i64;
+        LockState {
+            break_started_at: Some(at),
+            break_not_before: None,
+            break_ends_at: Some(at + 60_000),
+            break_updated_at: stamp,
+            delay_until: Some(0),
+            delay_duration_ms: Some(60_000),
+            delay_updated_at: stamp,
+            random_text_len: Some(64),
+            random_text_updated_at: stamp,
+            ..LockState::default()
+        }
+    }
+
     #[test]
     fn wiped_peer_state_is_relocked_via_direct_reply() {
         let (_dir, shared) = test_shared();
@@ -1598,7 +1624,82 @@ mod tests {
             false,
         );
         assert!(shared.lock_state.lock().unwrap().frozen_until.is_some());
+        shared.merge_in(
+            &LockState {
+                timer_until: Some(shared.wall_ms() + 60_000),
+                ..LockState::default()
+            },
+            7,
+            false,
+        );
+        assert!(shared.lock_state.lock().unwrap().timer_until.is_some());
         drop(attacker);
+    }
+
+    #[test]
+    fn unauthenticated_merge_cannot_arm_break_or_explicit_release_gates() {
+        let (_dir, shared) = test_shared();
+        let _attacker = add_conn(&shared, 7, false);
+        let forged = protected_operation_state(shared.wall_ms() as u64);
+
+        shared.merge_in(&forged, 7, false);
+
+        assert_eq!(*shared.lock_state.lock().unwrap(), LockState::default());
+    }
+
+    #[test]
+    fn unauthenticated_merge_cannot_change_break_or_explicit_release_gates() {
+        let (_dir, shared) = test_shared();
+        let _attacker = add_conn(&shared, 7, false);
+        let original = protected_operation_state(100);
+        *shared.lock_state.lock().unwrap() = original.clone();
+        let now = shared.wall_ms();
+        let mut forged = protected_operation_state(now as u64);
+        forged.break_not_before = Some(now + 1_000);
+        forged.delay_until = Some(now + 120_000);
+        forged.delay_duration_ms = Some(120_000);
+        forged.random_text_len = Some(5_000);
+
+        shared.merge_in(&forged, 7, false);
+
+        assert_eq!(*shared.lock_state.lock().unwrap(), original);
+    }
+
+    #[test]
+    fn unauthenticated_merge_cannot_clear_break_or_explicit_release_gates() {
+        let (_dir, shared) = test_shared();
+        let _attacker = add_conn(&shared, 7, false);
+        let original = protected_operation_state(100);
+        *shared.lock_state.lock().unwrap() = original.clone();
+        let stamp = shared.wall_ms() as u64;
+        let forged_release = LockState {
+            break_updated_at: stamp,
+            delay_updated_at: stamp,
+            random_text_updated_at: stamp,
+            ..LockState::default()
+        };
+
+        shared.merge_in(&forged_release, 7, false);
+
+        assert_eq!(*shared.lock_state.lock().unwrap(), original);
+    }
+
+    #[test]
+    fn authenticated_merge_can_release_break_and_explicit_release_gates() {
+        let (_dir, shared) = test_shared();
+        let _paired = add_conn(&shared, 7, true);
+        *shared.lock_state.lock().unwrap() = protected_operation_state(100);
+        let stamp = shared.wall_ms() as u64;
+        let release = LockState {
+            break_updated_at: stamp,
+            delay_updated_at: stamp,
+            random_text_updated_at: stamp,
+            ..LockState::default()
+        };
+
+        shared.merge_in(&release, 7, true);
+
+        assert_eq!(*shared.lock_state.lock().unwrap(), release);
     }
 
     #[test]

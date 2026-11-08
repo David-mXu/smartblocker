@@ -5,9 +5,10 @@
 // sweeping already-open tabs the moment a blocking window starts, instead of
 // waiting for the next navigation.
 //
-// Clock-tamper guard: duration locks (Timer Lock, Frozen Turkey) store
-// absolute wall-clock end times, so jumping the OS system clock forward past
-// timerUntil/frozenUntil would expire them early. A periodic wall-clock vs
+// Clock-tamper guard: duration locks (Timer Lock, Frozen Turkey) and a running
+// delay-unlock countdown store absolute wall-clock end times, so jumping the OS
+// clock forward past timerUntil/frozenUntil/delayUntil would expire them early.
+// A periodic wall-clock vs
 // monotonic comparison detects forward jumps and shifts active end timestamps
 // forward by the skew. Schedule rules are intentionally NOT compensated —
 // they are wall-clock windows by definition.
@@ -15,6 +16,7 @@ import { api, IS_FIREFOX } from '../shared/api';
 import { getLockState, getLockStatus, mergeRemoteLockState } from '../shared/lock';
 import { nextBoundary } from '../shared/lock-math';
 import { sweepOpenTabs } from './blocker';
+import { completeReadyDelayUnlock } from './lock-types';
 
 const ALARM_NAME = 'lock-boundary';
 const FF_KEEPALIVE_ALARM = 'firefox-sw-keepalive';
@@ -99,8 +101,22 @@ async function shiftActiveDeadlines(referenceWallMs: number, shiftMs: number): P
     state.frozenUntil !== null && state.frozenUntil > referenceWallMs
       ? state.frozenUntil + shiftMs
       : state.frozenUntil;
-  if (timerUntil === state.timerUntil && frozenUntil === state.frozenUntil) return false;
-  await mergeRemoteLockState({ ...state, timerUntil, frozenUntil });
+  const delayUntil =
+    typeof state.delayUntil === 'number' &&
+    Number.isFinite(state.delayUntil) &&
+    state.delayUntil > referenceWallMs
+      ? state.delayUntil + shiftMs
+      : state.delayUntil;
+  if (
+    timerUntil === state.timerUntil &&
+    frozenUntil === state.frozenUntil &&
+    delayUntil === state.delayUntil
+  ) {
+    return false;
+  }
+  // Equal-stamp delay conflicts choose the later deadline, so this merge
+  // extends only a running countdown; waiting (0) and released gates are inert.
+  await mergeRemoteLockState({ ...state, timerUntil, frozenUntil, delayUntil });
   return true;
 }
 
@@ -179,7 +195,10 @@ async function syncAlarm(): Promise<void> {
 
 async function onBoundary(): Promise<void> {
   await checkClockSkew();
-  if ((await getLockStatus()).forceBlocking) await sweepOpenTabs();
+  await completeReadyDelayUnlock();
+  // A break start/end is a classifier-verdict boundary even when forceBlocking
+  // is false. Re-evaluate on every boundary; wall time remains authoritative.
+  await sweepOpenTabs();
   await syncAlarm();
 }
 
@@ -222,14 +241,20 @@ export function initLockEnforcer(): void {
   api.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local' || !changes['lockState']) return;
     void (async () => {
+      await completeReadyDelayUnlock();
       await syncAlarm();
-      if ((await getLockStatus()).forceBlocking) await sweepOpenTabs();
+      // Lock/break writes are rare. Sweeping on both starts and cancellations
+      // restores the correct classifier verdict without mutating the lock.
+      await sweepOpenTabs();
     })().catch((e) => console.warn('[SmartBlocker] lock change handling error:', e));
   });
 
-  // SW (re)start: cover "a schedule window began while the browser was closed".
+  // SW (re)start: rebuild the next alarm from wall time and re-evaluate so a
+  // break cannot remain active after its stored re-block instant, nor remain
+  // blocked after its delayed start. No timer callback derives truth from RAM.
   void (async () => {
+    await completeReadyDelayUnlock();
     await syncAlarm();
-    if ((await getLockStatus()).forceBlocking) await sweepOpenTabs();
+    await sweepOpenTabs();
   })().catch((e) => console.warn('[SmartBlocker] lock init error:', e));
 }

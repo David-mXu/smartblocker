@@ -7,9 +7,9 @@
 //!
 //! Contract invariants shared with the TS side:
 //! - expiry is strict `>` (a lock ending exactly `now` is inactive);
-//! - `reasons` order is fixed: timer, password, frozen, schedule;
+//! - `reasons` order is fixed: timer, password, delay, random-text, frozen, schedule;
 //! - overnight windows are expressed as `endMinutes < startMinutes`;
-//! - an armed password makes `until` indefinite (`null`) regardless of timers.
+//! - armed password/delay/random-text gates make `until` indefinite (`null`).
 
 use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,15 @@ use serde_json::Value;
 /// Fat-finger cap on timer/frozen durations — mirrors `MAX_LOCK_MS` in
 /// `src/shared/lock.ts`; both sides clamp remote input with it.
 pub const MAX_LOCK_MS: i64 = 30 * 24 * 3_600_000;
+pub const MAX_BREAK_MS: i64 = 24 * 3_600_000;
+pub const MIN_DELAY_LOCK_MS: i64 = 60_000;
+pub const MAX_DELAY_LOCK_MS: i64 = 40 * 24 * 3_600_000;
+pub const MIN_RANDOM_TEXT_LOCK_LENGTH: u16 = 1;
+pub const MAX_RANDOM_TEXT_LOCK_LENGTH: u16 = 5_000;
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -59,6 +68,15 @@ pub struct ScheduleRule {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct LockState {
+    /// Break request timestamp. All three nullable break timestamps form one
+    /// LWW operation with break_updated_at (mirrors lock-math.ts).
+    pub break_started_at: Option<i64>,
+    /// Delayed activation; None = immediate.
+    pub break_not_before: Option<i64>,
+    /// Classifier-driven blocking resumes at this strict end boundary.
+    pub break_ends_at: Option<i64>,
+    /// Operation stamp; a newer all-None operation is a cancellation tombstone.
+    pub break_updated_at: u64,
     /// Timer lock: settings frozen until this epoch ms. `None` ⇔ TS `null`
     /// (serialized as an explicit `null`, never skipped — the TS side writes
     /// explicit nulls).
@@ -72,6 +90,22 @@ pub struct LockState {
     /// Clamped to `now` on sanitize (it orders the merge; a forged future
     /// stamp would outrank every honest write).
     pub password_ts: u64,
+    /// Delay gate: None = unarmed/released, Some(0) = armed waiting, positive
+    /// = unlock deadline. Readiness never clears the gate by itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delay_until: Option<i64>,
+    /// Wait fixed at arm time, retained across waiting/countdown transitions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delay_duration_ms: Option<i64>,
+    /// Whole-gate LWW stamp. Zero is omitted to preserve legacy wire shapes.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub delay_updated_at: u64,
+    /// Random-text length; Some = armed, None = released or never configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub random_text_len: Option<u16>,
+    /// Whole-gate LWW stamp, also binds challenges to one arm generation.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub random_text_updated_at: u64,
     /// Frozen Turkey session end (epoch ms) — also forces blocking on.
     pub frozen_until: Option<i64>,
     /// Recurring locked windows — active windows also force blocking on.
@@ -88,6 +122,9 @@ pub struct LockState {
 pub enum LockReason {
     Timer,
     Password,
+    Delay,
+    #[serde(rename = "random-text")]
+    RandomText,
     Frozen,
     Schedule,
 }
@@ -95,15 +132,31 @@ pub enum LockReason {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LockStatus {
+    /// Separate from every lock-enforcement field; daemon enforcement never
+    /// consults this relaxation signal.
+    pub break_active: bool,
+    pub break_started_at: Option<i64>,
+    pub break_not_before: Option<i64>,
+    pub break_ends_at: Option<i64>,
     /// Any source active: settings frozen, block-screen bypass hidden.
     pub settings_locked: bool,
     /// Frozen Turkey or an in-window schedule: blocking runs even if the
     /// master toggle is off, and stored overrides are ignored.
     pub force_blocking: bool,
     pub reasons: Vec<LockReason>,
-    /// When the current lock fully ends; `None` = indefinite (password armed)
-    /// or nothing active.
+    /// When the current lock fully ends; `None` = indefinite (password or an
+    /// explicit-release delay/random-text gate armed) or nothing active.
     pub until: Option<i64>,
+    /// New-gate status is omitted for legacy and released states, matching the
+    /// extension's optional properties and preserving exact legacy results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delay_until: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delay_duration_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delay_ready: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub random_text_len: Option<u16>,
 }
 
 /// TS checks `if (state.passwordHash)` — JS truthiness, so an empty string is
@@ -115,9 +168,50 @@ fn password_armed(state: &LockState) -> bool {
         .is_some_and(|h| !h.is_empty())
 }
 
+/// Waiting, counting down, and ready are all armed delay operations.
+pub(crate) fn armed_delay(state: &LockState) -> Option<(i64, i64)> {
+    let until = state.delay_until?;
+    let duration = state.delay_duration_ms?;
+    if until < 0 || !(MIN_DELAY_LOCK_MS..=MAX_DELAY_LOCK_MS).contains(&duration) {
+        return None;
+    }
+    Some((until, duration))
+}
+
+pub(crate) fn armed_random_text_length(state: &LockState) -> Option<u16> {
+    state
+        .random_text_len
+        .filter(|len| (MIN_RANDOM_TEXT_LOCK_LENGTH..=MAX_RANDOM_TEXT_LOCK_LENGTH).contains(len))
+}
+
 /// A nullable end timestamp that is still in the future (strict `>`).
 fn active(until: Option<i64>, now: i64) -> Option<i64> {
     until.filter(|&t| t > now)
+}
+
+/// Validated full break interval, including a pending delayed start. Invalid
+/// or partial shapes are inert. Mirrors breakInterval in lock-math.ts.
+fn break_interval(state: &LockState) -> Option<(i64, i64)> {
+    let requested_at = state.break_started_at?;
+    let ends_at = state.break_ends_at?;
+    if requested_at <= 0 || ends_at <= 0 {
+        return None;
+    }
+    if let Some(not_before) = state.break_not_before {
+        if not_before <= 0 || not_before < requested_at {
+            return None;
+        }
+    }
+    let start = state.break_not_before.unwrap_or(requested_at);
+    if ends_at <= start || ends_at - start > MAX_BREAK_MS {
+        return None;
+    }
+    Some((start, ends_at))
+}
+
+/// Wall-clock-derived [start, re-block) interval; no timer/task owns truth.
+pub fn active_break_interval(state: &LockState, now: i64) -> Option<(i64, i64)> {
+    break_interval(state).filter(|&(start, end)| now >= start && now < end)
 }
 
 /// Window length in ms; end < start wraps overnight. start == end is an
@@ -220,7 +314,18 @@ pub fn is_in_schedule_window_in<Tz: TimeZone>(
 /// None when nothing is pending. Drives the promptness-only boundary alarm.
 pub fn next_boundary_in<Tz: TimeZone>(state: &LockState, now: i64, tz: &Tz) -> Option<i64> {
     let mut candidates: Vec<i64> = Vec::new();
+    if let Some((start, end)) = break_interval(state) {
+        if start > now {
+            candidates.push(start);
+        }
+        if end > now {
+            candidates.push(end);
+        }
+    }
     candidates.extend(active(state.timer_until, now));
+    if let Some((until, _)) = armed_delay(state).filter(|(until, _)| *until > now) {
+        candidates.push(until);
+    }
     candidates.extend(active(state.frozen_until, now));
     for r in &state.schedules {
         // Per-rule zone dispatch — mirrors rule_window_end: a pinned rule's
@@ -273,6 +378,14 @@ pub fn derive_lock_status_in<Tz: TimeZone>(state: &LockState, now: i64, tz: &Tz)
     if password_armed(state) {
         reasons.push(LockReason::Password);
     }
+    let delay = armed_delay(state);
+    if delay.is_some() {
+        reasons.push(LockReason::Delay);
+    }
+    let random_text_len = armed_random_text_length(state);
+    if random_text_len.is_some() {
+        reasons.push(LockReason::RandomText);
+    }
     if let Some(t) = active(state.frozen_until, now) {
         reasons.push(LockReason::Frozen);
         ends.push(t);
@@ -283,13 +396,21 @@ pub fn derive_lock_status_in<Tz: TimeZone>(state: &LockState, now: i64, tz: &Tz)
         ends.push(e);
     }
     LockStatus {
+        break_active: active_break_interval(state, now).is_some(),
+        break_started_at: state.break_started_at,
+        break_not_before: state.break_not_before,
+        break_ends_at: state.break_ends_at,
         settings_locked: !reasons.is_empty(),
         force_blocking: window_end.is_some() || reasons.contains(&LockReason::Frozen),
-        until: if password_armed(state) {
+        until: if password_armed(state) || delay.is_some() || random_text_len.is_some() {
             None
         } else {
             ends.into_iter().max()
         },
+        delay_until: delay.map(|(until, _)| until),
+        delay_duration_ms: delay.map(|(_, duration)| duration),
+        delay_ready: delay.map(|(until, _)| until > 0 && now >= until),
+        random_text_len,
         reasons,
     }
 }
@@ -377,7 +498,86 @@ pub fn sanitize_lock_state(raw: &Value, now: i64, max_lock_ms: i64) -> LockState
                 .collect()
         })
         .unwrap_or_default();
+    let break_cap = now + MAX_BREAK_MS;
+    let break_timestamp = |key: &str| -> Option<i64> {
+        let n = raw.get(key)?.as_f64()?;
+        if n > 0.0 {
+            Some(n.min(break_cap as f64) as i64)
+        } else {
+            None
+        }
+    };
+    let started_at = match stamp("breakStartedAt") {
+        0 => None,
+        n => Some(n as i64),
+    };
+    let not_before = break_timestamp("breakNotBefore");
+    let ends_at = break_timestamp("breakEndsAt");
+    let break_candidate = LockState {
+        break_started_at: started_at,
+        break_not_before: not_before,
+        break_ends_at: ends_at,
+        ..LockState::default()
+    };
+    let valid_break = break_interval(&break_candidate).is_some();
+
+    // New gates are all-or-neutral: malformed active shapes are dropped, never
+    // turned into newer release tombstones. Stamp-only is a valid release
+    // because serialization omits null gate fields on the wire.
+    let has_delay = ["delayUntil", "delayDurationMs", "delayUpdatedAt"]
+        .iter()
+        .any(|key| raw.get(key).is_some());
+    let delay_duration = raw
+        .get("delayDurationMs")
+        .and_then(Value::as_i64)
+        .filter(|n| (MIN_DELAY_LOCK_MS..=MAX_DELAY_LOCK_MS).contains(n));
+    let delay_released = raw.get("delayUntil").is_none_or(Value::is_null)
+        && raw.get("delayDurationMs").is_none_or(Value::is_null);
+    let (delay_until, delay_duration_ms, delay_updated_at) = if !has_delay {
+        (None, None, 0)
+    } else if delay_released {
+        (None, None, stamp("delayUpdatedAt"))
+    } else if let Some(duration) = delay_duration {
+        match raw.get("delayUntil").and_then(Value::as_f64) {
+            Some(0.0) => (Some(0), Some(duration), stamp("delayUpdatedAt")),
+            Some(n) if n > 0.0 => (
+                Some(n.min((now + MAX_DELAY_LOCK_MS) as f64) as i64),
+                Some(duration),
+                stamp("delayUpdatedAt"),
+            ),
+            _ => (None, None, 0),
+        }
+    } else {
+        (None, None, 0)
+    };
+
+    let has_random = ["randomTextLen", "randomTextUpdatedAt"]
+        .iter()
+        .any(|key| raw.get(key).is_some());
+    let random_released = raw.get("randomTextLen").is_none_or(Value::is_null);
+    let random_len = raw
+        .get("randomTextLen")
+        .and_then(Value::as_u64)
+        .filter(|n| {
+            *n >= u64::from(MIN_RANDOM_TEXT_LOCK_LENGTH)
+                && *n <= u64::from(MAX_RANDOM_TEXT_LOCK_LENGTH)
+        })
+        .map(|n| n as u16);
+    let (random_text_len, random_text_updated_at) = if !has_random {
+        (None, 0)
+    } else if random_released {
+        (None, stamp("randomTextUpdatedAt"))
+    } else if random_len.is_some() {
+        (random_len, stamp("randomTextUpdatedAt"))
+    } else {
+        (None, 0)
+    };
+
     LockState {
+        break_started_at: if valid_break { started_at } else { None },
+        break_not_before: if valid_break { not_before } else { None },
+        break_ends_at: if valid_break { ends_at } else { None },
+        break_updated_at: stamp("breakUpdatedAt"),
         timer_until: until("timerUntil"),
         password_hash: raw
             .get("passwordHash")
@@ -385,6 +585,11 @@ pub fn sanitize_lock_state(raw: &Value, now: i64, max_lock_ms: i64) -> LockState
             .filter(|s| s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
             .map(str::to_owned),
         password_ts: stamp("passwordTs"),
+        delay_until,
+        delay_duration_ms,
+        delay_updated_at,
+        random_text_len,
+        random_text_updated_at,
         frozen_until: until("frozenUntil"),
         schedules,
         schedules_updated_at: stamp("schedulesUpdatedAt"),
@@ -680,6 +885,10 @@ mod tests {
                 "timerUntil": null,
                 "passwordHash": null,
                 "passwordTs": 0,
+                "breakStartedAt": null,
+                "breakNotBefore": null,
+                "breakEndsAt": null,
+                "breakUpdatedAt": 0,
                 "frozenUntil": null,
                 "schedules": [],
                 "schedulesUpdatedAt": 0
@@ -695,6 +904,10 @@ mod tests {
     #[test]
     fn lock_status_serializes_camel_case_lowercase_reasons() {
         let s = LockStatus {
+            break_active: false,
+            break_started_at: None,
+            break_not_before: None,
+            break_ends_at: None,
             settings_locked: true,
             force_blocking: true,
             reasons: vec![
@@ -704,10 +917,18 @@ mod tests {
                 LockReason::Schedule,
             ],
             until: None,
+            delay_until: None,
+            delay_duration_ms: None,
+            delay_ready: None,
+            random_text_len: None,
         };
         assert_eq!(
             serde_json::to_value(&s).unwrap(),
             json!({
+                "breakActive": false,
+                "breakStartedAt": null,
+                "breakNotBefore": null,
+                "breakEndsAt": null,
                 "settingsLocked": true,
                 "forceBlocking": true,
                 "reasons": ["timer", "password", "frozen", "schedule"],

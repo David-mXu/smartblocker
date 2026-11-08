@@ -85,8 +85,9 @@ profile's extension holds a random pairing token
 `config.json pairingTokens` (TOFU — new tokens are adopted only while
 **unlocked**, so nothing can self-pair mid-lock). Unauthenticated clients
 (Tauri UI, scripts) still get a redacted status stream and can extend
-timers, but their password/schedule fields are stripped before the merge
-and they never register as a browser for the watchdog. Residual, honestly:
+timer/Frozen locks. Their password, schedule, break, delay and random-text
+operation fields are pinned to the daemon's state before the merge, and they
+never register as a browser for the watchdog. Residual, honestly:
 a same-uid process that reads BOTH token stores (the browser profile's
 `Local Extension Settings` leveldb and this config) can still impersonate
 the browser — the cap for consumer software.

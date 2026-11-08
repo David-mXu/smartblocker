@@ -422,6 +422,16 @@ without giving up our architectural ones.
 
 ### Batch 1 — quick deterministic wins (extension-only, no lock-schema changes)
 
+> ✅ **SHIPPED 2026-11-08** — all four items built by four isolated-worktree
+> agents, union-merged and committed into main. Gates in main:
+> typecheck clean, both build targets, **54** rules tests + **17** RTA tests +
+> **24** resume tests + **77** lock-math tests green, `npm run eval` **PASS:
+> no regressions** (15,874 cases, metrics bit-identical, dataset/baseline
+> untouched), Playwright e2e **ALL PASSED**. New modules `src/shared/rules.ts`
+> + `resume.ts`, `src/background/resume-enforcer.ts`; settings all additive
+> and inert at defaults; `"notifications"` manifest permission added for the
+> local auto-resume toast (approved at the merge checkpoint).
+
 1. **Title rules.** Case-insensitive substring rules against the cleaned page
    title, evaluated beside the URL `blocklist` (skip inference on hit, same
    block path). CT sells this as Pro "window titles" blocking.
@@ -440,6 +450,20 @@ without giving up our architectural ones.
 
 ### Batch 2 — commitment UX v2 (touches lock schema + Rust mirror; own phase)
 
+> ✅ **2026-11-08 status:** items **5, 6 and 7 shipped** in main; item **8
+> shipped as the truthful extension-side partial** described below. A final
+> integration audit also closed the companion authentication gap: unauthenticated
+> merges now pin all break/delay/random-text operation fields, preserving
+> authenticated releases and anonymous timer/Frozen extension. The three new
+> daemon regressions demonstrably failed before this fix and pass afterward.
+> Final merged-tree gates: **14** break tests, **21** focused lock-type tests,
+> **124** lock-math tests consuming the shared TypeScript/Rust fixtures, **12**
+> surrender tests, **21** grace tests, all Batch 1 suites, **161** Rust tests
+> across six suites, clippy/fmt clean, typecheck + Chrome/Firefox builds green,
+> eval **PASS: no regressions** across **15,874** cases with no per-case changes,
+> and Playwright **E2E: ALL PASSED**. Batch 2 is integrated and committed on
+> main; no remote push is implied by this status.
+
 5. **Breaks v1: delay break + random-text break** (`lock.ts` holds the only
    legal transition: a break *schedules re-block*, never shortens the stored
    lock; unlock gates live in shared/lock-math so extension and daemon agree).
@@ -451,6 +475,11 @@ without giving up our architectural ones.
    guilt copy — per the PNAS finding; FocusMe's typo-restart trick).
 8. **Visible extension-loss grace countdown** (companion + popup: "browser
    closes in 60 s unless the extension returns", re-check every 10 s).
+   **Extension-side partial (2026-11-08):** pure grace math plus a locked,
+   non-numeric disconnect warning landed. The truthful numeric countdown is
+   blocked until `companionStatus` carries the daemon's actual grace state and
+   remaining time; outgoing heartbeat sends cannot substitute for it. See
+   `docs/learning-notes/2026-11-08-extension-loss-grace-countdown.md`.
 
 ### Batch 3 — retention + admin (bigger surfaces)
 

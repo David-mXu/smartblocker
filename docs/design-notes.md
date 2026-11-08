@@ -197,9 +197,10 @@ Tint recipe for callouts: `bg-<hue>/10 border-<hue>/30 text-<hue>-soft`.
   row. Hash routing; unknown hash → Blocking; legacy hashes (`#categories`,
   `#history`, `#commitment`, `#schedules`) redirect. Focus moves to the page
   heading on navigation.
-- **Pages:** Blocking `#blocking` (master switch with "Turn blocking back
-  on" right under it — Never / when the browser restarts / when focus hours
-  begin / at a set time — "Hide distractions in search results",
+- **Pages:** Blocking `#blocking` (master switch with opt-in "Typed confirmation
+  for overrides" and "Turn blocking back on" right under it — Never / when the
+  browser restarts / when focus hours begin / at a set time — "Hide distractions
+  in search results",
   strictness presets
   Relaxed 0.65 / Balanced 0.5 / Strict 0.4 — other values read "Custom",
   categories + "Also block adults-only sites instantly" (RTA label / .xxx)
@@ -207,8 +208,8 @@ Tint recipe for callouts: `bg-<hue>/10 border-<hue>/30 text-<hue>-soft`.
   review) · Sites `#sites` (`ListEditor` Always allow / Always block; a
   collapsed **More rules** disclosure holds Title patterns (`*` wildcard)
   and YouTube channels — always block / never block for their topic) · Focus `#focus` (goal, open-tab
-  context, start a focus session) · Locks `#locks` (timer, password,
-  incognito warning) · Focus hours `#schedule` (summary cards, S–M–T–W–T–F–S
+  context, start a focus session) · Locks `#locks` (timer, password, optional delay/random-text break
+  gates, incognito warning; break settings disable while locked) · Focus hours `#schedule` (summary cards, S–M–T–W–T–F–S
   day chips, overnight note, presets "Weekdays 9–5" / "Every evening 7–10 PM")
   · Desktop app `#companion` · Privacy & data `#privacy` (danger zone last) ·
   Advanced `#advanced` (exact sensitivity slider; Diagnostics: Test
@@ -253,8 +254,23 @@ unlocked state is the same height (516px), so nothing jumps. Order:
    distractions until 2:16 PM. You can undo for 1 minute, then it can't be
    cancelled."). Pending → "Locks in 0:42" + Undo; active → "Running until
    4:28 PM".
+6. **Take a break** (`BreakControl.tsx`, only while locked with a configured
+   break gate, or while a break survives its lock): delay start or fresh random
+   text first, then a live pending/active countdown and "End break". Copy
+   states that only classifier blocks relax; the lock and deterministic rules
+   stay on. Proofs are generated and verified in the service worker.
 No diagnostics, model names or telemetry in the popup (they live on options
 → Advanced).
+
+**Conditional extension-loss warning:** while a lock is active, a previously
+observed watchdog companion that disconnects adds `#extension-grace` directly
+under the lock line. Use the warning tint, one plain sentence, and tabular
+numbers. The numeric sentence is allowed only from an enforcing-peer grace
+observation. Protocol v2 carries no such observation, so the current fallback
+explicitly says the remaining time is unavailable instead of guessing from
+heartbeat sends. Missing/never-observed companions and unlocked sessions stay
+quiet. The options Desktop app status section uses the same conditional notice
+as `#companion-grace`.
 
 ### Focus session undo window (`src/shared/focus-session.ts`)
 User-facing name for Frozen Turkey (`lockState.frozenUntil`). The 60-second
@@ -275,6 +291,14 @@ primary ivory, *This is actually productive — let me through* outline,
 Dismiss text → meta "Checked on-device in 12ms" (faint).
 Locked: amber seal note "Smart Blocker is locked — bypass is disabled" +
 Stay focused only. Fail-closed: amber warning variant, no score, no meter.
+With opt-in `surrenderMode: 'phrase'` (default `'off'`), the unlocked override
+opens an inline typed-confirmation wall: Stay focused remains available, a
+15-second countdown disables the textarea and release button, then the fixed
+neutral sentence must match exactly apart from surrounding whitespace. A wrong
+attempt clears the text and restarts the full delay; Cancel sends no override.
+The wall never renders while locked and is deliberately UX friction, not an
+authentication boundary. Its phrase/time math is mirrored by the pure,
+Node-tested `src/shared/surrender.ts`; the injected function cannot import it.
 Inline styles must use the hexes in §3 (host pages have no extension CSS);
 `blockscreen.ts` stays import-free.
 
@@ -314,18 +338,23 @@ code identifiers (`startFrozenTurkey`, `frozenUntil`) and internal docs.
 ## 7. Extension contract (tests depend on these — never rename)
 
 ### Popup
-`#lock-line` (hidden unless locked; text starts "Locked:"), `#popup-enabled-toggle`,
-`#open-options`, `#focus-goal`, `#save-focus-goal`, `#use-tab-context`,
+`#lock-line` (hidden unless locked; text starts "Locked:"),
+`#extension-grace` (locked + observed companion loss only; numeric only with an
+authoritative grace observation), `#popup-enabled-toggle`, `#open-options`,
+`#focus-goal`, `#save-focus-goal`, `#use-tab-context`,
 `.frozen-btn[data-mins=60|240|480]` (radio chips), `#start-focus-session`,
 `#undo-focus-session`, `#always-allow-site`, `#remove-allowed-site`,
 `#should-have-blocked` → `#report-category` + `#report-fn`, `#page-host`,
-`#page-verdict`, `#turn-on-blocking`, `#status`. **No diagnostics ids.**
+`#page-verdict`, `#turn-on-blocking`, `#break-heading`, `#break-start`,
+`#break-countdown`, `#break-challenge`, `#break-proof`, `#break-verify`,
+`#break-cancel`, `#status`.
+**No diagnostics ids.**
 
 ### Options (navigate to `options.html#<page>` — only the active page renders)
 Global: `#banner`, `#lock-status` (visible only when locked, contains
 "Locked"), `#save-msg`, `#model-progress`. `#save-btn` no longer exists.
-- `#blocking`: `#enabled-toggle`, `#resume-mode`, `#resume-at`,
-  `#mask-search-elements-toggle`, `#block-adult-toggle`, `#label-list` (`li`,
+- `#blocking`: `#enabled-toggle`, `#surrender-mode-toggle`, `#resume-mode`,
+  `#resume-at`, `#mask-search-elements-toggle`, `#block-adult-toggle`, `#label-list` (`li`,
   `.delete-label-btn`),
   `#custom-category-input`, `#add-category-btn`, `#scan-btn`,
   `#block-top-btn`, `#scan-status`, `#scan-out`.
@@ -336,13 +365,20 @@ Global: `#banner`, `#lock-status` (visible only when locked, contains
 - `#focus`: `#focus-goal`, `#use-tab-context`, `#focus-session-start`,
   `#focus-session-undo`.
 - `#locks`: `#lock-duration`, `#lock-unit`, `#lock-timer-btn`,
+  `#lock-delay-duration`, `#lock-delay-unit`, `#lock-delay-arm-btn`,
+  `#lock-delay-start-btn`, `#lock-delay-cancel-btn`, `#lock-delay-msg`,
   `#lock-password`, `#lock-password-btn`, `#lock-password-msg` ("Wrong
-  password", "at least 8"), `#incognito-warning`.
+  password", "at least 8"), `#lock-random-length`, `#lock-random-arm-btn`,
+  `#lock-random-challenge-btn`, `#lock-random-challenge`, `#lock-random-proof`,
+  `#lock-random-verify-btn`, `#lock-random-msg`, `#break-mode`,
+  `#break-delay-minutes`, `#break-duration-minutes`, `#break-text-length`,
+  `#incognito-warning`.
 - `#schedule`: `#schedule-list` (`.schedule-row`, `.day-label`,
   `.schedule-remove`), `#schedule-add`, `#schedule-save`, `#schedule-msg`.
 - `#companion`: `#companion-status` ("Get SmartBlocker Companion — coming
   with the Pro release" / "Connected — hardcore mode active…"),
-  `#companion-enforcement`.
+  `#companion-enforcement`, `#companion-grace` (same visibility and truthfulness
+  rules as popup `#extension-grace`).
 - `#privacy`: `#feedback-count`, `#feedback-export`, `#feedback-clear`,
   `#share-toggle`, `#oembed-toggle`, "Your shared feedback data", button
   "Delete shared data", "none yet — created the first time you share a
@@ -359,6 +395,10 @@ Global: `#banner`, `#lock-status` (visible only when locked, contains
 - Unlocked buttons contain "actually productive", "Stay focused", "Dismiss";
   locked: only "Stay focused" + note "Smart Blocker is locked — bypass is disabled".
 - Normal variant shows "% confidence"; fail-closed shows **no** "% confidence".
+- Optional typed-confirmation wall: `#smartblocker-surrender-wall`,
+  `#smartblocker-surrender-phrase`, `#smartblocker-surrender-countdown`,
+  `#smartblocker-surrender-input` (textarea), `#smartblocker-surrender-status`,
+  `#smartblocker-surrender-submit`, `#smartblocker-surrender-cancel`.
 - `blocked.html`: `document.title === 'Blocked — Smart Blocker'`, **zero `<h1>`**.
 
 ---

@@ -12,6 +12,13 @@ import {
 } from './config';
 import { getLockStatus } from './lock';
 import { clampResumeAt } from './resume';
+import {
+  clampBreakDelayMinutes,
+  clampBreakDurationMinutes,
+  clampBreakTextLength,
+  normalizeBreakMode,
+  type BreakMode,
+} from './breaks';
 
 export interface Settings {
   /** Candidate categories the zero-shot model scores against. */
@@ -112,9 +119,26 @@ export interface Settings {
    * (MAX_RESUME_AHEAD_MS in resume.ts) and invalid values to null.
    */
   resumeAt: number | null;
+  /** Optional user-requested break gate. Break state lives in lockState;
+   *  these fields configure only how a new break may be started. */
+  breakMode: BreakMode;
+  /** Pending delay before a delay break activates (whole minutes, 0–60). */
+  breakDelayMinutes: number;
+  /** Classifier-break duration (whole minutes, 1–1440). */
+  breakDurationMinutes: number;
+  /** Number of random symbols required for a random-text break (10–1000). */
+  breakTextLength: number;
+  /**
+   * Opt-in typed confirmation for non-locked block-screen overrides. OFF by
+   * default: existing installs keep one-click per-page corrections. 'phrase'
+   * adds a 15-second pause and exact neutral-phrase entry in the injected
+   * block screen only; it is UX friction, not an authentication boundary.
+   */
+  surrenderMode: 'off' | 'phrase';
   /**
    * Proactively mask distracting modules (videos, carousels, games,
-   * news, shopping) and off-topic result cards on search engines. Default true.
+   * news, shopping) and off-topic result cards on search engines, plus
+   * individually classified videos on YouTube Search. Default true.
    */
   maskSearchElements: boolean;
 }
@@ -143,6 +167,11 @@ export const DEFAULTS: Settings = {
   blockAdult: false,
   resumeMode: 'off',
   resumeAt: null,
+  breakMode: 'off',
+  breakDelayMinutes: 1,
+  breakDurationMinutes: 10,
+  breakTextLength: 100,
+  surrenderMode: 'off',
   maskSearchElements: true,
 };
 
@@ -216,6 +245,17 @@ export function migrateWhitelist(
   return { whitelist: next, whitelistVersion: WHITELIST_VERSION };
 }
 
+function normalizeBreakSettings(
+  stored: Partial<Settings> | undefined,
+): Pick<Settings, 'breakMode' | 'breakDelayMinutes' | 'breakDurationMinutes' | 'breakTextLength'> {
+  return {
+    breakMode: normalizeBreakMode(stored?.breakMode),
+    breakDelayMinutes: clampBreakDelayMinutes(stored?.breakDelayMinutes),
+    breakDurationMinutes: clampBreakDurationMinutes(stored?.breakDurationMinutes),
+    breakTextLength: clampBreakTextLength(stored?.breakTextLength),
+  };
+}
+
 /** Read settings (cached), falling back to DEFAULTS for any missing field. */
 export async function getSettings(): Promise<Settings> {
   if (cache) return cache;
@@ -224,6 +264,7 @@ export async function getSettings(): Promise<Settings> {
   cache = {
     ...DEFAULTS,
     ...storedSettings,
+    ...normalizeBreakSettings(storedSettings),
     ...migrateLabels(storedSettings),
     ...migrateWhitelist(storedSettings),
   };
@@ -251,6 +292,7 @@ export async function setSettings(patch: Partial<Settings>): Promise<Settings> {
   if ('resumeAt' in patch) {
     next.resumeAt = clampResumeAt(patch.resumeAt, Date.now());
   }
+  Object.assign(next, normalizeBreakSettings(next));
   cache = next;
   await api.storage.local.set({ [STORAGE_KEY]: next });
   return next;

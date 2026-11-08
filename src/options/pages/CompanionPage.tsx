@@ -2,6 +2,7 @@ import React from 'react';
 import { Check, Minus } from '@phosphor-icons/react';
 import type { CompanionSnapshot } from '../../shared/companion-protocol';
 import { SettingsGroup, SettingsSection } from '../../components/ui/settings';
+import { ExtensionGraceNotice } from '../../components/ExtensionGraceNotice';
 import { cn } from '../../lib/utils';
 import type { OptionsState } from '../useOptionsState';
 import { Page } from './Page';
@@ -103,6 +104,12 @@ export function CompanionPage({ state }: { state: OptionsState }) {
             </ul>
           </div>
         </SettingsGroup>
+        <ExtensionGraceNotice
+          id="companion-grace"
+          locked={state.lock.locked}
+          companion={state.companion}
+          now={state.now}
+        />
       </SettingsSection>
 
       <SettingsSection title="What it adds">

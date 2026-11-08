@@ -168,6 +168,10 @@ mod tests {
                 "type": "lockStateSync",
                 "v": 1,
                 "lockState": {
+                    "breakStartedAt": null,
+                    "breakNotBefore": null,
+                    "breakEndsAt": null,
+                    "breakUpdatedAt": 0,
                     "timerUntil": null,
                     "passwordHash": null,
                     "passwordTs": 0,
@@ -218,6 +222,66 @@ mod tests {
         assert!(v.get("running").is_none());
         assert_eq!(v["status"]["companionVersion"], "0.1.0");
         assert_eq!(v["status"]["enforcement"]["policyProtected"], false);
+    }
+
+    #[test]
+    fn explicit_release_gates_roundtrip_and_keep_compact_release_tombstones() {
+        let armed = LockState {
+            delay_until: Some(0),
+            delay_duration_ms: Some(60_000),
+            delay_updated_at: 100,
+            random_text_len: Some(5_000),
+            random_text_updated_at: 100,
+            ..LockState::default()
+        };
+        let armed_sync = CompanionMessage::LockStateSync {
+            v: PROTOCOL_VERSION,
+            lock_state: armed,
+        };
+        let value = serde_json::to_value(&armed_sync).unwrap();
+        assert_eq!(value["lockState"]["delayUntil"], json!(0));
+        assert_eq!(value["lockState"]["delayDurationMs"], json!(60_000));
+        assert_eq!(value["lockState"]["delayUpdatedAt"], json!(100));
+        assert_eq!(value["lockState"]["randomTextLen"], json!(5_000));
+        assert_eq!(value["lockState"]["randomTextUpdatedAt"], json!(100));
+        assert_eq!(parse_message(&value), Some(armed_sync));
+
+        // Rust omits null Option fields. The stamp-only result is deliberate:
+        // TS sanitization recognizes it as a release, retaining the metadata
+        // that prevents an older peer from re-arming either gate.
+        let released = CompanionMessage::LockStateSync {
+            v: PROTOCOL_VERSION,
+            lock_state: LockState {
+                delay_updated_at: 200,
+                random_text_updated_at: 300,
+                ..LockState::default()
+            },
+        };
+        let value = serde_json::to_value(&released).unwrap();
+        assert_eq!(value["lockState"]["delayUpdatedAt"], json!(200));
+        assert_eq!(value["lockState"]["randomTextUpdatedAt"], json!(300));
+        for key in ["delayUntil", "delayDurationMs", "randomTextLen"] {
+            assert!(
+                value["lockState"].get(key).is_none(),
+                "{key} was serialized"
+            );
+        }
+        assert_eq!(parse_message(&value), Some(released.clone()));
+
+        // Extension-side releases contain explicit nulls; both wire spellings
+        // deserialize to the same released Rust state.
+        let explicit_nulls = json!({
+            "type": "lockStateSync",
+            "v": 2,
+            "lockState": {
+                "delayUntil": null,
+                "delayDurationMs": null,
+                "delayUpdatedAt": 200,
+                "randomTextLen": null,
+                "randomTextUpdatedAt": 300
+            }
+        });
+        assert_eq!(parse_message(&explicit_nulls), Some(released));
     }
 
     #[test]

@@ -17,9 +17,12 @@ import { Input } from '../components/ui/input';
 import { Switch } from '../components/ui/switch';
 import { ThisPageCard } from './ThisPageCard';
 import { FocusSession } from './FocusSession';
+import { ExtensionGraceNotice } from '../components/ExtensionGraceNotice';
+import { BreakControl } from './BreakControl';
 import {
   derivePageView,
   getActiveTab,
+  loadCompanionSnapshot,
   loadFrozenUntil,
   loadPopupData,
   lockLineText,
@@ -59,6 +62,10 @@ export function PopupApp({ initial }: { initial: PopupData | null }) {
     patch({ lock, frozenUntil });
   }, [patch]);
 
+  const refreshCompanion = useCallback(async () => {
+    patch({ companion: await loadCompanionSnapshot() });
+  }, [patch]);
+
   // First load (only when popup.ts couldn't preload in time).
   useEffect(() => {
     if (initial) return;
@@ -79,6 +86,7 @@ export function PopupApp({ initial }: { initial: PopupData | null }) {
           });
         }
         if (changes['lockState']) void refreshLock();
+        if (changes['companionSnapshot']) void refreshCompanion();
         if (changes['pendingFocusSession']) {
           void getPendingFocusSession().then((pending) => patch({ pending }));
         }
@@ -100,7 +108,14 @@ export function PopupApp({ initial }: { initial: PopupData | null }) {
       api.storage.onChanged.removeListener(onChanged);
       api.tabs.onUpdated.removeListener(onTabUpdated);
     };
-  }, [patch, refreshLock, refreshTab]);
+  }, [patch, refreshCompanion, refreshLock, refreshTab]);
+
+  // Re-read the existing background companion cache while this popup is open.
+  // This is not a daemon request: v2 has no cheap status-request/reply pair.
+  useEffect(() => {
+    const id = setInterval(() => void refreshCompanion(), 10_000);
+    return () => clearInterval(id);
+  }, [refreshCompanion]);
 
   // One clock for every countdown. Lock status is re-derived each tick so
   // schedule windows and timers start/end without a storage event.
@@ -301,6 +316,14 @@ export function PopupApp({ initial }: { initial: PopupData | null }) {
         <span className="tabular-nums">{lockText}</span>
       </div>
 
+      <ExtensionGraceNotice
+        id="extension-grace"
+        locked={locked}
+        companion={data?.companion ?? null}
+        now={now}
+        className="rounded-none border-x-0 border-t-0 px-4 py-2.5"
+      />
+
       <div className="flex flex-col gap-4 p-4">
         <ThisPageCard
           view={view}
@@ -379,6 +402,18 @@ export function PopupApp({ initial }: { initial: PopupData | null }) {
           onStart={() => void startSession()}
           onUndo={() => void undoSession()}
         />
+
+        {settings && lock && (
+          <BreakControl
+            now={now}
+            mode={settings.breakMode}
+            delayMinutes={settings.breakDelayMinutes}
+            durationMinutes={settings.breakDurationMinutes}
+            lock={lock}
+            onLock={(nextLock) => patch({ lock: nextLock })}
+            onStatus={setStatusText}
+          />
+        )}
 
         <p id="status" role="status" aria-live="polite" className="m-0 min-h-4 text-xs text-muted-foreground">
           {statusText}

@@ -42,7 +42,16 @@ export interface ModelProgress {
   visible: boolean;
 }
 
-const UNLOCKED: LockStatus = { settingsLocked: false, forceBlocking: false, reasons: [], until: null };
+const UNLOCKED: LockStatus = {
+  breakActive: false,
+  breakStartedAt: null,
+  breakNotBefore: null,
+  breakEndsAt: null,
+  settingsLocked: false,
+  forceBlocking: false,
+  reasons: [],
+  until: null,
+};
 
 export interface OptionsState {
   settings: Settings | null;

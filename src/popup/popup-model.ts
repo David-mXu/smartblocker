@@ -11,6 +11,8 @@ import { getTabStatus, type TabStatus } from '../shared/tab-status';
 import { isClassifiableUrl, isWhitelisted, matchedBlocklistEntry } from '../shared/titles';
 import { hostnameOf } from '../shared/url-signals';
 import { inlineLabel, NEUTRAL_LABEL_PREFIX } from '../shared/labels';
+import type { CompanionSnapshot } from '../shared/companion-protocol';
+import type { CompanionStatusResponse } from '../shared/messages';
 
 export interface ActiveTab {
   id: number;
@@ -26,6 +28,7 @@ export interface PopupData {
   pending: PendingFocusSession | null;
   tab: ActiveTab | null;
   tabStatus: TabStatus | null;
+  companion: CompanionSnapshot | null;
 }
 
 export async function getActiveTab(): Promise<ActiveTab | null> {
@@ -43,16 +46,29 @@ export async function loadFrozenUntil(now = Date.now()): Promise<number | null> 
   return state.frozenUntil !== null && state.frozenUntil > now ? state.frozenUntil : null;
 }
 
+export async function loadCompanionSnapshot(): Promise<CompanionSnapshot | null> {
+  try {
+    // This is the existing background-cache RPC, not a daemon status query.
+    const response = (await api.runtime.sendMessage({
+      type: 'GET_COMPANION_STATUS',
+    })) as CompanionStatusResponse;
+    return response?.ok ? response.snapshot ?? null : null;
+  } catch {
+    return null; // Background restart or unavailable: never invent grace state.
+  }
+}
+
 export async function loadPopupData(): Promise<PopupData> {
-  const [settings, lock, frozenUntil, pending, tab] = await Promise.all([
+  const [settings, lock, frozenUntil, pending, tab, companion] = await Promise.all([
     getSettings(),
     getLockStatus(),
     loadFrozenUntil(),
     getPendingFocusSession(),
     getActiveTab(),
+    loadCompanionSnapshot(),
   ]);
   const tabStatus = tab ? await getTabStatus(tab.id, tab.url) : null;
-  return { settings, lock, frozenUntil, pending, tab, tabStatus };
+  return { settings, lock, frozenUntil, pending, tab, tabStatus, companion };
 }
 
 // ---------------------------------------------------------------------------
@@ -112,6 +128,8 @@ const LOCK_REASON_NAMES: Record<LockStatus['reasons'][number], string> = {
   frozen: 'focus session',
   timer: 'timer lock',
   password: 'password lock',
+  delay: 'delay lock',
+  'random-text': 'random-text lock',
   schedule: 'focus hours',
 };
 
@@ -126,7 +144,11 @@ export function lockLineText(lock: LockStatus, now = Date.now()): string {
 /** Short reason attached to every control disabled by a lock. */
 export function lockedReason(lock: LockStatus, now = Date.now()): string {
   if (!lock.settingsLocked) return '';
-  if (lock.until === null) return 'Locked by your password lock';
+  if (lock.until === null) {
+    return lock.reasons.length === 1 && lock.reasons[0] === 'password'
+      ? 'Locked by your password lock'
+      : 'Locked — manage unlocks in Settings';
+  }
   return `Locked until ${formatEndTime(lock.until, now)}`;
 }
 
@@ -304,7 +326,7 @@ export function derivePageView(data: PopupData): PageView {
         where: host,
         tone: 'allowed',
         headline: 'Allowed',
-        detail: 'Browsing and search pages aren’t blocked.',
+        detail: 'The page stays open; individual video results can be masked.',
         canAllowSite: true,
       };
     case 'allowed':

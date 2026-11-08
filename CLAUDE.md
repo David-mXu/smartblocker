@@ -14,8 +14,15 @@ empty by default): substring matches against the URL + title skip the ML
 classifier entirely and block instantly. A sibling **title rules** list
 (`settings.ts` `titleRules`, `shared/rules.ts`, empty by default) does
 title-only substring matching with optional `*` wildcards at the same ladder
-position, labeled `title rule: "…"`. **The full multi-phase roadmap lives
-in `ROADMAP.md`.** Implemented through Phase 2.9: user-configurable categories
+position, labeled `title rule: "…"`. Two **channel lists**
+(`settings.ts` `channelBlocklist`/`channelAllowlist`, `shared/rules.ts`)
+block known-YouTube-channels deterministically or rescue them from a
+classifier verdict only, and an opt-in **adult-site switch** (`blockAdult`,
+default OFF) blocks `<meta name="rating">`-declared pages and `.xxx` hosts.
+Batch 1 of Phase 5 also added **auto-resume** (`resumeMode`/`resumeAt` +
+`resume-enforcer.ts`: re-enable blocking on browser cold-start, at the next
+scheduled-block start, or at a chosen time ≤24h out). **The full
+multi-phase roadmap lives in `ROADMAP.md`.** Implemented through Phase 2.9: user-configurable categories
 + onboarding, richer page signals, the **embedding-prototype classifier**
 (2026-07 bake-off winner — see Model facts), a block screen with a "this is
 actually productive" override, a **feedback loop** (corrections are stored
@@ -79,6 +86,15 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
 - `node scripts/lock-math-test.mjs` — pure-math unit tests for the lock
   system's schedule/expiry derivations (`src/shared/lock-math.ts`, imported
   directly via Node type stripping — keep that file erasable-syntax-only).
+- `node scripts/lock-types-test.mjs` — delay/random-text lock transitions,
+  explicit-release proofs, write-count and clock-jump tripwires.
+- `node scripts/breaks-test.mjs` — break gates and proof transitions, including
+  preservation of every non-break lock field.
+- `node scripts/surrender-test.mjs` — typed-surrender phrase/timing helpers.
+- `node scripts/grace-math-test.mjs` — pure extension-loss grace display
+  derivations (`src/shared/grace-math.ts`, same type-stripping constraint).
+  Numeric countdowns require daemon-observed grace state; protocol v2 does not
+  carry it, so the locked disconnect notice stays explicitly non-numeric.
 - `node scripts/resume-test.mjs` — pure-math unit tests for the auto-resume
   derivations (`src/shared/resume.ts` — also erasable-syntax-only and
   Node-imported; its runtime import of lock-math carries an explicit `.ts`
@@ -310,9 +326,11 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   `merge.rs`/`lock_math.rs` — change both together, parity enforced by
   `companion/crates/smartblocker-core/tests/fixtures/lock-cases.json` which both
   test suites consume), `lock.ts` (the `lockState` store + the ONLY legal
-  lock transitions: timer/frozen extend-only, password arm/unlock, schedule
-  editing refused while locked; `mergeRemoteLockState` is the companion's
-  merge-only write path; password KDF is PBKDF2-SHA256 v2, 210k iters,
+  lock transitions: timer/frozen extend-only; password, delay and random-text
+  gates release only through their own authorized paths; break operations are
+  timestamped independently; schedule editing refused while locked;
+  `mergeRemoteLockState` is the companion's merge-only write path; password KDF
+  is PBKDF2-SHA256 v2, 210k iters,
   per-install 16-byte salt in the SEPARATE `lockKdf` key — never inside
   `lockStateSync`; legacy unsalted-SHA-256 arms migrate transparently on
   successful unlock; min length 8 for new arms), `companion-protocol.ts`
@@ -600,8 +618,10 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   oldest evicted) and adopts NEW tokens only while unlocked — a mid-lock
   attacker can't self-pair. Unauthenticated connections get redacted
   status/broadcasts (`password_hash=None`, `password_ts=0`), have their
-  password AND schedule fields pinned to the daemon's own inside the merge
-  lock (atomically), and never register a browser. The nm-host
+  password, schedule, break, delay and random-text operation fields pinned to
+  the daemon's own inside the merge lock (atomically), and never register a
+  browser. Only monotonic timer/Frozen extension remains available to them.
+  The nm-host
   relay caches the browser's hello (pairing included) and REPLAYS it when it
   reconnects to a restarted daemon (the extension never re-hellos on a
   daemon bounce); the daemon pushes (redacted) companionStatus to every

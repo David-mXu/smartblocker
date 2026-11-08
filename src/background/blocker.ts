@@ -342,6 +342,7 @@ export async function evaluateSubItems(
     }
 
     let res: ClassifyOutcome;
+    let classifierDriven = false;
     try {
       res = await classify({
         title,
@@ -366,9 +367,13 @@ export async function evaluateSubItems(
     const effScore = effectiveBlockScore(res, settings.blockedLabels);
     let blocked =
       settings.blockedLabels.includes(res.label) && effScore >= settings.blockThreshold;
+    classifierDriven = true;
     if (blocked && !lock.forceBlocking && (await isOverridden(title, hostnameOf(item.url)))) {
       blocked = false;
     }
+    // Breaks relax real classifier verdicts only. Deterministic matches and
+    // hard-lock classifier-unavailable fail-closed results never reach here.
+    if (classifierDriven && lock.breakActive) blocked = false;
     results.push({
       id: item.id,
       blocked,
@@ -696,6 +701,7 @@ async function onSubFrame(
             priorBlocked.locked,
             await mintOverrideToken(),
             settings.blockThreshold,
+            settings.surrenderMode,
           ],
         })
         .catch(() => {});
@@ -711,6 +717,9 @@ async function onSubFrame(
     // True once the fail-closed loud screen has been injected for this
     // evaluation — the normal verdict screen must NOT replace it.
     let classifyFailedClosed = false;
+    // Set only by a successful model verdict; deterministic/fail-closed paths
+    // deliberately do not receive break relaxation.
+    let classifierDriven = false;
 
     const blockedSet = new Set(settings.blockedLabels);
     const isGameEmbed =
@@ -891,6 +900,7 @@ async function onSubFrame(
             const effScore = effectiveBlockScore(result, settings.blockedLabels);
             blocked =
               settings.blockedLabels.includes(result.label) && effScore >= settings.blockThreshold;
+            classifierDriven = blocked;
             if (!blocked && classifyFailedClosed) {
               // Recovered during backoff with an allow verdict — tear the
               // fail-closed screen back down (a block verdict overwrites it).
@@ -914,6 +924,9 @@ async function onSubFrame(
     if (blocked && !lock.forceBlocking && (await isOverridden(title ?? '', hostnameOf(url)))) {
       blocked = false;
     }
+    // Breaks relax real classifier verdicts only. Deterministic embed rules
+    // and hard-lock classifier-unavailable results deliberately stay blocked.
+    if (classifierDriven && lock.breakActive) blocked = false;
 
     if ((subFrameGeneration.get(key) ?? 0) !== myGeneration) {
       return;
@@ -945,6 +958,7 @@ async function onSubFrame(
               lock.settingsLocked,
               await mintOverrideToken(),
               settings.blockThreshold,
+              settings.surrenderMode,
             ],
           });
         }
@@ -1026,8 +1040,8 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
     // Allow YouTube browsing/discovery surfaces (homepage, channel pages, feeds,
     // search results) unless explicitly matched by a deterministic blocklist or
     // title rule (or the opt-in adult signal), so users can search/browse
-    // YouTube and only get blocked on distracting videos. An explicit user
-    // rule trumps this convenience.
+    // YouTube while distracting videos are blocked and search cards masked.
+    // An explicit user rule trumps this convenience.
     if (!blocklistHit && !titleRuleHit && !adultHost && isYouTubeBrowsingSurface(url)) {
       armedAt.delete(tabId);
       lastClassified.set(tabId, `${url}|${initialTitle ?? 'youtube'}`);
@@ -1035,6 +1049,10 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
       clearCurtain(tabId);
       clearOverlay(tabId);
       void clearForceRedirectRule(tabId, url);
+      // The page-level exemption covers the container, not its video results.
+      // YouTube Search cards are classified independently so broad queries can
+      // mix productive tutorials with distracting entertainment.
+      void runPageSanitizer(tabId);
       return;
     }
 
@@ -1050,6 +1068,9 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
     // True once the fail-closed loud screen has been injected for this
     // evaluation — the normal verdict screen must NOT replace it.
     let classifyFailedClosed = false;
+    // Set only by a successful model verdict; deterministic/fail-closed paths
+    // deliberately do not receive break relaxation.
+    let classifierDriven = false;
     // The channelBlocklist entry that matched this page's extracted channel,
     // when one did — set only in the classifier branch below, so the popup
     // status can render it as a rule hit ("channel @…") like a blocklist one.
@@ -1305,6 +1326,7 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
             const effScore = effectiveBlockScore(result, settings.blockedLabels);
             blocked =
               settings.blockedLabels.includes(result.label) && effScore >= settings.blockThreshold;
+            classifierDriven = blocked;
             // Channel allowlist: rescue the page ONLY when the classifier
             // verdict alone blocks it — the blocklist and channelBlocklist
             // branches above never reach this check.
@@ -1338,6 +1360,11 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
       blocked = false;
       overridden = true;
     }
+
+    // A break is the last classifier-verdict relaxation, after stored
+    // overrides and channel allowlists. Rule hits, unavailable-classifier
+    // fail-closed results, and daemon enforcement never consult this flag.
+    if (classifierDriven && lock.breakActive) blocked = false;
 
     // The user may have navigated again (e.g. pressed back) while classify()
     // was still running — arm() would have bumped the generation. Painting a
@@ -1425,6 +1452,7 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
                 lock.settingsLocked,
                 await mintOverrideToken(),
                 settings.blockThreshold,
+                settings.surrenderMode,
               ],
             });
           }
@@ -1500,6 +1528,7 @@ const SETTINGS_SWEEP_KEYS: (keyof Settings)[] = [
   'enabled',
   'blockedLabels',
   'blockThreshold',
+  'surrenderMode',
   'blocklist',
   'titleRules',
   'whitelist',

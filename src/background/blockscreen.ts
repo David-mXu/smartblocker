@@ -27,6 +27,8 @@ export function showBlockScreen(
   /** User's block threshold (0..1) — draws the meter tick. Optional so older
    *  callers / re-ensure paths keep working without it. */
   threshold?: number,
+  /** Opt-in friction for non-locked overrides; serialized as a plain value. */
+  surrenderMode?: 'off' | 'phrase',
 ): void {
   // Re-injection on the same document (SPA nav, sub-frame re-ensure): retire
   // the previous instance's observer + listeners through the isolated-world
@@ -58,6 +60,17 @@ export function showBlockScreen(
   // True only on a legitimate user action — flips all listeners inert and is
   // the ONLY path that removes the host without the observer putting it back.
   let dismissed = false;
+
+  // Mirrors src/shared/surrender.ts. executeScript serializes this function,
+  // so these values and calculations must stay local (no module closures).
+  const surrenderDelayMs = 15_000;
+  const surrenderPhrase =
+    'I am choosing to open this page for a good reason, and I will return to my task.';
+  let surrenderTimer: ReturnType<typeof setInterval> | undefined;
+  const stopSurrenderTimer = () => {
+    if (surrenderTimer !== undefined) clearInterval(surrenderTimer);
+    surrenderTimer = undefined;
+  };
 
   // Pause any currently playing video/audio immediately and trap autoplay
   // while the block screen remains mounted.
@@ -287,6 +300,7 @@ export function showBlockScreen(
 
   const teardown = () => {
     dismissed = true;
+    stopSurrenderTimer();
     remount.disconnect();
     document.removeEventListener('play', onMediaPlay, true);
     document.removeEventListener('playing', onMediaPlay, true);
@@ -307,7 +321,17 @@ export function showBlockScreen(
     });
   };
 
-  // SECONDARY: send override correction, then dismiss.
+  // The nonce and message shape are identical with surrender mode on or off.
+  const sendOverride = () => {
+    if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+      chrome.runtime.sendMessage({ type: 'OVERRIDE', title, label, score, nonce });
+    }
+    teardown();
+    unmuteAll();
+    host.remove();
+  };
+
+  // SECONDARY: send override correction, then dismiss (or open the opt-in wall).
   const btnOverride = document.createElement('button');
   btnOverride.style.cssText =
     btnBase + 'background:transparent;color:#f4efe4;border:1px solid rgba(244,239,228,0.16);font-weight:500;';
@@ -323,12 +347,11 @@ export function showBlockScreen(
   btnOverride.addEventListener('click', (e) => {
     // Synthetic clicks dispatched by the blocked PAGE are not user decisions.
     if (!e.isTrusted) return;
-    if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
-      chrome.runtime.sendMessage({ type: 'OVERRIDE', title, label, score, nonce });
+    if (!locked && surrenderMode === 'phrase') {
+      openSurrenderWall();
+      return;
     }
-    teardown();
-    unmuteAll();
-    host.remove();
+    sendOverride();
   });
 
   // PRIMARY (ivory): close the tab outright on top-level pages, or permanently
@@ -345,6 +368,7 @@ export function showBlockScreen(
   });
   btnStay.addEventListener('click', (e) => {
     if (!e.isTrusted) return;
+    stopSurrenderTimer();
     if (isSubFrame) {
       pauseMedia(document, true);
       btnRow.remove();
@@ -374,6 +398,142 @@ export function showBlockScreen(
     unmuteAll();
     host.remove();
   });
+
+  /** Opt-in effort + pause, deliberately not an authentication boundary. The
+   *  only way out with an override is the original nonce-carrying message above. */
+  function openSurrenderWall(): void {
+    if (locked || dismissed) return;
+    stopSurrenderTimer();
+
+    const wall = document.createElement('div');
+    wall.id = 'smartblocker-surrender-wall';
+    wall.style.cssText =
+      'display:flex;flex-direction:column;gap:10px;width:100%;text-align:left;box-sizing:border-box;';
+
+    const prompt = document.createElement('label');
+    prompt.style.cssText = 'font-size:13px;font-weight:500;line-height:1.4;color:#f4efe4;';
+    prompt.textContent = 'Type this sentence exactly to release the page:';
+
+    const phrase = document.createElement('div');
+    phrase.id = 'smartblocker-surrender-phrase';
+    phrase.style.cssText =
+      'box-sizing:border-box;width:100%;padding:10px 12px;border:1px solid #2e2718;border-radius:8px;' +
+      'background:#17130e;color:#f4efe4;font-size:13px;line-height:1.5;overflow-wrap:anywhere;';
+    phrase.textContent = surrenderPhrase;
+
+    const countdown = document.createElement('div');
+    countdown.id = 'smartblocker-surrender-countdown';
+    countdown.setAttribute('role', 'timer');
+    countdown.style.cssText =
+      'min-height:18px;color:#a29a89;font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums;';
+
+    const input = document.createElement('textarea');
+    input.id = 'smartblocker-surrender-input';
+    input.rows = 3;
+    input.disabled = true;
+    input.setAttribute('aria-describedby', phrase.id + ' ' + countdown.id);
+    input.setAttribute('autocomplete', 'off');
+    input.setAttribute('autocorrect', 'off');
+    input.setAttribute('autocapitalize', 'off');
+    input.spellcheck = false;
+    input.style.cssText =
+      'box-sizing:border-box;resize:vertical;width:100%;min-height:72px;margin:0;padding:10px 12px;' +
+      'border:1px solid #2e2718;border-radius:8px;background:#0e0c09;color:#f4efe4;' +
+      'font-family:inherit;font-size:13px;line-height:1.5;outline:none;';
+    input.addEventListener('focus', () => {
+      input.style.borderColor = '#e8a33d';
+    });
+    input.addEventListener('blur', () => {
+      input.style.borderColor = '#2e2718';
+    });
+    prompt.htmlFor = input.id;
+
+    const status = document.createElement('div');
+    status.id = 'smartblocker-surrender-status';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+    status.style.cssText = 'min-height:18px;color:#a29a89;font-size:12px;line-height:1.5;';
+
+    const btnSubmit = document.createElement('button');
+    btnSubmit.id = 'smartblocker-surrender-submit';
+    btnSubmit.type = 'button';
+    btnSubmit.disabled = true;
+    btnSubmit.style.cssText =
+      btnBase +
+      'background:transparent;color:#f4efe4;border:1px solid rgba(244,239,228,0.28);font-weight:500;opacity:0.45;';
+    btnSubmit.textContent = 'Release this page';
+
+    const btnCancel = document.createElement('button');
+    btnCancel.id = 'smartblocker-surrender-cancel';
+    btnCancel.type = 'button';
+    btnCancel.style.cssText =
+      btnBase + 'background:transparent;color:#a29a89;border:1px solid transparent;font-weight:400;';
+    btnCancel.textContent = 'Cancel';
+
+    let armedAt = Date.now();
+    const tick = () => {
+      const remainingMs = Math.max(0, armedAt + surrenderDelayMs - Date.now());
+      if (remainingMs > 0) {
+        countdown.textContent = 'You can type in ' + Math.ceil(remainingMs / 1000) + ' seconds.';
+        return;
+      }
+      stopSurrenderTimer();
+      countdown.textContent = 'The pause is complete. Type the sentence exactly.';
+      input.disabled = false;
+      btnSubmit.disabled = false;
+      btnSubmit.style.opacity = '1';
+      input.focus();
+    };
+    const restart = (message: string) => {
+      stopSurrenderTimer();
+      armedAt = Date.now();
+      input.value = '';
+      input.disabled = true;
+      btnSubmit.disabled = true;
+      btnSubmit.style.opacity = '0.45';
+      status.textContent = message;
+      surrenderTimer = setInterval(tick, 250);
+      tick();
+    };
+    const attempt = () => {
+      if (dismissed || locked) return;
+      const now = Date.now();
+      // Mirrors canSubmit(now, armedAt, input.value) in shared/surrender.ts.
+      // Surrounding whitespace only; internal whitespace/case/punctuation drift fails.
+      if (
+        now < armedAt + surrenderDelayMs ||
+        input.value.trim() !== surrenderPhrase
+      ) {
+        // Early events are inert; an armed wrong entry gets a fresh full delay.
+        if (now >= armedAt + surrenderDelayMs) {
+          restart('The sentence did not match. The 15-second pause has restarted.');
+        }
+        return;
+      }
+      sendOverride();
+    };
+
+    btnSubmit.addEventListener('click', (e) => {
+      if (!e.isTrusted) return;
+      attempt();
+    });
+    input.addEventListener('keydown', (e) => {
+      if (!e.isTrusted || e.key !== 'Enter' || e.shiftKey) return;
+      e.preventDefault();
+      attempt();
+    });
+    btnCancel.addEventListener('click', (e) => {
+      if (!e.isTrusted) return;
+      stopSurrenderTimer();
+      // No OVERRIDE, no feedback, no nonce consumption: just return to the choices.
+      btnRow.replaceChildren(btnStay, btnOverride, btnDismiss);
+      btnOverride.focus();
+    });
+
+    wall.append(prompt, phrase, countdown, input, status, btnSubmit, btnCancel);
+    btnRow.replaceChildren(btnStay, wall);
+    restart('A mismatch restarts the full 15-second pause.');
+  }
 
   if (locked) {
     btnRow.append(lockNote, btnStay);

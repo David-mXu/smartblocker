@@ -56,6 +56,8 @@ export { displayLabel } from '../shared/labels';
 export const REASON_NAMES: Record<LockStatus['reasons'][number], string> = {
   timer: 'timer lock',
   password: 'password lock',
+  delay: 'delay lock',
+  'random-text': 'random-text lock',
   frozen: 'focus session',
   schedule: 'focus hours',
 };
@@ -68,15 +70,32 @@ export function lockShortText(status: LockStatus): string {
 /** Seal line: "Locked: focus session — unlocks in 3h 12m (3:40 PM)". */
 export function lockBannerText(status: LockStatus): string {
   const reasons = status.reasons.map((r) => REASON_NAMES[r]).join(', ');
+  const explicitReasons = status.reasons.filter((r) => ['password', 'delay', 'random-text'].includes(r));
   const tail = status.until
     ? ` — unlocks in ${formatRemaining(status.until - Date.now())} (${formatClock(status.until)})`
-    : ' — unlocks when you enter your password on the Locks page';
+    : status.delayReady
+      ? ' — the unlock delay elapsed; the background will complete it'
+      : explicitReasons.length > 1
+        ? ' — unlock each lock on the Locks page; other locks stay on'
+        : status.delayUntil !== undefined
+          ? status.delayUntil === 0
+            ? ' — start the unlock countdown on the Locks page'
+            : ` — the unlock countdown ends at ${formatClock(status.delayUntil ?? Date.now())}`
+          : status.randomTextLen !== undefined
+            ? ' — type a fresh random-text challenge on the Locks page'
+            : ' — unlocks when you enter your password on the Locks page';
   return `Locked: ${reasons}${tail}`;
 }
 
 /** Inline reason next to disabled controls: "Locked until 3:40 PM". */
 export function lockReasonText(status: LockStatus): string {
-  return status.until
-    ? `Locked until ${formatClock(status.until)}`
-    : 'Locked until you enter your password';
+  if (status.until) return `Locked until ${formatClock(status.until)}`;
+  if (status.delayReady) return 'Locked while the background completes the elapsed delay';
+  if (typeof status.delayUntil === 'number' && status.delayUntil > 0) {
+    return `Locked — unlock countdown ends ${formatClock(status.delayUntil)}`;
+  }
+  if (status.reasons.length === 1 && status.reasons[0] === 'password') {
+    return 'Locked until you enter your password';
+  }
+  return 'Locked — use the Locks page to unlock';
 }

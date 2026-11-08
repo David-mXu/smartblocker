@@ -1,9 +1,9 @@
 // Lock state store + the ONLY legal transitions. Lives in its own storage key
 // (NOT inside Settings) so setSettings can reject writes while locked without
-// the lock being patchable through the same door. Transitions are monotonic:
-// extending is always allowed, shortening/cancelling never — the single
-// exception is a correct password unlock, which clears the password source
-// only (a running Frozen Turkey or schedule window survives it).
+// the lock being patchable through the same door. Timer/frozen transitions are
+// monotonic: extending is always allowed, shortening/cancelling never. Explicit
+// releases clear only their own password/delay/random-text source; a running
+// Frozen Turkey, schedule window, break operation, and every other gate survive.
 //
 // This is a SOFT lock: raw storage writes from devtools or uninstalling the
 // extension bypass it. Accepted — the Phase 4 desktop companion reads this
@@ -13,7 +13,11 @@
 import { api } from './api';
 import {
   EMPTY_LOCK_STATE,
+  armedDelayLock,
+  armedRandomTextLength,
+  clampDelayLockDuration,
   deriveLockStatus,
+  makeBreakOperation,
   mergeLockStates,
   sanitizeLockState,
   validateScheduleRule,
@@ -64,12 +68,135 @@ export async function startTimerLock(durationMs: number): Promise<LockStatus> {
   return getLockStatus();
 }
 
+function gateNow(): number {
+  const now = Date.now();
+  if (!Number.isFinite(now) || now <= 0) throw new Error('The system clock is unavailable.');
+  return now;
+}
+
+/** Arm a delay gate without starting its countdown. The chosen wait is stored
+ *  separately so it cannot be shortened by a later UI reload. */
+export async function armDelayLock(durationMs: number): Promise<void> {
+  const delayDurationMs = clampDelayLockDuration(durationMs);
+  const state = await getLockState();
+  if (armedDelayLock(state)) throw new Error('A delay lock is already armed.');
+  await writeLockState({
+    ...state,
+    delayUntil: 0,
+    delayDurationMs,
+    delayUpdatedAt: gateNow(),
+  });
+}
+
+/** Begin the one countdown for this arm operation. This changes no timerUntil
+ *  or other independent gate and is legal only from the armed-waiting state. */
+export async function startDelayUnlock(): Promise<LockStatus> {
+  const now = gateNow();
+  const state = await getLockState();
+  const delay = armedDelayLock(state);
+  if (!delay) throw new Error('A delay lock is not armed.');
+  if (delay.until !== 0) throw new Error('The unlock countdown has already started.');
+  await writeLockState({
+    ...state,
+    delayUntil: now + delay.durationMs,
+    delayUpdatedAt: now,
+  });
+  return getLockStatus(now);
+}
+
+/** Cancel only the pending release attempt. The delay gate stays armed and
+ *  must be started again; no independent lock or break field is touched. */
+export async function cancelDelayUnlock(): Promise<LockStatus> {
+  const now = gateNow();
+  const state = await getLockState();
+  const delay = armedDelayLock(state);
+  if (!delay || delay.until === 0) throw new Error('No unlock countdown is running.');
+  await writeLockState({ ...state, delayUntil: 0, delayUpdatedAt: now });
+  return getLockStatus(now);
+}
+
+/** Background-only completion. Wall time is re-read on every call: reaching
+ *  readiness does not by itself clear the gate and a stale alarm cannot win. */
+export async function completeDelayUnlock(): Promise<LockStatus> {
+  const now = gateNow();
+  const state = await getLockState();
+  const delay = armedDelayLock(state);
+  if (!delay || delay.until === 0) throw new Error('No unlock countdown is running.');
+  if (now < delay.until) throw new Error('The unlock delay has not elapsed yet.');
+  await writeLockState({
+    ...state,
+    delayUntil: null,
+    delayDurationMs: null,
+    delayUpdatedAt: now,
+  });
+  return getLockStatus(now);
+}
+
+export async function armRandomTextLock(length: number): Promise<void> {
+  const candidate: LockState = { ...EMPTY_LOCK_STATE, randomTextLen: length };
+  const randomTextLen = armedRandomTextLength(candidate);
+  if (randomTextLen === null) throw new Error('Random text length must be between 1 and 5,000.');
+  const state = await getLockState();
+  if (armedRandomTextLength(state) !== null) {
+    throw new Error('A random-text lock is already armed.');
+  }
+  await writeLockState({
+    ...state,
+    randomTextLen,
+    randomTextUpdatedAt: gateNow(),
+  });
+}
+
+/** Release only the exact arm generation for which the background verified a
+ *  challenge. Re-reading and comparing the stamp closes challenge/arm races. */
+export async function releaseRandomTextLock(expectedArmStamp: number): Promise<LockStatus> {
+  const now = gateNow();
+  const state = await getLockState();
+  if (
+    armedRandomTextLength(state) === null ||
+    !Number.isFinite(expectedArmStamp) ||
+    (state.randomTextUpdatedAt ?? 0) !== expectedArmStamp
+  ) {
+    throw new Error('This unlock text belongs to an older lock. Request a fresh one.');
+  }
+  await writeLockState({ ...state, randomTextLen: null, randomTextUpdatedAt: now });
+  return getLockStatus(now);
+}
+
 /** Force blocking ON for a duration — uncancellable by construction: no
  *  function in this module ever shortens frozenUntil. */
 export async function startFrozenTurkey(durationMs: number): Promise<LockStatus> {
   const state = await getLockState();
   const until = Math.max(state.frozenUntil ?? 0, Date.now() + clampDuration(durationMs));
   await writeLockState({ ...state, frozenUntil: until });
+  return getLockStatus();
+}
+
+/** Schedule a break without shortening any lock. delayMs > 0 creates a
+ *  pending operation; wall-time derivation activates it at breakNotBefore. */
+export async function startBreak(delayMs: number, durationMs: number): Promise<LockStatus> {
+  const now = Date.now();
+  const state = await getLockState();
+  const status = deriveLockStatus(state, now);
+  if (!status.settingsLocked) throw new Error('A break requires an active lock.');
+  if (status.breakEndsAt !== null && status.breakEndsAt > now) {
+    throw new Error('A break is already pending or active.');
+  }
+  await writeLockState({ ...state, ...makeBreakOperation(now, delayMs, durationMs) });
+  return getLockStatus(now);
+}
+
+/** Re-block early by cancelling only the break operation. The fresh stamp is
+ *  a tombstone: an older peer cannot restore the relaxed interval on merge. */
+export async function cancelBreak(): Promise<LockStatus> {
+  const state = await getLockState();
+  await writeLockState({
+    ...state,
+    breakStartedAt: null,
+    breakNotBefore: null,
+    breakEndsAt: null,
+    breakUpdatedAt: Date.now(),
+  });
   return getLockStatus();
 }
 
@@ -276,14 +403,30 @@ export async function setSchedules(rules: ScheduleRule[]): Promise<void> {
  *  input sanitized: it arrives over Native Messaging from another process.
  *  Returns whether our stored state changed; callers only re-broadcast on
  *  true, which is what keeps the extension↔companion sync from looping. */
+/** Compare persisted values, not JavaScript property insertion order. Peers
+ *  rebroadcast whenever merge reports a change, so treating reordered objects
+ *  as different would cause redundant writes and sync loops. Array order stays
+ *  significant (schedule order is part of the merge result). */
+function canonicalJson(value: unknown): string {
+  return (
+    JSON.stringify(value, (_key, nested) => {
+      if (nested === null || typeof nested !== 'object' || Array.isArray(nested)) return nested;
+      return Object.fromEntries(
+        Object.entries(nested).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+      );
+    }) ?? ''
+  );
+}
+
 export async function mergeRemoteLockState(remote: unknown): Promise<boolean> {
   const now = Date.now();
   const current = { ...EMPTY_LOCK_STATE, ...(await getLockState()) };
   const merged = mergeLockStates(current, sanitizeLockState(remote, now, MAX_LOCK_MS), now);
   const changed =
-    JSON.stringify(merged) !==
-    JSON.stringify({
+    canonicalJson(merged) !==
+    canonicalJson({
       ...current,
+      breakUpdatedAt: current.breakUpdatedAt ?? 0,
       passwordTs: current.passwordTs ?? 0,
       schedulesUpdatedAt: current.schedulesUpdatedAt ?? 0,
     });
