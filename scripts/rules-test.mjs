@@ -16,6 +16,13 @@ import {
   normalizeChannelHandle,
 } from '../src/shared/rules.ts';
 import { decideBlock, EVAL_SETTINGS } from './lib/eval-harness.mjs';
+import { effectiveBlockScore, shouldBlockClassifierVerdict } from '../src/shared/prototypes.ts';
+import {
+  assessProtectionVerdict,
+  PROTECTION_FIXTURES,
+  protectionConfigurationCheck,
+  summarizeProtectionChecks,
+} from '../src/shared/protection-policy.ts';
 
 let passed = 0;
 let failed = 0;
@@ -321,6 +328,113 @@ test('neutral classifier verdicts are never "rescued" (already allowed)', () => 
     withChannels({ channelAllowlist: ['mrbeast'] }),
   );
   assert.deepEqual(r, { decision: 'allow', reason: 'neutral' });
+});
+
+// ===========================================================================
+// Shared classifier predicate + proof-of-protection policy
+// ===========================================================================
+
+const verdict = (label, score, all) => ({
+  text: label,
+  label,
+  score,
+  all: all ?? { labels: [label], scores: [score] },
+  loadMs: 0,
+  inferMs: 1,
+  cached: false,
+});
+const [distractionFixture, productiveFixture] = PROTECTION_FIXTURES;
+const passedAccess = { id: 'site-access', status: 'passed', label: 'All-site access', detail: '' };
+
+test('classifier predicate includes the exact threshold and excludes values just below it', () => {
+  const v = verdict('video games', 0.5);
+  assert.equal(shouldBlockClassifierVerdict(v, ['video games'], 0.5), true);
+  assert.equal(shouldBlockClassifierVerdict(verdict('video games', 0.4999), ['video games'], 0.5), false);
+});
+test('classifier predicate sums blocked top-2 mass and caps it at 1', () => {
+  const v = verdict('video games', 0.6, {
+    labels: ['video games', 'online shopping', 'music'],
+    scores: [0.6, 0.55, 0.1],
+  });
+  assert.equal(effectiveBlockScore(v, ['video games', 'online shopping']), 1);
+  assert.equal(shouldBlockClassifierVerdict(v, ['video games', 'online shopping'], 1), true);
+});
+test('classifier predicate does not add a neutral or unblocked runner-up', () => {
+  const v = verdict('video games', 0.4, {
+    labels: ['video games', 'music'],
+    scores: [0.4, 0.5],
+  });
+  assert.equal(shouldBlockClassifierVerdict(v, ['video games'], 0.5), false);
+});
+test('an unblocked top label never blocks even at high confidence', () => {
+  assert.equal(shouldBlockClassifierVerdict(verdict('music', 0.99), ['video games'], 0.5), false);
+});
+test('compatible fresh fixtures produce honest block and allow evidence', () => {
+  const blocked = assessProtectionVerdict(
+    distractionFixture,
+    verdict('video games', 0.9),
+    EVAL_SETTINGS,
+  );
+  const allowed = assessProtectionVerdict(
+    productiveFixture,
+    verdict('programming and software development', 0.8),
+    EVAL_SETTINGS,
+  );
+  assert.equal(blocked.status, 'passed');
+  assert.equal(blocked.verdict.decision, 'block');
+  assert.equal(blocked.verdict.cached, false);
+  assert.equal(allowed.status, 'passed');
+  assert.equal(allowed.verdict.decision, 'allow');
+  assert.equal(summarizeProtectionChecks([passedAccess, blocked, allowed]), 'ready');
+});
+test('a cached outcome cannot pass readiness even when its label and decision match', () => {
+  const check = assessProtectionVerdict(
+    distractionFixture,
+    { ...verdict('video games', 0.9), cached: true },
+    EVAL_SETTINGS,
+  );
+  assert.equal(check.status, 'error');
+  assert.match(check.detail, /cached verdict/);
+  assert.equal(summarizeProtectionChecks([passedAccess, check]), 'error');
+});
+test('custom category settings produce configuration failures, not inference claims', () => {
+  const custom = {
+    ...EVAL_SETTINGS,
+    blockedLabels: [
+      ...EVAL_SETTINGS.blockedLabels.filter((label) => label !== 'video games'),
+      'programming and software development',
+    ],
+  };
+  const distraction = protectionConfigurationCheck(distractionFixture, custom);
+  const productive = protectionConfigurationCheck(productiveFixture, custom);
+  assert.equal(distraction.status, 'failed');
+  assert.match(distraction.detail, /current settings allow/);
+  assert.equal(productive.status, 'failed');
+  assert.match(productive.detail, /current settings block/);
+  assert.equal(summarizeProtectionChecks([passedAccess, distraction, productive]), 'degraded');
+});
+test('a missing fixture category is reported before inference', () => {
+  const custom = { ...EVAL_SETTINGS, labels: EVAL_SETTINGS.labels.filter((label) => label !== 'video games') };
+  const check = protectionConfigurationCheck(distractionFixture, custom);
+  assert.equal(check.status, 'failed');
+  assert.match(check.detail, /category isn’t active/);
+});
+test('a correct gaming label below a custom threshold is degraded with threshold guidance', () => {
+  const custom = { ...EVAL_SETTINGS, blockThreshold: 0.95 };
+  const check = assessProtectionVerdict(distractionFixture, verdict('video games', 0.8), custom);
+  assert.equal(check.status, 'failed');
+  assert.equal(check.verdict.decision, 'allow');
+  assert.match(check.detail, /below your 95% block threshold/);
+});
+test('an unexpected semantic label never becomes a successful decision check', () => {
+  const check = assessProtectionVerdict(distractionFixture, verdict('sports', 0.9), EVAL_SETTINGS);
+  assert.equal(check.status, 'failed');
+  assert.equal(check.verdict.decision, 'allow');
+  assert.match(check.detail, /not “video games”/);
+});
+test('missing required checks cannot summarize as ready', () => {
+  assert.equal(summarizeProtectionChecks([passedAccess]), 'degraded');
+  assert.equal(summarizeProtectionChecks([]), 'degraded');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

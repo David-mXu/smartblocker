@@ -26,8 +26,8 @@ import { buildClassifierText } from '../../src/shared/build-input.ts';
 import {
   centroidSpecs,
   classifyBySimilarity,
-  effectiveBlockScore,
   isNeutralLabel,
+  shouldBlockClassifierVerdict,
   meanNormalize,
 } from '../../src/shared/prototypes.ts';
 import { cleanTitle, isWhitelisted, matchedBlocklistEntry } from '../../src/shared/titles.ts';
@@ -160,9 +160,7 @@ export function decideBlock(c, verdict, settings = EVAL_SETTINGS, threshold = se
   // Neutral centroids carry NEUTRAL_PREFIX and can never appear in
   // blockedLabels; the explicit guard documents that invariant.
   if (isNeutralLabel(verdict.label)) return { decision: 'allow', reason: 'neutral' };
-  const effScore = effectiveBlockScore(verdict, settings.blockedLabels);
-  const blocked =
-    settings.blockedLabels.includes(verdict.label) && effScore >= threshold;
+  const blocked = shouldBlockClassifierVerdict(verdict, settings.blockedLabels, threshold);
   // channelAllowlist rescues ONLY a classifier verdict, never a rule hit.
   if (blocked && matchChannel(rulesChannel ?? null, settings.channelAllowlist ?? [])) {
     return { decision: 'allow', reason: 'channel-allow' };

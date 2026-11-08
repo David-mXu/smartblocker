@@ -24,7 +24,7 @@ import {
   showClassifierUnavailableScreen,
 } from './blockscreen';
 import { mintOverrideToken } from './override-tokens';
-import { effectiveBlockScore } from '../shared/prototypes';
+import { shouldBlockClassifierVerdict } from '../shared/prototypes';
 import {
   addForceRedirectRule,
   clearForceRedirectRule,
@@ -364,9 +364,7 @@ export async function evaluateSubItems(
       });
       continue;
     }
-    const effScore = effectiveBlockScore(res, settings.blockedLabels);
-    let blocked =
-      settings.blockedLabels.includes(res.label) && effScore >= settings.blockThreshold;
+    let blocked = shouldBlockClassifierVerdict(res, settings.blockedLabels, settings.blockThreshold);
     classifierDriven = true;
     if (blocked && !lock.forceBlocking && (await isOverridden(title, hostnameOf(item.url)))) {
       blocked = false;
@@ -897,9 +895,11 @@ async function onSubFrame(
             blocked = true;
           } else {
             result = outcome.result;
-            const effScore = effectiveBlockScore(result, settings.blockedLabels);
-            blocked =
-              settings.blockedLabels.includes(result.label) && effScore >= settings.blockThreshold;
+            blocked = shouldBlockClassifierVerdict(
+              result,
+              settings.blockedLabels,
+              settings.blockThreshold,
+            );
             classifierDriven = blocked;
             if (!blocked && classifyFailedClosed) {
               // Recovered during backoff with an allow verdict — tear the
@@ -1323,9 +1323,11 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
             blocked = true;
           } else {
             result = outcome.result;
-            const effScore = effectiveBlockScore(result, settings.blockedLabels);
-            blocked =
-              settings.blockedLabels.includes(result.label) && effScore >= settings.blockThreshold;
+            blocked = shouldBlockClassifierVerdict(
+              result,
+              settings.blockedLabels,
+              settings.blockThreshold,
+            );
             classifierDriven = blocked;
             // Channel allowlist: rescue the page ONLY when the classifier
             // verdict alone blocks it — the blocklist and channelBlocklist

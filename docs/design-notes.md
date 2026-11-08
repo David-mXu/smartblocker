@@ -218,11 +218,17 @@ Tint recipe for callouts: `bg-<hue>/10 border-<hue>/30 text-<hue>-soft`.
 - **Welcome wizard** `#welcome` (`welcome/`): full page, no sidebar, ≤560px
   column, "Step N of 3" bar. 1 "What pulls you off track?" (category rows
   with examples, "Block all of these", live "N selected") → 2 "What should
-  always stay open?" (focus goal + Always-allow `ListEditor`) → 3 "You're all
-  set" (summary with Change links, how it works, incognito check, pin hint,
-  "Start blocking"). Each step persists on Continue; "Set up later" leaves
-  `onboarded` false so the banner stays. First install opens
-  `options.html#welcome`; plain `options.html` never forces the wizard.
+  always stay open?" (focus goal + Always-allow `ListEditor`) → 3 "Verify your
+  protection" (fresh all-site-access + gaming/block + programming/allow checks
+  in `#welcome-verification`, then summary with Change links, how it works,
+  incognito check, and pin hint). Only `ready` enables "Start blocking";
+  `checking`, `degraded`, and `error` expose actionable check details and retry
+  or settings recovery. The background repeats verification before persisting
+  `enabled + onboarded`; Back, Change, and unverified exit disable while that
+  commit is pending. "Continue without verification" and "Set up later" leave
+  `onboarded` false so the banner stays. Earlier steps persist on Continue.
+  First install opens `options.html#welcome`; plain `options.html` never forces
+  the wizard.
 - **Saving:** everything autosaves (switches, presets, categories, list rows
   via `ListEditor.onChange`) and confirms in `#save-msg`. The only explicit
   saves are multi-field forms: "Edit as text" (Save list / Cancel) and
@@ -391,7 +397,11 @@ Global: `#banner`, `#lock-status` (visible only when locked, contains
 - `#advanced`: `#threshold` (0.3–0.9 step 0.05), `#threshold-val`,
   `#test-pair`, `#scan-history`, `#latency-log`, `#status`, `#out` (`->`
   result format, `Scan done` text).
-- `#welcome`: `#welcome-wizard`, `#welcome-whitelist`.
+- `#welcome`: `#welcome-wizard`, `#welcome-whitelist`, `#welcome-verification`
+  (`data-state="checking|ready|degraded|error"`), `#protection-check-*` (one of
+  `site-access`, `distraction`, `productive`, with `data-status`),
+  `#welcome-retry-verification`, `#welcome-continue-unverified`, and the footer
+  `#welcome-start` / `#welcome-continue` / `#welcome-back`.
 
 ### Block screens
 - `blockscreen.ts`: self-contained functions, zero imports/module closures.

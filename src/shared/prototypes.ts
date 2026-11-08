@@ -249,3 +249,17 @@ export function effectiveBlockScore(
   }
   return verdict.score;
 }
+
+/** The single classifier-policy decision used by enforcement, evaluation, and
+ * protection verification. Deterministic rules and channel allow rescues remain
+ * in their callers; this predicate covers only the classifier verdict itself. */
+export function shouldBlockClassifierVerdict(
+  verdict: { label: string; score: number; all?: { labels: string[]; scores: number[] } },
+  blockedLabels: readonly string[],
+  blockThreshold: number,
+): boolean {
+  return (
+    blockedLabels.includes(verdict.label) &&
+    effectiveBlockScore(verdict, blockedLabels) >= blockThreshold
+  );
+}

@@ -106,7 +106,8 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   directly Node-tested with in-memory storage).
 - `node scripts/rules-test.mjs` — pure unit tests for the deterministic rule
   core: title-rule compiler/matcher + channel rules (`src/shared/rules.ts`,
-  same type-stripping constraints).
+  same type-stripping constraints), the shared classifier block predicate, and
+  proof-of-protection configuration/verdict policy.
 - `node scripts/wildcards-test.mjs` — pure unit tests for URL/title blocklist
   and whitelist wildcard grammar + legacy normalization, safe allow rejection,
   popup shared-API wiring, and direct serialized-sanitizer matcher parity.
@@ -124,6 +125,13 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   `EMBED_MODEL_REVISION` cold-starts the download again, and a suite's first
   classify-dependent assertions can time out mid-download; just re-run once
   (the pin-warm cache persists).
+- `node scripts/e2e-protection-verification.mjs` — cold-profile Chromium
+  proof-of-protection suite (run after `npm run build:chrome`). Uses the real
+  production classifier/policy without fixture tabs, and verifies fresh block +
+  allow decisions, actual `<all_urls>` access, model-outage and warm-cache
+  sabotage, recovery, permission denial, incompatible custom settings,
+  stale-response rejection, external-change refresh, and commit-pending UI.
+  Recreates `.dev-profile-protection/` on each run.
 - `SB_FIREFOX=/path/to/firefox node scripts/verify-firefox-dnr.mjs` — live
   Firefox DNR check (red-team #4): packs dist/firefox, drives raw marionette
   (both WebDriver flavors refuse moz-extension:// navigation), asserts the
@@ -186,6 +194,13 @@ Commit and push when appropriate.
     `classify-client.ts` (`EMBED`/`CLASSIFY` RPC); on Firefox in-process.
   - `classify-client.ts` — SW-side offscreen RPC: `supportsOffscreen()`,
     `classifyViaOffscreen(text, labels)`, `embedViaOffscreen(texts)`.
+  - `protection-verification.ts` — `VERIFY_PROTECTION` checks current
+    `<all_urls>` permission and runs fresh production classification for the
+    built-in gaming/block and programming/allow fixtures. `COMPLETE_ONBOARDING`
+    repeats the checks before it alone persists `enabled + onboarded`; policy
+    fingerprints and a second permission check reject mid-run changes. No test
+    tabs, modified rules, or weakened settings. Actual navigation enforcement
+    remains separately covered by `scripts/e2e-test.mjs`.
   - `offscreen/offscreen.{html,ts}` — Chrome-only document that HOSTS the
     Transformers pipelines (pure inference; no caching/settings). Survives SW
     idle. ES-module bundle + local `wasmPaths` override (see constraint #7).
@@ -290,7 +305,10 @@ Commit and push when appropriate.
   `#companion`, `#privacy`, `#advanced` (exact threshold slider +
   diagnostics: Test classifier / Scan history / Latency log → `#out`), and
   `#welcome` — the 3-step first-run wizard (`onInstalled` opens it; plain
-  `options.html` only shows a "Finish setup" banner). Everything autosaves
+  `options.html` only shows a "Finish setup" banner). Its final step gates
+  completion on a `ready` preview, then calls the verified background
+  `COMPLETE_ONBOARDING` RPC; continuing without verification leaves
+  `onboarded` false. Everything autosaves
   (no Save button). E2E suites navigate to `options.html#<page>` because
   only the active page renders. Layout primitives:
   `src/components/ui/settings.tsx` (Section → Group → Row). No
@@ -319,7 +337,10 @@ Commit and push when appropriate.
   `whitelist`, `blocklist`, `shareFeedback` — the runtime source of truth),
   `prototypes.ts` (centroid specs from `prototype-seeds.json` + similarity
   math; neutral centroids get a `neutral: ` label prefix and can never block;
-  user-added custom categories get a label-text fallback centroid),
+  user-added custom categories get a label-text fallback centroid;
+  `shouldBlockClassifierVerdict` is the shared enforcement/eval/readiness
+  decision), `protection-policy.ts` (pure fixture configuration diagnostics,
+  verdict assessment, and all-required-checks readiness summary),
   `prototype-seeds.json` (per-category seed texts — keep DISJOINT from
   `eval-dataset.json`, that's the train/test split), `feedback.ts`
   (FP/FN correction store; `getPrototypeExamples()` folds corrections into

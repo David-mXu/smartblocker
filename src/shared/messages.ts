@@ -29,6 +29,8 @@ export type Request =
   | { type: 'GET_USAGE_STATS' }
   | { type: 'CLEAR_USAGE_STATS' }
   | { type: 'TEST_PAIR' }
+  | { type: 'VERIFY_PROTECTION' }
+  | { type: 'COMPLETE_ONBOARDING' }
   | { type: 'SCAN_HISTORY' }
   // Offscreen-document RPC: pure inference primitives, so the offscreen worker
   // stays decoupled from settings + text assembly (those live SW-side).
@@ -152,6 +154,36 @@ export interface ClassifyOutcome {
   inferMs: number;
   /** True when served from the title cache (no inference ran). */
   cached: boolean;
+}
+
+export interface ProtectionVerdictEvidence {
+  label: string;
+  score: number;
+  effectiveScore: number;
+  decision: 'block' | 'allow';
+  /** Must be false for a successful readiness check. */
+  cached: boolean;
+}
+
+export interface ProtectionCheck {
+  id: 'site-access' | 'distraction' | 'productive';
+  status: 'passed' | 'failed' | 'error';
+  label: string;
+  detail: string;
+  verdict?: ProtectionVerdictEvidence;
+}
+
+export interface VerifyProtectionResponse {
+  /** Only `ready` may complete onboarding. */
+  status: 'ready' | 'degraded' | 'error';
+  checks: ProtectionCheck[];
+  /** Transport/unexpected failure detail; per-check errors live in `checks`. */
+  error?: string;
+}
+
+export interface CompleteOnboardingResponse extends VerifyProtectionResponse {
+  /** True only after the background persisted enabled + onboarded together. */
+  saved: boolean;
 }
 
 export interface TestPairResponse {

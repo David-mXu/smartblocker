@@ -356,7 +356,7 @@ async function classifyEmbed(
   return { ...verdict, loadMs: loadMs + centroids.buildMs, inferMs: inferMs + focus.inferMs };
 }
 
-export async function classify(input: ClassifyInput): Promise<ClassifyOutcome> {
+export async function classify(input: ClassifyInput, bypassCache = false): Promise<ClassifyOutcome> {
   const { labels } = await getSettings();
 
   // The cache key spans every signal (title/channel/context) AND the model
@@ -374,7 +374,9 @@ export async function classify(input: ClassifyInput): Promise<ClassifyOutcome> {
   const text = buildClassifierText(input);
 
   const cache = await getTitleCache();
-  const hit = cache.get(key);
+  // Read bypass is reserved for proof-of-protection checks: the production
+  // inference path still runs and its fresh verdict refreshes the normal cache.
+  const hit = bypassCache ? undefined : cache.get(key);
   if (hit) {
     return { text, ...hit, loadMs: 0, inferMs: 0, cached: true };
   }

@@ -10,6 +10,7 @@ import { hostnameOf } from '../shared/url-signals';
 import type {
   BreakResponse,
   CompanionStatusResponse,
+  CompleteOnboardingResponse,
   DeleteSharedFeedbackResponse,
   LockTypeResponse,
   Request,
@@ -17,8 +18,10 @@ import type {
   SubItemsResponse,
   TestPairResponse,
   UsageStatsResponse,
+  VerifyProtectionResponse,
 } from '../shared/messages';
 import { classify } from './classifier';
+import { completeOnboarding, verifyProtection } from './protection-verification';
 import { consumeOverrideToken } from './override-tokens';
 import { evaluateSubItems, initBlocker, sweepOpenTabs } from './blocker';
 import { cancelConfiguredBreak, requestBreakChallenge, startConfiguredBreak } from './breaks';
@@ -85,7 +88,9 @@ api.runtime.onMessage.addListener(
         | SubItemsResponse
         | SharedFeedbackInfoResponse
         | DeleteSharedFeedbackResponse
-        | UsageStatsResponse,
+        | UsageStatsResponse
+        | VerifyProtectionResponse
+        | CompleteOnboardingResponse,
     ) => void,
   ) => {
     // Defense-in-depth (red-team #34): only this extension's own contexts
@@ -106,6 +111,31 @@ api.runtime.onMessage.addListener(
         sendResponse({ ok: true, results });
       })().catch((e) => sendResponse({ ok: false, error: String(e) }));
       return true; // keep the message channel open for the async response
+    }
+    if (msg?.type === 'VERIFY_PROTECTION') {
+      verifyProtection()
+        .then((report) => sendResponse(report))
+        .catch((e) =>
+          sendResponse({
+            status: 'error',
+            checks: [],
+            error: `Protection verification could not start: ${e instanceof Error ? e.message : String(e)}`,
+          }),
+        );
+      return true;
+    }
+    if (msg?.type === 'COMPLETE_ONBOARDING') {
+      completeOnboarding()
+        .then((report) => sendResponse(report))
+        .catch((e) =>
+          sendResponse({
+            status: 'error',
+            checks: [],
+            saved: false,
+            error: `Onboarding could not finish: ${e instanceof Error ? e.message : String(e)}`,
+          }),
+        );
+      return true;
     }
     if (msg?.type === 'SCAN_HISTORY') {
       // Fire and forget — the popup polls storage.local.historyScan.

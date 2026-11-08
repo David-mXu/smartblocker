@@ -4,6 +4,7 @@ import { cn } from '../../lib/utils';
 import { api, IS_FIREFOX } from '../../shared/api';
 import { getLockStatus } from '../../shared/lock';
 import { getSettings, setSettings, type Settings } from '../../shared/settings';
+import type { CompleteOnboardingResponse, VerifyProtectionResponse } from '../../shared/messages';
 import { Button } from '../../components/ui/button';
 import { Callout } from '../../components/ui/settings';
 import { StepCategories } from './StepCategories';
@@ -12,9 +13,10 @@ import { StepSites } from './StepSites';
 
 // First-run welcome wizard, rendered by OptionsApp at options.html#welcome
 // (TEAM-SPEC "Welcome wizard"; research: 3 steps, preserve state, extension
-// already works if skipped). Contract: onFinish() is called after the wizard
-// has persisted `onboarded: true` — EXCEPT "Set up later", which leaves
-// `onboarded` false so the options page keeps its "Finish setup" banner.
+// already works if skipped). Contract: the successful finish persists
+// `onboarded: true` only after fresh protection checks return `ready`.
+// "Set up later" / "Continue without verification" leave setup unfinished so
+// the options page keeps its "Finish setup" banner.
 //
 // Persistence: each step is written with setSettings() on Continue (it THROWS
 // while a lock is active — every call is try/caught and the reason shown).
@@ -28,7 +30,7 @@ export interface WelcomeWizardProps {
 const STEPS = [
   { title: 'What pulls you off track?', short: 'Distractions', subtitle: 'Pick what SmartBlocker should block. Your choices stay on this device.' },
   { title: 'What should always stay open?', short: 'Always open', subtitle: 'Sites you rely on for work are never checked. Both parts are optional.' },
-  { title: 'You’re all set', short: 'Ready', subtitle: 'Here’s what SmartBlocker will do from now on.' },
+  { title: 'Verify your protection', short: 'Ready', subtitle: 'Two fresh on-device checks must pass before setup is complete.' },
 ] as const;
 
 const STEP_KEY = 'smartblocker.welcomeStep';
@@ -83,9 +85,22 @@ export function WelcomeWizard({ onFinish }: WelcomeWizardProps) {
   const [lockReason, setLockReason] = React.useState<string | null>(null);
   const [incognitoAllowed, setIncognitoAllowed] = React.useState<boolean | null>(null);
   const [saving, setSaving] = React.useState(false);
+  const [completing, setCompleting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [verificationStatus, setVerificationStatus] = React.useState<
+    'checking' | VerifyProtectionResponse['status']
+  >('checking');
+  const [verificationReport, setVerificationReport] = React.useState<VerifyProtectionResponse | null>(null);
+  const [verificationError, setVerificationError] = React.useState<string | null>(null);
   const headingRef = React.useRef<HTMLHeadingElement>(null);
   const firstRender = React.useRef(true);
+  const verificationGeneration = React.useRef(0);
+  const stepRef = React.useRef(step);
+  const completingRef = React.useRef(completing);
+  const verificationStatusRef = React.useRef(verificationStatus);
+  stepRef.current = step;
+  completingRef.current = completing;
+  verificationStatusRef.current = verificationStatus;
 
   // ── Load ────────────────────────────────────────────────────────────────
   React.useEffect(() => {
@@ -137,6 +152,89 @@ export function WelcomeWizard({ onFinish }: WelcomeWizardProps) {
       window.removeEventListener('focus', onVisible);
     };
   }, [checkIncognito]);
+
+  const runProtectionVerification = React.useCallback(async () => {
+    const generation = ++verificationGeneration.current;
+    setVerificationStatus('checking');
+    setVerificationReport(null);
+    setVerificationError(null);
+    try {
+      const report: VerifyProtectionResponse = await api.runtime.sendMessage({ type: 'VERIFY_PROTECTION' });
+      if (!report || !['ready', 'degraded', 'error'].includes(report.status)) {
+        throw new Error(report?.error || 'the background worker returned an invalid report');
+      }
+      if (generation !== verificationGeneration.current || stepRef.current !== STEPS.length - 1) return;
+      setVerificationReport(report);
+      setVerificationStatus(report.status);
+      setVerificationError(report.error ?? null);
+    } catch (e) {
+      if (generation !== verificationGeneration.current || stepRef.current !== STEPS.length - 1) return;
+      const message = e instanceof Error ? e.message : String(e);
+      setVerificationReport(null);
+      setVerificationStatus('error');
+      setVerificationError(`Protection verification could not finish: ${message}. Retry, or continue without verification.`);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (step === STEPS.length - 1 && loaded && lockReason === null) void runProtectionVerification();
+    return () => {
+      // Invalidate any slower run when leaving the step (or unmounting), so a
+      // stale `ready` can never overwrite a newer configuration check.
+      verificationGeneration.current += 1;
+    };
+  }, [step, loaded, lockReason, runProtectionVerification]);
+
+  // A second options tab can change the policy after this preview passed.
+  // Invalidate immediately, then coalesce autosave bursts into one fresh run.
+  // Returning focus covers browser permission changes not written to storage.
+  React.useEffect(() => {
+    let retryTimer: number | undefined;
+    const policyOf = (value: unknown) => {
+      const settings = value as Partial<Settings> | undefined;
+      return JSON.stringify([settings?.labels, settings?.blockedLabels, settings?.blockThreshold]);
+    };
+    const invalidatePolicyPreview = () => {
+      if (stepRef.current !== STEPS.length - 1 || completingRef.current) return;
+      verificationGeneration.current += 1;
+      setVerificationStatus('checking');
+      setVerificationReport(null);
+      setVerificationError(null);
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      retryTimer = window.setTimeout(() => void runProtectionVerification(), 100);
+    };
+    const onStorageChanged: Parameters<typeof api.storage.onChanged.addListener>[0] = (changes, area) => {
+      if (
+        area === 'local' &&
+        changes.settings &&
+        policyOf(changes.settings.oldValue) !== policyOf(changes.settings.newValue)
+      ) {
+        invalidatePolicyPreview();
+      }
+    };
+    const recheckExternalState = () => {
+      if (
+        stepRef.current === STEPS.length - 1 &&
+        !completingRef.current &&
+        verificationStatusRef.current !== 'checking' &&
+        document.visibilityState === 'visible'
+      ) {
+        void runProtectionVerification();
+      }
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') recheckExternalState();
+    };
+    api.storage.onChanged.addListener(onStorageChanged);
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', recheckExternalState);
+    return () => {
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      api.storage.onChanged.removeListener(onStorageChanged);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', recheckExternalState);
+    };
+  }, [runProtectionVerification]);
 
   // ── Step changes: persist index, move focus to the heading ───────────────
   React.useEffect(() => {
@@ -225,7 +323,7 @@ export function WelcomeWizard({ onFinish }: WelcomeWizardProps) {
   };
 
   const goNext = async () => {
-    if (saving || !loaded) return;
+    if (saving || completing || !loaded) return;
     if (step === 0) {
       if (blockedList.length === 0) return;
       // While locked nothing can be saved; let the user look around anyway.
@@ -238,17 +336,47 @@ export function WelcomeWizard({ onFinish }: WelcomeWizardProps) {
       // Locked: nothing can be saved, so leave setup unfinished (the options
       // page keeps its "Finish setup" banner) instead of dead-ending here.
       if (locked) return setUpLater();
-      if (!(await save({ enabled: true, onboarded: true }))) return;
-      storeStep(null);
-      onFinish();
+      // The preview must be ready, but the background independently verifies
+      // again at commit time so stale UI evidence cannot complete onboarding.
+      if (verificationStatus !== 'ready') return;
+      const generation = ++verificationGeneration.current;
+      setCompleting(true);
+      setVerificationStatus('checking');
+      setVerificationReport(null);
+      setVerificationError(null);
+      try {
+        const report: CompleteOnboardingResponse = await api.runtime.sendMessage({ type: 'COMPLETE_ONBOARDING' });
+        if (!report || !['ready', 'degraded', 'error'].includes(report.status) || typeof report.saved !== 'boolean') {
+          throw new Error(report?.error || 'the background worker returned an invalid completion report');
+        }
+        if (generation !== verificationGeneration.current || stepRef.current !== STEPS.length - 1) return;
+        if (report.status === 'ready' && report.saved) {
+          storeStep(null);
+          onFinish();
+          return;
+        }
+        setVerificationReport(report);
+        setVerificationStatus(report.status === 'ready' ? 'error' : report.status);
+        setVerificationError(report.error ?? 'Protection was not verified, so onboarding was not completed.');
+      } catch (e) {
+        if (generation === verificationGeneration.current && stepRef.current === STEPS.length - 1) {
+          const message = e instanceof Error ? e.message : String(e);
+          setVerificationStatus('error');
+          setVerificationError(`Onboarding could not finish: ${message}. No completed setup was saved.`);
+        }
+      } finally {
+        setCompleting(false);
+      }
     }
   };
 
   const goBack = () => {
-    if (step > 0) setStep(step - 1);
+    if (!completing && step > 0) setStep(step - 1);
   };
 
   const setUpLater = () => {
+    if (completing) return;
+    verificationGeneration.current += 1;
     storeStep(null);
     onFinish();
   };
@@ -268,7 +396,21 @@ export function WelcomeWizard({ onFinish }: WelcomeWizardProps) {
   };
 
   const meta = STEPS[step];
-  const canContinue = loaded !== null && !saving && (step !== 0 || blockedList.length > 0);
+  const canContinue =
+    loaded !== null &&
+    !saving &&
+    !completing &&
+    (step !== 0 || blockedList.length > 0) &&
+    (step !== STEPS.length - 1 || locked || verificationStatus === 'ready');
+  const finalActionLabel = locked
+    ? 'Go to settings'
+    : completing
+      ? 'Verifying & starting…'
+      : verificationStatus === 'checking'
+        ? 'Checking protection…'
+        : verificationStatus === 'ready'
+          ? 'Start blocking'
+          : 'Verification required';
   const openExtensionSettings = IS_FIREFOX
     ? null
     : () => {
@@ -363,9 +505,17 @@ export function WelcomeWizard({ onFinish }: WelcomeWizardProps) {
             focusGoal={focusGoal}
             incognitoAllowed={incognitoAllowed}
             isFirefox={IS_FIREFOX}
-            onEditStep={setStep}
+            onEditStep={(nextStep) => {
+              if (!completing) setStep(nextStep);
+            }}
             onOpenExtensionSettings={openExtensionSettings}
             onRecheckIncognito={() => void checkIncognito()}
+            verificationStatus={verificationStatus}
+            verificationReport={verificationReport}
+            verificationError={verificationError}
+            completionPending={completing}
+            onRetryVerification={() => void runProtectionVerification()}
+            onContinueUnverified={setUpLater}
           />
         )}
       </main>
@@ -385,6 +535,7 @@ export function WelcomeWizard({ onFinish }: WelcomeWizardProps) {
               id="welcome-back"
               variant="ghost"
               onClick={goBack}
+              disabled={completing}
               className={cn(step === 0 && 'invisible')}
               aria-hidden={step === 0 || undefined}
               tabIndex={step === 0 ? -1 : undefined}
@@ -398,7 +549,7 @@ export function WelcomeWizard({ onFinish }: WelcomeWizardProps) {
               disabled={!canContinue}
               onClick={() => void goNext()}
             >
-              {step < STEPS.length - 1 ? 'Continue' : locked ? 'Go to settings' : 'Start blocking'}
+              {step < STEPS.length - 1 ? 'Continue' : finalActionLabel}
             </Button>
           </div>
         </div>
