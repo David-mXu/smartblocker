@@ -27,6 +27,10 @@ pub struct CompanionConfig {
     /// Case-insensitive substrings matched against process exe stems while a
     /// forced block is active.
     pub app_blocklist: Vec<String>,
+    /// Wall-clock stamp of the last accepted change to `app_blocklist`.
+    /// 0 = never synchronized (older config); the extension treats it as
+    /// "the daemon has no newer opinion" rather than a wipe.
+    pub app_blocklist_updated_at: i64,
     /// Managed-browser policy enforcement. Ships false until the extension
     /// has a store listing (needs an update_url).
     pub policy_enforce: bool,
@@ -272,6 +276,7 @@ mod tests {
         let (dir, store) = temp_store();
         let config = CompanionConfig {
             app_blocklist: vec!["steam".into()],
+            app_blocklist_updated_at: 1_700_000_000_000,
             extra_incompatible_browsers: vec!["fakebrowser".into()],
             ..CompanionConfig::default()
         };
@@ -286,6 +291,7 @@ mod tests {
         .unwrap();
         let loaded = store.load_config();
         assert_eq!(loaded.app_blocklist, vec!["x".to_string()]);
+        assert_eq!(loaded.app_blocklist_updated_at, 0);
         assert!(!loaded.policy_enforce);
         assert!(loaded.extra_incompatible_browsers.is_empty());
     }

@@ -25,6 +25,15 @@ import type {
 import { getLockState, mergeRemoteLockState } from '../shared/lock';
 import { EMPTY_LOCK_STATE } from '../shared/lock-math';
 import type { LockState } from '../shared/lock-math';
+import {
+  PROFILES_STORAGE_KEY,
+  activeAppAssociation,
+  reconcileAppBlocklist,
+} from '../shared/profiles';
+import {
+  adoptActiveAppBlocklistFromCompanion,
+  getProfilesState,
+} from '../shared/profile-store';
 import type { PartnerCommandResponse, Request as ExtensionRequest } from '../shared/messages';
 import { observeExtensionGrace } from '../shared/grace-math';
 import { createAllowanceBridge } from './allowance-bridge';
@@ -98,6 +107,7 @@ let blockingAuthorityQueue: Promise<void> = Promise.resolve();
 const blockingIntents = new BlockingIntentLedger();
 let blockingIntentPump: Promise<void> | null = null;
 let blockingIntentPumpAgain = false;
+let appBlocklistSyncQueue: Promise<void> = Promise.resolve();
 
 export async function getCompanionSnapshot(): Promise<CompanionSnapshot> {
   if (snapshot) return snapshot;
@@ -320,6 +330,47 @@ function requestBlockingIntentReport(): void {
   );
 }
 
+/** Converge the ACTIVE profile's app association with the daemon's list.
+ *  Profiles own the association; the daemon owns its enforced copy. Equal
+ *  lists are already converged. Otherwise the newer stamp wins, with the
+ *  never-synchronized exception documented in reconcileAppBlocklist. */
+async function syncAppBlocklist(): Promise<void> {
+  const status = snapshot?.status;
+  if (
+    !status ||
+    !Array.isArray(status.appBlocklist) ||
+    !port ||
+    !browserAuthenticated
+  ) {
+    return;
+  }
+  const state = await getProfilesState();
+  const decision = reconcileAppBlocklist(
+    activeAppAssociation(state),
+    status.appBlocklist,
+    typeof status.appBlocklistUpdatedAt === 'number' ? status.appBlocklistUpdatedAt : 0,
+  );
+  if (decision.action === 'adopt') {
+    await adoptActiveAppBlocklistFromCompanion(decision.apps, decision.updatedAt);
+  } else if (decision.action === 'push') {
+    send({
+      v: PROTOCOL_VERSION,
+      type: 'appBlocklistUpdate',
+      appBlocklist: decision.apps,
+      appBlocklistUpdatedAt: decision.updatedAt,
+    });
+  }
+}
+
+/** Serialize storage reads and sends so a burst of status/storage events
+ *  cannot interleave an adopt with a stale push. Each drain re-reads the
+ *  current snapshot and active profile. */
+function requestAppBlocklistSync(): void {
+  appBlocklistSyncQueue = appBlocklistSyncQueue
+    .then(() => syncAppBlocklist())
+    .catch((e) => console.warn('[SmartBlocker] companion app-list sync failed:', e));
+}
+
 function initializeBlockingIfNeeded(): void {
   if (daemonBlocking !== null || !port || !browserAuthenticated) return;
   requestBlockingIntentReport();
@@ -426,9 +477,13 @@ function markConnected(): void {
   void api.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: KEEPALIVE_PERIOD_MIN });
   // Liveness signal for the companion's watchdog. Side effect we accept: an
   // open NM port keeps the Chrome (>=116) SW alive while the companion runs.
+  // The same cadence retries app-list convergence, which also picks up edits
+  // made in the desktop UI (the daemon answers with an authoritative status).
   heartbeatTimer = setInterval(() => {
     send({ v: PROTOCOL_VERSION, type: 'heartbeat', now: Date.now() });
+    requestAppBlocklistSync();
   }, HEARTBEAT_INTERVAL_MS);
+  requestAppBlocklistSync();
 }
 
 /** Incoming messages are untrusted (another process) and forward-compat:
@@ -537,6 +592,7 @@ function onPortMessage(raw: unknown): void {
     });
     if (running && browserAuthenticated) {
       allowanceBridge.onStatus(typedStatus.allowance, epoch);
+      requestAppBlocklistSync();
     }
     // Lock state lands first: if this status also carries ordinary blocking,
     // the local settings guard sees the same lock before applying that value.
@@ -660,6 +716,16 @@ export function initCompanionBridge(): void {
     if (area !== 'local' || !changes['lockState'] || !port) return;
     const lockState: LockState = { ...EMPTY_LOCK_STATE, ...changes['lockState'].newValue };
     send({ v: PROTOCOL_VERSION, type: 'lockStateSync', lockState });
+  });
+
+  // A profile activation or local association edit changes the list this
+  // browser intends to enforce. Push it immediately; the daemon's answer is
+  // authoritative and the storage event caused by adopting that answer
+  // reconciles to a no-op.
+  api.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes[PROFILES_STORAGE_KEY] && port && browserAuthenticated) {
+      requestAppBlocklistSync();
+    }
   });
 
   // Ordinary blocking is daemon-owned whenever a live authority exists. A

@@ -432,19 +432,18 @@ fn start_timer_lock(ctx: State<'_, AppCtx>, minutes: u64) -> Result<(), String> 
 fn set_app_blocklist(ctx: State<'_, AppCtx>, apps: Vec<String>) -> Result<(), String> {
     let store = ctx.store();
     let mut config = store.load_config();
-    let status = derive_lock_status(&store.load_lock_state(), now_ms());
-    // Locked = strictening only: additions fine, removals refused (the
-    // whole point of the lock is that weakening waits it out).
-    if status.settings_locked {
-        let kept_all = config
-            .app_blocklist
-            .iter()
-            .all(|old| apps.iter().any(|new| new.eq_ignore_ascii_case(old)));
-        if !kept_all {
-            return Err("Locked: apps can be added but not removed until the lock ends.".into());
-        }
-    }
-    config.app_blocklist = apps;
+    let now = now_ms();
+    let status = derive_lock_status(&store.load_lock_state(), now);
+    let normalized = apps::normalize_app_blocklist(&apps);
+    // Locked = strictening only: additions are learned, removals wait. Keeping
+    // the current entries (rather than refusing a mixed edit) matches the
+    // extension-side rule and means "add Steam" still works mid-lock.
+    config.app_blocklist = if status.settings_locked {
+        apps::merge_locked_app_blocklist(&config.app_blocklist, &normalized)
+    } else {
+        normalized
+    };
+    config.app_blocklist_updated_at = now.max(config.app_blocklist_updated_at.saturating_add(1));
     store
         .save_config(&config)
         .map_err(|e| format!("Couldn't save your blocked apps: {e}"))

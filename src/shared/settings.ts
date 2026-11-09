@@ -1,34 +1,40 @@
 // User-configurable settings, the single source of truth the classifier and
-// blocker read at runtime. config.ts now holds only the DEFAULTS; everything
+// blocker read at runtime. config.ts holds only the DEFAULTS; everything
 // here is overridable from the options page and persisted in storage.local.
+//
+// Named profiles (profiles.ts / profile-store.ts) compose on top of this:
+// the stored `settings` object is the Default profile. While a named profile
+// is active, `getSettings()` overlays ONLY that profile's scoped policy on the
+// Default/global object; `setSettings()` writes scoped edits into the active
+// profile snapshot instead of mutating Default.
 import { api } from './api';
-import {
-  BLOCKED_LABELS,
-  BLOCK_THRESHOLD,
-  DEFAULT_WHITELIST,
-  GOOGLE_PRODUCTIVE_HOSTS,
-  LABELS,
-  LEGACY_SEARCH_WHITELIST,
-} from './config';
+import type { BreakMode } from './breaks';
 import { getLockStatus } from './lock';
 import { clampResumeAt } from './resume';
-import {
-  normalizeFirstDayOfWeek,
-  normalizeHour24,
-  sanitizeBlockMessage,
-} from './display-prefs';
-import {
-  clampBreakDelayMinutes,
-  clampBreakDurationMinutes,
-  clampBreakTextLength,
-  normalizeBreakMode,
-  type BreakMode,
-} from './breaks';
+import { normalizeFirstDayOfWeek, normalizeHour24 } from './display-prefs';
 import {
   DEFAULT_NOTIFICATION_PREFS,
   normalizeNotificationPrefs,
   type NotificationPrefs,
 } from './notifications';
+import {
+  PROFILES_STORAGE_KEY,
+  applyProfilePolicy,
+  defaultProfilePolicy,
+  extractProfilePolicy,
+  isProfilePolicyField,
+  migrateLabels as migrateProfileLabels,
+  migrateWhitelist as migrateProfileWhitelist,
+  sanitizeProfilePolicy,
+  WHITELIST_VERSION as PROFILE_WHITELIST_VERSION,
+  type ProfilePolicy,
+  type ProfilePolicyKey,
+} from './profiles';
+import {
+  getProfilesState,
+  primeProfilesState,
+  updateActiveProfilePolicy,
+} from './profile-store';
 
 export interface Settings {
   /** Candidate categories the zero-shot model scores against. */
@@ -37,9 +43,10 @@ export interface Settings {
   blockedLabels: string[];
   /** Minimum top-label score to block (0..1). */
   blockThreshold: number;
-  /** Master kill switch — when false, nothing is ever blocked. */
+  /** Master kill switch — when false, nothing is ever blocked. GLOBAL: not
+   *  part of a profile, so switching profiles never turns blocking off. */
   enabled: boolean;
-  /** Set once the first-run onboarding flow has completed. */
+  /** Set once the first-run onboarding flow has completed. GLOBAL. */
   onboarded: boolean;
   /** Hostnames never classified/blocked. Matched by domain + subdomains. */
   whitelist: string[];
@@ -76,7 +83,8 @@ export interface Settings {
   /**
    * Opt-in: share anonymized misclassification feedback (see PRIVACY.md) to
    * improve the model. OFF by default — SmartBlocker is telemetry-free unless
-   * the user explicitly enables this on the options page.
+   * the user explicitly enables this on the options page. GLOBAL: corrections
+   * and centroids stay shared across profiles.
    */
   shareFeedback: boolean;
   /**
@@ -102,7 +110,7 @@ export interface Settings {
    * OFF by default (red-team P1 #9): each lookup sends the YouTube video ID
    * to www.youtube.com, which is browsing-metadata egress. Never fires for
    * youtube-nocookie or privacy-facade embeds even when enabled. See the
-   * "Network requests" section of PRIVACY.md.
+   * "Network requests" section of PRIVACY.md. GLOBAL (privacy posture).
    */
   resolveEmbedTitles: boolean;
   /**
@@ -120,13 +128,13 @@ export interface Settings {
    * back on automatically — on browser startup, at the next scheduled-block
    * start, or at `resumeAt`. Closes the "forgot to re-enable" relapse path
    * (CT "Autostart Blocks"). Turning the toggle back on clears any armed
-   * resume (resumeAt → null) but keeps the mode for next time.
+   * resume (resumeAt → null) but keeps the mode for next time. GLOBAL.
    */
   resumeMode: 'off' | 'startup' | 'schedule' | 'time';
   /**
    * Epoch ms of the chosen resume instant; only meaningful when
    * `resumeMode === 'time'`. setSettings clamps writes to now+24h max
-   * (MAX_RESUME_AHEAD_MS in resume.ts) and invalid values to null.
+   * (MAX_RESUME_AHEAD_MS in resume.ts) and invalid values to null. GLOBAL.
    */
   resumeAt: number | null;
   /** Optional user-requested break gate. Break state lives in lockState;
@@ -168,38 +176,21 @@ export interface Settings {
 
 /** v1: original list (search engines whitelisted). v2 (2026-11-07): search
  *  roots removed, `google.com` replaced by its productive subdomains. */
-export const WHITELIST_VERSION = 2;
+export const WHITELIST_VERSION = PROFILE_WHITELIST_VERSION;
+
+const POLICY_DEFAULTS = defaultProfilePolicy(WHITELIST_VERSION);
 
 export const DEFAULTS: Settings = {
-  labels: [...LABELS],
-  blockedLabels: [...BLOCKED_LABELS],
-  blockThreshold: BLOCK_THRESHOLD,
+  ...POLICY_DEFAULTS,
   enabled: true,
   onboarded: false,
-  whitelist: [...DEFAULT_WHITELIST],
-  whitelistVersion: WHITELIST_VERSION,
-  blocklist: [],
-  titleRules: [],
-  channelBlocklist: [],
-  channelAllowlist: [],
   shareFeedback: false,
-  deletedBuiltinLabels: [],
-  focusGoal: '',
-  useTabContext: false,
   resolveEmbedTitles: false,
-  blockAdult: false,
   resumeMode: 'off',
   resumeAt: null,
-  breakMode: 'off',
-  breakDelayMinutes: 1,
-  breakDurationMinutes: 10,
-  breakTextLength: 100,
-  surrenderMode: 'off',
-  maskSearchElements: true,
   notificationPrefs: DEFAULT_NOTIFICATION_PREFS,
   firstDayOfWeek: 0,
   hour24: false,
-  blockMessage: '',
 };
 
 const STORAGE_KEY = 'settings';
@@ -209,119 +200,89 @@ const STORAGE_KEY = 'settings';
  * events cannot be mistaken for new user intent. */
 export const COMPANION_BLOCKING_ECHO_KEY = 'companionBlockingApplyEcho';
 
+// Re-exported for callers that used the old settings-local helpers.
+export { migrateProfileLabels as migrateLabels };
+export { migrateProfileWhitelist as migrateWhitelist };
+
 let cache: Settings | null = null;
 
 // Invalidate the in-memory cache when any context (options page, popup) writes
-// new settings, so a long-lived service worker / offscreen doc sees changes.
+// new settings OR activates/edits a named profile, so a long-lived service
+// worker / offscreen doc sees the new effective policy.
 api.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes[STORAGE_KEY]) cache = null;
+  if (area === 'local' && (changes[STORAGE_KEY] || changes[PROFILES_STORAGE_KEY])) cache = null;
 });
 
-/**
- * `labels`/`blockedLabels` are persisted snapshots taken at onboarding time,
- * so they go stale whenever config.ts's LABELS/BLOCKED_LABELS grow (e.g. the
- * 13-category expansion) — an existing user's stored settings would silently
- * keep classifying against only their old label set forever. Append any
- * canonical label missing from the stored snapshot (preserving user order/
- * edits otherwise), carrying over the new label's default blocked-ness.
- */
-function migrateLabels(stored: Partial<Settings> | undefined): Pick<Settings, 'labels' | 'blockedLabels'> {
-  if (!stored?.labels) {
-    return { labels: [...DEFAULTS.labels], blockedLabels: [...DEFAULTS.blockedLabels] };
-  }
-  const known = new Set(stored.labels);
-  const deleted = new Set(stored.deletedBuiltinLabels ?? []);
-  // Append canonical labels the user hasn't seen yet, but skip any they
-  // explicitly deleted — otherwise updates would silently re-add them.
-  const newLabels = LABELS.filter((l) => !known.has(l) && !deleted.has(l));
-  if (newLabels.length === 0) {
-    return { labels: stored.labels, blockedLabels: stored.blockedLabels ?? [...DEFAULTS.blockedLabels] };
-  }
-  return {
-    labels: [...stored.labels, ...newLabels],
-    blockedLabels: [
-      ...(stored.blockedLabels ?? []),
-      ...newLabels.filter((l) => BLOCKED_LABELS.has(l)),
-    ],
-  };
-}
-
-/**
- * Bring a stored whitelist up to WHITELIST_VERSION. Runs at READ time (like
- * migrateLabels), so it also applies while settings are locked — safe, since
- * it only ever shrinks the exemption set (stricter, never looser) — and is
- * persisted by the next setSettings(). v1 → v2: strip the legacy search-engine
- * roots (whitelisting "google.com" exempted Google News, image viewers and
- * inline video previews — the standard YouTube bypass) and, if "google.com"
- * was present, keep its productive subdomains working by adding them back
- * explicitly.
- */
-export function migrateWhitelist(
-  stored: Partial<Settings> | undefined,
-): Pick<Settings, 'whitelist' | 'whitelistVersion'> {
-  if (!stored?.whitelist) {
-    return { whitelist: [...DEFAULT_WHITELIST], whitelistVersion: WHITELIST_VERSION };
-  }
-  const version = stored.whitelistVersion ?? 1;
-  if (version >= WHITELIST_VERSION) {
-    return { whitelist: stored.whitelist, whitelistVersion: version };
-  }
-  const norm = (e: string) => e.trim().toLowerCase().replace(/^www\./, '');
-  const legacy = new Set(LEGACY_SEARCH_WHITELIST);
-  const hadGoogleRoot = stored.whitelist.some((e) => norm(e) === 'google.com');
-  const next = stored.whitelist.filter((e) => !legacy.has(norm(e)));
-  if (hadGoogleRoot) {
-    const present = new Set(next.map(norm));
-    for (const h of GOOGLE_PRODUCTIVE_HOSTS) if (!present.has(h)) next.push(h);
-  }
-  return { whitelist: next, whitelistVersion: WHITELIST_VERSION };
-}
-
-function normalizeBreakSettings(
-  stored: Partial<Settings> | undefined,
-): Pick<Settings, 'breakMode' | 'breakDelayMinutes' | 'breakDurationMinutes' | 'breakTextLength'> {
-  return {
-    breakMode: normalizeBreakMode(stored?.breakMode),
-    breakDelayMinutes: clampBreakDelayMinutes(stored?.breakDelayMinutes),
-    breakDurationMinutes: clampBreakDurationMinutes(stored?.breakDurationMinutes),
-    breakTextLength: clampBreakTextLength(stored?.breakTextLength),
-  };
-}
-
-/** Display preferences and the custom block-screen message are presentation
- *  only. Sanitizing on READ (and again on write) keeps devtools-tampered
- *  values from reaching every renderer. */
+/** Display preferences are presentation only. Sanitizing on READ (and again on
+ *  write) keeps devtools-tampered values from reaching every renderer. The
+ *  custom block message is policy-scoped, so it is sanitized with the rest of
+ *  the profile policy instead. */
 function normalizeDisplaySettings(
   stored: Partial<Settings> | undefined,
-): Pick<Settings, 'firstDayOfWeek' | 'hour24' | 'blockMessage'> {
+): Pick<Settings, 'firstDayOfWeek' | 'hour24'> {
   return {
     firstDayOfWeek: normalizeFirstDayOfWeek(stored?.firstDayOfWeek),
     hour24: normalizeHour24(stored?.hour24),
-    blockMessage: sanitizeBlockMessage(stored?.blockMessage),
   };
 }
 
-/** Read settings (cached), falling back to DEFAULTS for any missing field. */
-export async function getSettings(): Promise<Settings> {
-  if (cache) return cache;
-  const stored = await api.storage.local.get(STORAGE_KEY);
-  const storedSettings = stored[STORAGE_KEY] as Partial<Settings> | undefined;
-  cache = {
+/** Merge stored Default/global fields with sanitized policy values. Policy
+ *  migration/sanitization lives in profiles.ts so Default and every named
+ *  profile share one implementation. */
+function mergeStoredSettings(storedSettings: Partial<Settings> | undefined): Settings {
+  return {
     ...DEFAULTS,
     ...storedSettings,
-    ...normalizeBreakSettings(storedSettings),
+    ...sanitizeProfilePolicy(storedSettings, POLICY_DEFAULTS),
     ...normalizeDisplaySettings(storedSettings),
-    ...migrateLabels(storedSettings),
-    ...migrateWhitelist(storedSettings),
     notificationPrefs: normalizeNotificationPrefs(storedSettings?.notificationPrefs),
   };
+}
+
+/** Read the Default profile (the stored `settings` key) without overlaying a
+ *  named profile. Exported for the Profiles page and tests. */
+export async function getDefaultSettings(): Promise<Settings> {
+  const stored = await api.storage.local.get(STORAGE_KEY);
+  return mergeStoredSettings(stored[STORAGE_KEY] as Partial<Settings> | undefined);
+}
+
+/** Read effective settings: Default/global fields, with the active named
+ *  profile's scoped policy replacing Default only for those fields. */
+export async function getSettings(): Promise<Settings> {
+  if (cache) return cache;
+  const base = await getDefaultSettings();
+  const profiles = await getProfilesState();
+  const active =
+    profiles.activeProfileId === null
+      ? null
+      : profiles.profiles.find((profile) => profile.id === profiles.activeProfileId) ?? null;
+  cache = active ? applyProfilePolicy(base, active.policy) : base;
   return cache;
 }
 
-/** Merge a partial update into the stored settings and return the result.
+function pickPolicyPatch(patch: Partial<Settings>): Partial<ProfilePolicy> {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(patch)) {
+    if (!isProfilePolicyField(key)) continue;
+    out[key] = (patch as Record<string, unknown>)[key];
+  }
+  return out as Partial<ProfilePolicy>;
+}
+
+function pickGlobalPatch(patch: Partial<Settings>): Partial<Settings> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (isProfilePolicyField(key)) continue;
+    out[key] = value;
+  }
+  return out as Partial<Settings>;
+}
+
+/** Merge a partial update into the effective settings and return the result.
  *  THROWS while a lock is active (see lock.ts) — the single choke point every
- *  settings writer goes through, in whichever context it runs. (A raw
- *  storage.local.set from devtools bypasses it: accepted soft-lock.) */
+ *  settings writer goes through, in whichever context it runs. While a named
+ *  profile is active, scoped fields persist to that profile's snapshot; the
+ *  Default profile's scoped fields are untouched. */
 async function writeSettings(patch: Partial<Settings>, echoId?: string): Promise<Settings> {
   const lock = await getLockStatus();
   // Enabling ordinary blocking is always legal. Every disable and every other
@@ -336,16 +297,56 @@ async function writeSettings(patch: Partial<Settings>, echoId?: string): Promise
           : ' (password required)'),
     );
   }
-  const next = { ...(await getSettings()), ...patch };
+
+  const base = await getDefaultSettings();
+  const policyPatch = pickPolicyPatch(patch);
+  const globalPatch = pickGlobalPatch(patch);
+  const profiles = await getProfilesState();
+  const active =
+    profiles.activeProfileId === null
+      ? null
+      : profiles.profiles.find((profile) => profile.id === profiles.activeProfileId) ?? null;
+  const nextBase: Settings = { ...base, ...globalPatch };
   // Centralized write clamp for the auto-resume instant (24h horizon, invalid
   // → null — see resume.ts). Central here so every writer (options page,
   // popup, background) is covered identically.
-  if ('resumeAt' in patch) {
-    next.resumeAt = clampResumeAt(patch.resumeAt, Date.now());
+  if ('resumeAt' in globalPatch) {
+    nextBase.resumeAt = clampResumeAt(globalPatch.resumeAt, Date.now());
   }
-  Object.assign(next, normalizeBreakSettings(next));
-  next.notificationPrefs = normalizeNotificationPrefs(next.notificationPrefs);
-  Object.assign(next, normalizeDisplaySettings(next));
+  // Global presentation/reminder fields are normalized on write too, so a
+  // profile switch can never smuggle an unsanitized value into Default.
+  nextBase.notificationPrefs = normalizeNotificationPrefs(nextBase.notificationPrefs);
+  Object.assign(nextBase, normalizeDisplaySettings(nextBase));
+
+  if (active) {
+    const hasPolicyPatch = Object.keys(policyPatch).length > 0;
+    const nextState = hasPolicyPatch
+      ? updateActiveProfilePolicy(
+          profiles,
+          active.id,
+          sanitizeProfilePolicy({ ...active.policy, ...policyPatch }, active.policy),
+          Date.now(),
+        )
+      : profiles;
+    const next = applyProfilePolicy(nextBase, hasPolicyPatch
+      ? nextState.profiles.find((profile) => profile.id === active.id)!.policy
+      : active.policy);
+    cache = next;
+    if (hasPolicyPatch) primeProfilesState(nextState);
+    await api.storage.local.set({
+      [STORAGE_KEY]: nextBase,
+      ...(hasPolicyPatch ? { [PROFILES_STORAGE_KEY]: nextState } : {}),
+      ...(echoId ? { [COMPANION_BLOCKING_ECHO_KEY]: echoId } : {}),
+    });
+    return next;
+  }
+
+  const defaultPolicy = extractProfilePolicy(base);
+  const nextPolicy = sanitizeProfilePolicy(
+    { ...defaultPolicy, ...policyPatch },
+    defaultPolicy,
+  );
+  const next: Settings = { ...nextBase, ...nextPolicy };
   cache = next;
   await api.storage.local.set({
     [STORAGE_KEY]: next,
@@ -359,7 +360,7 @@ export async function setSettings(patch: Partial<Settings>): Promise<Settings> {
 }
 
 /** Daemon-owned ordinary-blocking application. This deliberately passes
- * through the same lock guard as every other settings mutation. */
+ *  through the same lock guard as every other settings mutation. */
 export async function setCompanionBlockingEnabled(
   enabled: boolean,
   echoId: string,

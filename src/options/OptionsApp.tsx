@@ -10,17 +10,20 @@ import {
   Prohibit,
   ShieldCheck,
   SlidersHorizontal,
+  Stack,
   Target,
   TextAa,
   Timer,
   type Icon,
 } from '@phosphor-icons/react';
 import { api } from '../shared/api';
+import { activeProfile } from '../shared/profiles';
 import { Badge } from '../components/ui/badge';
 import { cn } from '../lib/utils';
 import { useOptionsState, type OptionsState } from './useOptionsState';
 import { WelcomeWizard } from './welcome/WelcomeWizard';
 import { BlockingPage } from './pages/BlockingPage';
+import { ProfilesPage } from './pages/ProfilesPage';
 import { SitesPage } from './pages/SitesPage';
 import { FocusPage } from './pages/FocusPage';
 import { LocksPage } from './pages/LocksPage';
@@ -48,6 +51,7 @@ interface PageDef {
 const PAGES: PageDef[] = [
   { id: 'dashboard', label: 'Now', icon: Gauge, Component: DashboardPage },
   { id: 'blocking', label: 'Blocking', icon: Prohibit, Component: BlockingPage },
+  { id: 'profiles', label: 'Profiles', icon: Stack, Component: ProfilesPage },
   { id: 'sites', label: 'Sites', icon: Globe, Component: SitesPage },
   { id: 'focus', label: 'Focus', icon: Target, Component: FocusPage },
   { id: 'locks', label: 'Locks', icon: LockSimple, Component: LocksPage },
@@ -134,6 +138,7 @@ export function OptionsApp() {
   })();
 
   const onboarded = settings?.onboarded ?? true;
+  const namedActive = state.profiles ? activeProfile(state.profiles) : null;
   const PageComponent = page.Component;
 
   const statusPill = lock.locked ? (
@@ -189,6 +194,30 @@ export function OptionsApp() {
         <div className="mx-auto flex max-w-5xl items-start gap-2.5 px-4 py-2.5 text-[13px] font-medium text-accent-soft md:px-8">
           <LockSimple weight="fill" aria-hidden className="mt-0.5 size-4 shrink-0 text-accent" />
           <span className="tabular-nums">{lock.banner}</span>
+        </div>
+      </div>
+
+      {/* Named-profile scope, visible on every page so it is never ambiguous
+          which policy an edit belongs to. */}
+      <div
+        id="active-profile-banner"
+        style={{ display: !isWelcome && namedActive ? 'block' : 'none' }}
+        className="border-b border-border bg-card"
+      >
+        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-2 px-4 py-2 text-[13px] md:px-8">
+          <span className="flex min-w-0 items-center gap-2 text-muted-foreground">
+            <Stack aria-hidden className="size-4 shrink-0 text-foreground" />
+            <span className="truncate">
+              <span className="font-medium text-foreground">{namedActive?.name}</span> profile active
+              — its categories, sites, rules and desktop apps replace Default.
+            </span>
+          </span>
+          <a
+            href="#profiles"
+            className="shrink-0 font-medium text-foreground no-underline underline-offset-2 hover:underline"
+          >
+            Manage profiles
+          </a>
         </div>
       </div>
 

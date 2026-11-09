@@ -31,10 +31,18 @@ export function Page({ title, description, children }: PageProps) {
 }
 
 /** Inline "why is this disabled" line shown once per locked group. */
-export function LockedNote({ reason, className }: { reason: string; className?: string }) {
+export function LockedNote({
+  reason,
+  className,
+  id,
+}: {
+  reason: string;
+  className?: string;
+  id?: string;
+}) {
   if (!reason) return null;
   return (
-    <p className={cn('m-0 flex items-center gap-1.5 text-xs text-accent-soft', className)}>
+    <p id={id} className={cn('m-0 flex items-center gap-1.5 text-xs text-accent-soft', className)}>
       <LockSimple weight="fill" aria-hidden className="size-3.5 shrink-0 text-accent" />
       {reason}
     </p>

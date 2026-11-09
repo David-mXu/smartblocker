@@ -116,6 +116,12 @@ export interface CompanionStatus {
   /** Item10 authority. Absence means uninitialized/unsupported, never a request
    * to clear offline spending or pretend it is a synchronized zero balance. */
   allowance?: AllowanceAuthorityState;
+  /** Native app association carried by the daemon's config. Optional for
+   *  older daemons; the extension then leaves its profile association alone. */
+  appBlocklist?: string[];
+  /** Companion wall-clock stamp of the last accepted association change.
+   *  0 means never synchronized. */
+  appBlocklistUpdatedAt?: number;
 }
 
 const PARTNER_OPERATION_KEYS = [
@@ -192,6 +198,15 @@ export type CompanionMessage =
   | { v: number; type: 'blockingStateUpdate'; enabled: boolean; baseRevision: number }
   // Companion -> extension: authoritative state, not a browser command.
   | { v: number; type: 'blockingStateSync'; blocking: CompanionBlockingState }
+  // Authenticated extension -> companion: the active profile's app
+  // association. The daemon applies additions while locked, never removals,
+  // and answers with an authoritative status so the two sides converge.
+  | {
+      v: number;
+      type: 'appBlocklistUpdate';
+      appBlocklist: string[];
+      appBlocklistUpdatedAt: number;
+    }
   // Same-user CLI -> companion. Only these commands may originate partner
   // arm/release; lockStateSync has those fields pinned by the daemon.
   | { v: number; type: 'addKey'; publicKey: string }

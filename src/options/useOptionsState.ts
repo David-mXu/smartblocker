@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../shared/api';
 import { getSettings, setSettings, type Settings } from '../shared/settings';
+import { getProfilesState } from '../shared/profile-store';
+import { PROFILES_STORAGE_KEY, type ProfilesState } from '../shared/profiles';
 import { getLockState, getLockStatus } from '../shared/lock';
 import { EMPTY_LOCK_STATE, type LockState, type LockStatus } from '../shared/lock-math';
 import type { CompanionStatusResponse } from '../shared/messages';
@@ -55,10 +57,13 @@ const UNLOCKED: LockStatus = {
 
 export interface OptionsState {
   settings: Settings | null;
+  profiles: ProfilesState | null;
   lock: LockInfo;
   /** Full persisted lock state (schedules, category schedules, gates). */
   lockState: LockState;
   refreshLock: () => Promise<void>;
+  /** Reload profiles + effective settings after a profile mutation. */
+  refreshProfiles: () => Promise<void>;
   /** Persist a patch (optimistic). Resolves false when the write was refused. */
   save: (patch: SettingsPatch) => Promise<boolean>;
   saveStatus: SaveStatus;
@@ -75,6 +80,7 @@ export interface OptionsState {
 
 export function useOptionsState(): OptionsState {
   const [settings, setLocalSettings] = useState<Settings | null>(null);
+  const [profiles, setProfiles] = useState<ProfilesState | null>(null);
   const [lockStatus, setLockStatus] = useState<LockStatus>(UNLOCKED);
   const [lockState, setLockState] = useState<LockState>(EMPTY_LOCK_STATE);
   const [passwordArmed, setPasswordArmed] = useState(false);
@@ -110,6 +116,15 @@ export function useOptionsState(): OptionsState {
   }, []);
 
   const reloadSettings = useCallback(async () => {
+    setLocalSettings(await getSettings());
+  }, []);
+
+  // Profile activation/edits change the effective policy, so reload both in
+  // one pass. storage.onChanged normally drives this; this callback also
+  // makes a just-finished profile action deterministic for the page that
+  // initiated it.
+  const refreshProfiles = useCallback(async () => {
+    setProfiles(await getProfilesState());
     setLocalSettings(await getSettings());
   }, []);
 
@@ -152,7 +167,7 @@ export function useOptionsState(): OptionsState {
       }
     };
 
-    void reloadSettings();
+    void refreshProfiles();
     void refreshLock();
     void refreshPendingFocus();
     void refreshCompanion();
@@ -177,6 +192,9 @@ export function useOptionsState(): OptionsState {
       if (changes['lockState']) void refreshLock();
       if (changes['pendingFocusSession']) void refreshPendingFocus();
       if (changes['settings']) void reloadSettings();
+      // Named-profile edits change the effective policy even when the Default
+      // `settings` object itself did not move.
+      if (changes[PROFILES_STORAGE_KEY]) void refreshProfiles();
       // The background clears grace on relay loss and publishes recovery.
       // Mirror those transitions immediately; the 5s poll is only a fallback.
       if (changes['companionSnapshot']) void refreshCompanion();
@@ -208,7 +226,7 @@ export function useOptionsState(): OptionsState {
       api.storage.onChanged.removeListener(onStorageChanged);
       api.runtime.onMessage.removeListener(onRuntimeMessage);
     };
-  }, [refreshLock, refreshPendingFocus, reloadSettings]);
+  }, [refreshLock, refreshPendingFocus, reloadSettings, refreshProfiles]);
 
   const locked = lockStatus.settingsLocked;
   const lock: LockInfo = {
@@ -222,9 +240,11 @@ export function useOptionsState(): OptionsState {
 
   return {
     settings,
+    profiles,
     lock,
     lockState,
     refreshLock,
+    refreshProfiles,
     save,
     saveStatus,
     flash,

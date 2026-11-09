@@ -26,6 +26,69 @@ use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use crate::browsers::{classify, BrowserClass};
 use crate::enforcer::PROTECTED_STEMS;
 
+/// Bound shared with `src/shared/apps.ts` and the profile snapshot schema.
+pub const MAX_APP_BLOCKLIST: usize = 100;
+
+/// `"C:\Program Files\Steam\Steam.exe"` → `Some("steam")`.
+///
+/// Mirrors `normalizeAppName` in `src/shared/apps.ts`: one lowercase exe
+/// stem, 1–64 ASCII alphanumerics/space/`._+-`, first character alphanumeric.
+pub fn normalize_app_stem(input: &str) -> Option<String> {
+    let trimmed = input.trim().trim_matches(|c| c == '"' || c == '\'');
+    let base = trimmed.rsplit(['\\', '/']).next().unwrap_or(trimmed);
+    let mut stem = base.trim().to_lowercase();
+    if let Some(stripped) = stem.strip_suffix(".exe") {
+        stem = stripped.trim().to_string();
+    }
+    let mut chars = stem.chars();
+    let first = chars.next()?;
+    if !first.is_ascii_alphanumeric() || stem.len() > 64 {
+        return None;
+    }
+    if !stem
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '.' | '_' | '+' | '-'))
+    {
+        return None;
+    }
+    Some(stem)
+}
+
+/// Sanitize an untrusted wire/UI list: normalize, dedupe, and bound it.
+pub fn normalize_app_blocklist(apps: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for app in apps {
+        let Some(stem) = normalize_app_stem(app) else {
+            continue;
+        };
+        if out.iter().any(|entry: &String| entry == &stem) {
+            continue;
+        }
+        out.push(stem);
+        if out.len() >= MAX_APP_BLOCKLIST {
+            break;
+        }
+    }
+    out
+}
+
+pub fn app_blocklist_equal(a: &[String], b: &[String]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(left, right)| left == right)
+}
+
+/// While locked, removals wait: keep every current entry in place, then learn
+/// additions. Mirrors the daemon's config-tamper rule for `appBlocklist`.
+pub fn merge_locked_app_blocklist(current: &[String], incoming: &[String]) -> Vec<String> {
+    let mut out = normalize_app_blocklist(current);
+    for app in normalize_app_blocklist(incoming) {
+        if !out.iter().any(|entry| entry.eq_ignore_ascii_case(&app)) {
+            out.push(app);
+        }
+    }
+    out.truncate(MAX_APP_BLOCKLIST);
+    out
+}
+
 /// How present an app is on the desktop. Declared in display order, so the
 /// derived `Ord` makes the most present state the smallest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -577,6 +640,49 @@ mod tests {
         // normal app the user may block.
         let apps = summarize_apps(&[p("smartblocker-steam")]);
         assert_eq!(apps.len(), 1);
+    }
+
+    #[test]
+    fn app_blocklist_normalization_matches_the_extension_contract() {
+        assert_eq!(
+            normalize_app_stem(r#""C:\Program Files\Steam\Steam.exe""#),
+            Some("steam".into())
+        );
+        assert_eq!(normalize_app_stem("  Discord.EXE "), Some("discord".into()));
+        assert_eq!(normalize_app_stem("vs code"), Some("vs code".into()));
+        assert_eq!(normalize_app_stem("!!!"), None);
+        assert_eq!(normalize_app_stem(".hidden"), None);
+        assert_eq!(normalize_app_stem(""), None);
+
+        let list = vec![
+            "Steam.exe".to_string(),
+            r"C:\Games\steam.exe".to_string(),
+            "Discord".to_string(),
+            "!!!".to_string(),
+        ];
+        assert_eq!(
+            normalize_app_blocklist(&list),
+            vec!["steam".to_string(), "discord".to_string()]
+        );
+    }
+
+    #[test]
+    fn locked_app_blocklist_keeps_current_and_learns_additions() {
+        let current = vec!["steam".to_string(), "discord".to_string()];
+        let incoming = vec!["discord".to_string(), "notion".to_string()];
+        assert_eq!(
+            merge_locked_app_blocklist(&current, &incoming),
+            vec![
+                "steam".to_string(),
+                "discord".to_string(),
+                "notion".to_string()
+            ]
+        );
+        // An empty incoming list cannot remove anything while locked.
+        assert_eq!(
+            merge_locked_app_blocklist(&current, &[]),
+            vec!["steam".to_string(), "discord".to_string()]
+        );
     }
 
     #[test]

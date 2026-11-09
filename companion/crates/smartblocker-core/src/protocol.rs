@@ -120,6 +120,14 @@ pub struct CompanionStatus {
     /// offline spending or a fabricated synchronized zero balance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowance: Option<AllowanceAuthorityState>,
+    /// The daemon's enforced native app association. Additive v2 fields:
+    /// older extensions ignore them; older daemons omit them (the extension
+    /// then leaves every profile association untouched).
+    #[serde(default)]
+    pub app_blocklist: Vec<String>,
+    /// Wall-clock stamp; 0 = never synchronized (not an instruction to wipe).
+    #[serde(default)]
+    pub app_blocklist_updated_at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -159,6 +167,15 @@ pub enum CompanionMessage {
     BlockingStateSync {
         v: u32,
         blocking: BlockingState,
+    },
+    /// Authenticated extension -> companion: the active profile's app
+    /// association. The daemon applies additions while locked (removals wait)
+    /// and answers with an authoritative status, so both sides converge.
+    #[serde(rename_all = "camelCase")]
+    AppBlocklistUpdate {
+        v: u32,
+        app_blocklist: Vec<String>,
+        app_blocklist_updated_at: i64,
     },
     /// Same-user local CLI -> companion. Ordinary disable operations are
     /// refused while ANY lock is active; start remains legal.
@@ -399,6 +416,8 @@ mod tests {
                 extension_loss: None,
                 partner: None,
                 allowance: None,
+                app_blocklist: vec!["steam".into()],
+                app_blocklist_updated_at: 42,
             },
         };
         let v = serde_json::to_value(&status).unwrap();
@@ -407,7 +426,26 @@ mod tests {
         assert!(v.get("running").is_none());
         assert_eq!(v["status"]["companionVersion"], "0.1.0");
         assert_eq!(v["status"]["enforcement"]["policyProtected"], false);
+        assert_eq!(v["status"]["appBlocklist"], json!(["steam"]));
+        assert_eq!(v["status"]["appBlocklistUpdatedAt"], 42);
         assert!(v["status"].get("extensionLoss").is_none());
+
+        let update = CompanionMessage::AppBlocklistUpdate {
+            v: PROTOCOL_VERSION,
+            app_blocklist: vec!["steam".into(), "discord".into()],
+            app_blocklist_updated_at: 43,
+        };
+        let wire = serde_json::to_value(&update).unwrap();
+        assert_eq!(
+            wire,
+            json!({
+                "type": "appBlocklistUpdate",
+                "v": 2,
+                "appBlocklist": ["steam", "discord"],
+                "appBlocklistUpdatedAt": 43,
+            })
+        );
+        assert_eq!(parse_message(&wire), Some(update));
 
         let mut personalized = status.clone();
         let CompanionMessage::CompanionStatus { status, .. } = &mut personalized else {
@@ -450,6 +488,9 @@ mod tests {
             panic!("old status should parse")
         };
         assert_eq!(status.extension_loss, None);
+        // Additive app fields absent from an older daemon read as "no opinion".
+        assert!(status.app_blocklist.is_empty());
+        assert_eq!(status.app_blocklist_updated_at, 0);
     }
 
     #[test]

@@ -218,6 +218,8 @@ impl Shared {
             extension_loss: None,
             partner: Some(partner),
             allowance,
+            app_blocklist: crate::apps::normalize_app_blocklist(&config.app_blocklist),
+            app_blocklist_updated_at: config.app_blocklist_updated_at.max(0),
         }
     }
 
@@ -263,6 +265,78 @@ impl Shared {
         *current = next;
         if grace_tracks_changed {
             self.extension_loss_revision.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// One authoritative app-list status to every connection. Authenticated
+    /// browsers get their own grace observation (a generic `status()` would
+    /// clear it); anonymous peers get the redacted copy.
+    fn broadcast_app_blocklist_status(&self) {
+        let recipients: Vec<(u64, Option<CompanionBrowser>)> = {
+            let conns = self.conns.lock().unwrap();
+            conns
+                .iter()
+                .map(|(id, entry)| (*id, if entry.authed { entry.browser } else { None }))
+                .collect()
+        };
+        for (id, browser) in recipients {
+            if let Some(browser) = browser {
+                let (status, revision, sequence) = self.status_for_browser(browser);
+                self.reply_to_browser(
+                    id,
+                    browser,
+                    revision,
+                    sequence,
+                    &CompanionMessage::CompanionStatus {
+                        v: PROTOCOL_VERSION,
+                        running: Some(true),
+                        status,
+                    },
+                );
+            } else {
+                self.reply_to(
+                    id,
+                    &CompanionMessage::CompanionStatus {
+                        v: PROTOCOL_VERSION,
+                        running: Some(true),
+                        status: self.status(),
+                    },
+                );
+            }
+        }
+    }
+
+    /// Reply to one connection with the same personalized/redacted rules.
+    fn reply_app_blocklist_status(&self, conn_id: u64) {
+        let browser = self
+            .conns
+            .lock()
+            .unwrap()
+            .get(&conn_id)
+            .filter(|entry| entry.authed)
+            .and_then(|entry| entry.browser);
+        if let Some(browser) = browser {
+            let (status, revision, sequence) = self.status_for_browser(browser);
+            self.reply_to_browser(
+                conn_id,
+                browser,
+                revision,
+                sequence,
+                &CompanionMessage::CompanionStatus {
+                    v: PROTOCOL_VERSION,
+                    running: Some(true),
+                    status,
+                },
+            );
+        } else {
+            self.reply_to(
+                conn_id,
+                &CompanionMessage::CompanionStatus {
+                    v: PROTOCOL_VERSION,
+                    running: Some(true),
+                    status: self.status(),
+                },
+            );
         }
     }
 
@@ -719,6 +793,79 @@ impl Shared {
                     },
                 );
             }
+        }
+    }
+
+    /// Apply one authenticated browser's active app association. While a lock
+    /// is active the daemon is strictening-only: every current entry stays,
+    /// additions are learned, removals wait for unlock. A stale stamp is
+    /// ignored, and a successful change is broadcast so other browsers (and
+    /// the sender) converge on this authoritative list.
+    fn update_app_blocklist(&self, conn_id: u64, apps: Vec<String>, updated_at: i64, authed: bool) {
+        if !authed {
+            self.reply_to(
+                conn_id,
+                &CompanionMessage::Error {
+                    v: PROTOCOL_VERSION,
+                    message: "app-list updates require an authenticated browser".to_string(),
+                },
+            );
+            return;
+        }
+        let incoming = crate::apps::normalize_app_blocklist(&apps);
+        let stamp = updated_at.max(0).min(MAX_JS_SAFE_INTEGER as i64);
+        let mut config = self.store.load_config();
+        let current_stamp = config.app_blocklist_updated_at.max(0);
+        let mut changed = false;
+        if stamp >= current_stamp {
+            let locked = {
+                let lock = self.lock_state.lock().unwrap();
+                derive_lock_status(&lock, self.wall_ms()).settings_locked
+            };
+            let next = if locked {
+                crate::apps::merge_locked_app_blocklist(&config.app_blocklist, &incoming)
+            } else {
+                incoming
+            };
+            if !crate::apps::app_blocklist_equal(&config.app_blocklist, &next) {
+                config.app_blocklist = next;
+                changed = true;
+            }
+            if changed || stamp > current_stamp {
+                // Same-machine wall clocks: keep the bigger of the accepted
+                // stamp and our own time so a profile activation can never
+                // look older than an earlier synchronized list.
+                config.app_blocklist_updated_at = self.wall_ms().max(stamp).max(current_stamp);
+                changed = true;
+            }
+            if changed {
+                if let Err(error) = self.store.save_config(&config) {
+                    self.reply_to(
+                        conn_id,
+                        &CompanionMessage::Error {
+                            v: PROTOCOL_VERSION,
+                            message: format!("couldn't persist app blocklist: {error}"),
+                        },
+                    );
+                    return;
+                }
+            }
+        }
+        if changed {
+            self.broadcast_app_blocklist_status();
+            self.log_event(
+                "app-blocklist-sync",
+                &format!(
+                    "{} app(s), stamp {} (browser conn {conn_id})",
+                    config.app_blocklist.len(),
+                    config.app_blocklist_updated_at
+                ),
+            );
+        } else if stamp < current_stamp {
+            // A stale push is answered with authority so the sender adopts a
+            // desktop-side edit without waiting for another event. Equal
+            // stamps/lists stay silent: the 20s retry is usually a no-op.
+            self.reply_app_blocklist_status(conn_id);
         }
     }
 
@@ -2366,6 +2513,20 @@ fn serve_connection(id: u64, stream: ipc::Stream, shared: Arc<Shared>) {
                     .is_some_and(|e| e.authed);
                 shared.update_browser_blocking(id, enabled, base_revision, authed);
             }
+            Some(CompanionMessage::AppBlocklistUpdate {
+                app_blocklist,
+                app_blocklist_updated_at,
+                ..
+            }) => {
+                meaningful = true;
+                let authed = shared
+                    .conns
+                    .lock()
+                    .unwrap()
+                    .get(&id)
+                    .is_some_and(|e| e.authed);
+                shared.update_app_blocklist(id, app_blocklist, app_blocklist_updated_at, authed);
+            }
             // CLI commands ride the same same-user IPC admission as relays.
             // They cannot change an active lock's enable value or shorten it.
             Some(CompanionMessage::BlockCommand { action, .. }) => {
@@ -3413,6 +3574,97 @@ mod tests {
         assert_eq!(
             healed.app_blocklist,
             vec!["epicgames".to_string(), "steam".to_string()]
+        );
+    }
+
+    #[test]
+    fn authenticated_app_blocklist_update_persists_and_broadcasts() {
+        let (_dir, shared) = test_shared();
+        let relay = add_conn(&shared, 7, true);
+        shared.update_app_blocklist(
+            7,
+            vec!["Steam.exe".into(), r"C:\Games\discord.exe".into()],
+            100,
+            true,
+        );
+        let config = shared.store.load_config();
+        assert_eq!(
+            config.app_blocklist,
+            vec!["steam".to_string(), "discord".to_string()]
+        );
+        assert!(config.app_blocklist_updated_at >= 100);
+        let frames = frames_in(&relay);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["type"], "companionStatus");
+        assert_eq!(
+            frames[0]["status"]["appBlocklist"],
+            json!(["steam", "discord"])
+        );
+    }
+
+    #[test]
+    fn app_blocklist_update_requires_authentication_and_ignores_stale_stamps() {
+        let (_dir, shared) = test_shared();
+        let _anon = add_conn(&shared, 7, false);
+        shared.update_app_blocklist(7, vec!["steam".into()], 100, false);
+        assert!(shared.store.load_config().app_blocklist.is_empty());
+
+        let paired = add_conn(&shared, 8, true);
+        shared
+            .store
+            .save_config(&CompanionConfig {
+                app_blocklist: vec!["steam".into()],
+                app_blocklist_updated_at: 100,
+                ..CompanionConfig::default()
+            })
+            .unwrap();
+        shared.update_app_blocklist(8, vec!["discord".into()], 50, true);
+        assert_eq!(
+            shared.store.load_config().app_blocklist,
+            vec!["steam".to_string()]
+        );
+        // The sender still receives the authoritative list to reconcile.
+        let frames = frames_in(&paired);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["status"]["appBlocklist"], json!(["steam"]));
+    }
+
+    #[test]
+    fn locked_app_blocklist_update_is_additions_only() {
+        let (_dir, shared) = test_shared();
+        let _paired = add_conn(&shared, 7, true);
+        *shared.lock_state.lock().unwrap() = LockState {
+            timer_until: Some(shared.wall_ms() + 60_000),
+            ..LockState::default()
+        };
+        shared
+            .store
+            .save_config(&CompanionConfig {
+                app_blocklist: vec!["steam".into(), "discord".into()],
+                app_blocklist_updated_at: 10,
+                ..CompanionConfig::default()
+            })
+            .unwrap();
+
+        shared.update_app_blocklist(7, vec!["discord".into(), "notion".into()], 20, true);
+        assert_eq!(
+            shared.store.load_config().app_blocklist,
+            vec![
+                "steam".to_string(),
+                "discord".to_string(),
+                "notion".to_string()
+            ]
+        );
+
+        // A pure removal waits for unlock, even with a newer stamp.
+        shared.update_app_blocklist(7, Vec::new(), 30, true);
+        assert_eq!(
+            shared.store.load_config().app_blocklist,
+            vec![
+                "steam".to_string(),
+                "discord".to_string(),
+                "notion".to_string()
+            ]
         );
     }
 

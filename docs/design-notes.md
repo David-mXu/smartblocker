@@ -214,7 +214,11 @@ Tint recipe for callouts: `bg-<hue>/10 border-<hue>/30 text-<hue>-soft`.
   Relaxed 0.65 / Balanced 0.5 / Strict 0.4 — other values read "Custom",
   categories + "Also block adults-only sites instantly" (RTA label / .xxx)
   directly under the category list, "Find your distractions" history
-  review) · Sites `#sites` (`ListEditor` Always allow / Always block; a
+  review) · Profiles `#profiles` (Default first, then named snapshots with
+  Activate / Duplicate / Rename / two-step Delete; create copies the active
+  settings without switching; the active association's desktop apps and
+  connection status; every action disables with the lock reason) · Sites
+  `#sites` (`ListEditor` Always allow / Always block; a
   collapsed **More rules** disclosure holds Title patterns (`*` wildcard)
   and YouTube channels — always block / never block for their topic) · Focus `#focus` (goal, open-tab
   context, start a focus session) · Locks `#locks` (timer, password, optional delay/random-text break
@@ -376,7 +380,9 @@ authoritative grace observation), `#popup-enabled-toggle`, `#open-options`,
 
 ### Options (navigate to `options.html#<page>` — only the active page renders)
 Global: `#banner`, `#lock-status` (visible only when locked, contains
-"Locked"), `#save-msg`, `#model-progress`. `#save-btn` no longer exists.
+"Locked"), `#active-profile-banner` (visible only while a NAMED profile is
+active; contains its name), `#save-msg`, `#model-progress`. `#save-btn` no
+longer exists.
 - `#dashboard`: `#dashboard-now`, `#dashboard-blocking`,
   `#dashboard-blocking-detail`, `#dashboard-lock`, `#dashboard-lock-summary`,
   `#dashboard-lock-reasons` (`li` per active reason), `#dashboard-companion`,
@@ -392,6 +398,12 @@ Global: `#banner`, `#lock-status` (visible only when locked, contains
   `.delete-label-btn`),
   `#custom-category-input`, `#add-category-btn`, `#scan-btn`,
   `#block-top-btn`, `#scan-status`, `#scan-out`.
+- `#profiles`: `#profiles-list`, `#profile-default` (`.profile-row`,
+  `data-active`), named rows `.profile-row[data-profile-id]`,
+  `.profile-activate`, `.profile-duplicate`, `.profile-rename`,
+  `.profile-delete` (second click confirms), `#profile-name`,
+  `#profile-create`, `#profile-msg`, `#profiles-lock-note`,
+  `#profile-rename-input`, `#profile-apps-status`, `#profile-apps-list`.
 - `#sites`: `#whitelist`, `#blocklist`, and inside the `#more-rules`
   `<details>` (auto-open when it holds rules): `#title-rules`,
   `#channel-blocklist`, `#channel-allowlist` (`ListEditor` roots; `-input`,

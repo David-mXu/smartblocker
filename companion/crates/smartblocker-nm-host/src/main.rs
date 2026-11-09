@@ -48,6 +48,10 @@ fn unavailable_status() -> serde_json::Value {
             // Nor can an unreachable daemon disclose public partner state.
             partner: None,
             allowance: None,
+            // No reachable daemon means no app-list authority. An empty list
+            // at stamp 0 is "no opinion", never "clear every profile".
+            app_blocklist: Vec::new(),
+            app_blocklist_updated_at: 0,
         },
     })
     .expect("protocol types serialize")

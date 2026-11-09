@@ -61,21 +61,25 @@ export async function submitLocalAllowanceCommand(
   return attempt;
 }
 
-/** A same-revision conflict means both peers applied different commands. The
- * browser keeps its durable offline transition and promotes only the snapshot
- * revision so the daemon (which accepts strictly greater recovery revisions)
- * adopts it. The bump is serialized with ordinary fallback commands, and is
- * skipped if another command changed the expected snapshot first. */
+/** A divergent snapshot means this browser holds transitions the daemon did not
+ * include. Keep the durable local history and promote above both revisions so
+ * the daemon (which accepts strictly greater recovery revisions) adopts it.
+ * The bump is serialized with ordinary fallback commands, and is skipped if
+ * another command changed the expected snapshot first. */
 export async function promoteLocalAllowanceAuthorityForConflict(
   expected: AllowanceAuthorityState,
+  minimumRevision = 0,
 ): Promise<AllowanceAuthorityState> {
   const expectedIdentity = allowanceStateIdentity(expected);
   const attempt = localCommandQueue.then(async (): Promise<AllowanceAuthorityState> => {
     const current = await getLocalAllowanceAuthority();
     if (allowanceStateIdentity(current) !== expectedIdentity) return current;
-    if (current.revision >= Number.MAX_SAFE_INTEGER) return current;
+    const target = Math.max(current.revision + 1, minimumRevision + 1);
+    if (current.revision >= Number.MAX_SAFE_INTEGER || target > Number.MAX_SAFE_INTEGER) {
+      return current;
+    }
     const promoted = cloneAllowanceAuthorityState(current);
-    promoted.revision = current.revision + 1;
+    promoted.revision = target;
     await writeLocalAllowanceAuthority(promoted);
     return promoted;
   });

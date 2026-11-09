@@ -41,10 +41,20 @@ const activeKey = first.PRIVATE_KEY_HEX;
 const activePublic = first.PUBLIC_KEY_HEX;
 const installationId = '5175716756573656572000000000000000000000000000000000000000000000'.slice(0, 64);
 const now = Date.now();
+// The seed is already past both activation dimensions. A wall-only legacy key
+// would be re-anchored to a fresh 24-hour wait at daemon startup by design.
 write('partner-state.json', {
   version: 1, installationId,
-  publicKeys: [{ publicKey: activePublic, addedAtMs: now - 86_400_001, activeAtMs: now - 1 }],
-  pendingOperations: [], spentCodes: [], lastObservedAtMs: 0,
+  publicKeys: [{
+    publicKey: activePublic,
+    addedAtMs: now - 86_400_001,
+    activeAtMs: now - 1,
+    addedMonoMs: 0,
+    activeMonoMs: 86_400_000,
+    activationObservedAtMs: now - 1,
+    activationObservedMonoMs: 86_400_000,
+  }],
+  pendingOperations: [], spentCodes: [], lastObservedAtMs: now - 1,
 });
 write('lock-state.json', {});
 write('blocking-state.json', { enabled: true, revision: 3 });
