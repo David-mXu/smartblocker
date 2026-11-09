@@ -176,6 +176,11 @@ export const DEFAULTS: Settings = {
 };
 
 const STORAGE_KEY = 'settings';
+/** Written in the SAME storage transaction as a daemon-applied `enabled`
+ * value. The background bridge recognizes this unique receipt instead of
+ * guessing from the boolean value, so overlapping writes and old-connection
+ * events cannot be mistaken for new user intent. */
+export const COMPANION_BLOCKING_ECHO_KEY = 'companionBlockingApplyEcho';
 
 let cache: Settings | null = null;
 
@@ -275,9 +280,13 @@ export async function getSettings(): Promise<Settings> {
  *  THROWS while a lock is active (see lock.ts) — the single choke point every
  *  settings writer goes through, in whichever context it runs. (A raw
  *  storage.local.set from devtools bypasses it: accepted soft-lock.) */
-export async function setSettings(patch: Partial<Settings>): Promise<Settings> {
+async function writeSettings(patch: Partial<Settings>, echoId?: string): Promise<Settings> {
   const lock = await getLockStatus();
-  if (lock.settingsLocked) {
+  // Enabling ordinary blocking is always legal. Every disable and every other
+  // settings mutation stays frozen by ANY active lock, including timer-only,
+  // password, delay, random-text, Frozen Turkey, and schedule locks.
+  const enableOnly = Object.keys(patch).length === 1 && patch.enabled === true;
+  if (lock.settingsLocked && !enableOnly) {
     throw new Error(
       'SmartBlocker settings are locked' +
         (lock.until
@@ -294,6 +303,22 @@ export async function setSettings(patch: Partial<Settings>): Promise<Settings> {
   }
   Object.assign(next, normalizeBreakSettings(next));
   cache = next;
-  await api.storage.local.set({ [STORAGE_KEY]: next });
+  await api.storage.local.set({
+    [STORAGE_KEY]: next,
+    ...(echoId ? { [COMPANION_BLOCKING_ECHO_KEY]: echoId } : {}),
+  });
   return next;
+}
+
+export async function setSettings(patch: Partial<Settings>): Promise<Settings> {
+  return writeSettings(patch);
+}
+
+/** Daemon-owned ordinary-blocking application. This deliberately passes
+ * through the same lock guard as every other settings mutation. */
+export async function setCompanionBlockingEnabled(
+  enabled: boolean,
+  echoId: string,
+): Promise<Settings> {
+  return writeSettings({ enabled }, echoId);
 }

@@ -9,6 +9,7 @@ import { cn } from '../../lib/utils';
 import type { OptionsState } from '../useOptionsState';
 import { hhmmToMinutes, minutesToClock, minutesToHHMM } from '../format';
 import { LockedNote, Page } from './Page';
+import { CategoryScheduleSection } from './CategoryScheduleSection';
 
 const DAY_LETTERS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -268,6 +269,13 @@ export function SchedulePage({ state }: { state: OptionsState }) {
           </div>
         </div>
       </SettingsSection>
+      <CategoryScheduleSection
+        labels={state.settings?.labels ?? []}
+        locked={locked}
+        lockReason={lock.reason}
+        now={now}
+        refreshLock={refreshLock}
+      />
     </Page>
   );
 }

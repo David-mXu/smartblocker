@@ -1,12 +1,22 @@
 import { api } from '../shared/api';
 import { LATENCY_LOG_MAX } from '../shared/config';
 import { getSettings, type Settings } from '../shared/settings';
-import { getLockStatus } from '../shared/lock';
+import { getLockState, getLockStatus } from '../shared/lock';
+import { getLocalAllowanceAuthority } from '../shared/allowance-store';
+import { nextAllowanceBoundary } from '../shared/allowance-state';
+import { evaluateCategoryScheduleGate } from '../shared/category-schedule-math';
+import type { CategoryScheduleEffect } from '../shared/category-schedule-math';
 import type { LockStatus } from '../shared/lock-math';
 import { isOverridden } from '../shared/overrides';
 import { clearTabStatus, recordTabStatus } from '../shared/tab-status';
 import type { ClassifyInput, ClassifyOutcome, LatencySample } from '../shared/messages';
-import { cleanTitle, isClassifiableUrl, isWhitelisted, matchedBlocklistEntry } from '../shared/titles';
+import {
+  cleanTitle,
+  isClassifiableUrl,
+  isSearchEngineResultsUrl,
+  isWhitelisted,
+  matchedBlocklistEntry,
+} from '../shared/titles';
 import { isAdultHost, matchChannel, matchTitleRule } from '../shared/rules';
 import { applyUrlSignals, hostnameOf, urlFallbackTitle } from '../shared/url-signals';
 import { extractMeta } from '../content/extract-meta';
@@ -16,6 +26,8 @@ import {
   type SubItemEvalResult,
 } from '../content/sanitize-page';
 import { classify } from './classifier';
+import { applyAllowanceRelief as decideAllowanceRelief } from './allowance-relief';
+import { allowanceReliefForCategory, recordAllowanceActivity } from './allowance';
 import {
   applyPreBlockCurtain,
   clearBlockScreen,
@@ -61,6 +73,53 @@ const spaCheckTimers = new Map<number, ReturnType<typeof setTimeout>>();
 // and the now-stale verdict is dropped instead of painting a block screen
 // over a page the user already left.
 const navGeneration = new Map<number, number>();
+
+// Search pages can update their URL/title on every keystroke. Keep page-level
+// enforcement behind a quiet title and invalidate older in-flight candidates;
+// item-level SERP masking is unaffected. 650ms is deliberately only a settling
+// window, not a claim that a short query is incomplete.
+const SERP_TITLE_QUIET_MS = 650;
+const serpTitleGeneration = new Map<number, number>();
+const serpTitleTimers = new Map<
+  number,
+  { key: string; timer: ReturnType<typeof setTimeout> }
+>();
+
+function isSerpUrl(url: string): boolean {
+  try {
+    return isSearchEngineResultsUrl(new URL(url));
+  } catch {
+    return false;
+  }
+}
+
+/** Incremented for scoped-state writes and every policy boundary. Classifier
+ * results from older epochs must never paint over a newer schedule verdict. */
+let categoryPolicyEpoch = 0;
+export function advanceCategoryPolicyEpoch(): void {
+  categoryPolicyEpoch++;
+}
+function changedScopedPolicy(oldValue: unknown, newValue: unknown): boolean {
+  const scoped = (raw: unknown) => {
+    const state = raw as
+      | { categorySchedules?: unknown; categorySchedulesUpdatedAt?: unknown }
+      | undefined;
+    return JSON.stringify([state?.categorySchedules ?? null, state?.categorySchedulesUpdatedAt ?? null]);
+  };
+  return scoped(oldValue) !== scoped(newValue);
+}
+
+const ALLOWANCE_BOUNDARY_ALARM = 'allowance-boundary';
+async function syncAllowanceBoundary(rawState: unknown): Promise<void> {
+  const boundary = nextAllowanceBoundary(rawState, Date.now());
+  if (boundary === null) {
+    await api.alarms.clear(ALLOWANCE_BOUNDARY_ALARM);
+  } else {
+    // Re-derive on every grant write, restart, and boundary. A late alarm can
+    // affect only promptness; the math must still reject expired relief.
+    await api.alarms.create(ALLOWANCE_BOUNDARY_ALARM, { when: boundary + 1_000 });
+  }
+}
 
 // Per-subframe state (`${tabId}:${frameId}`) for direct sub-frame (frameId > 0)
 // classification and blocking inside Shadow DOMs and nested iframes.
@@ -109,6 +168,21 @@ function clearSubFrameStateForTab(tabId: number): void {
 // fail-open posture byte-for-byte (the rejection just propagates).
 function isHardLocked(lock: LockStatus): boolean {
   return lock.forceBlocking || lock.reasons.includes('password');
+}
+
+/** Item10 relief is granted by the authorized per-category ledger, never by
+ * caller-provided timestamps. It weakens no deterministic or fail-closed
+ * verdict. An observation error preserves the existing class decision. */
+function applyAllowanceRelief(
+  label: string,
+  blocked: boolean,
+  lock: LockStatus,
+  scheduleEffect: CategoryScheduleEffect,
+): Promise<boolean> {
+  return decideAllowanceRelief(label, blocked, lock, scheduleEffect, {
+    reliefForCategory: allowanceReliefForCategory,
+    recordActivity: recordAllowanceActivity,
+  });
 }
 
 // A dead offscreen document or a model (re)load often recovers within
@@ -254,6 +328,7 @@ async function runPageSanitizer(tabId: number): Promise<void> {
           blocklist: settings.blocklist,
           settingsLocked: lock.settingsLocked,
           maskSearchElements: settings.maskSearchElements,
+          policyEpoch: categoryPolicyEpoch,
         },
       ],
     });
@@ -266,8 +341,10 @@ export async function evaluateSubItems(
   items: SubItemEvalRequest[],
   senderTabId?: number,
 ): Promise<SubItemEvalResult[]> {
+  const policyEpoch = categoryPolicyEpoch;
   const settings = await getSettings();
   const lock = await getLockStatus();
+  const categorySchedules = (await getLockState()).categorySchedules ?? [];
   if (!settings.enabled && !lock.forceBlocking) {
     return items.map((it) => ({ id: it.id, blocked: false, label: 'disabled', score: 0 }));
   }
@@ -343,6 +420,7 @@ export async function evaluateSubItems(
 
     let res: ClassifyOutcome;
     let classifierDriven = false;
+    let scopedScheduleEffect: CategoryScheduleEffect = 'none';
     try {
       res = await classify({
         title,
@@ -365,13 +443,24 @@ export async function evaluateSubItems(
       continue;
     }
     let blocked = shouldBlockClassifierVerdict(res, settings.blockedLabels, settings.blockThreshold);
+    const categorySchedule = evaluateCategoryScheduleGate(
+      res,
+      blocked,
+      settings.blockThreshold,
+      categorySchedules,
+      new Date(),
+    );
+    blocked = categorySchedule.blocked;
+    scopedScheduleEffect = categorySchedule.effect;
     classifierDriven = true;
     if (blocked && !lock.forceBlocking && (await isOverridden(title, hostnameOf(item.url)))) {
       blocked = false;
     }
+    if (classifierDriven) blocked = await applyAllowanceRelief(res.label, blocked, lock, scopedScheduleEffect);
     // Breaks relax real classifier verdicts only. Deterministic matches and
     // hard-lock classifier-unavailable fail-closed results never reach here.
     if (classifierDriven && lock.breakActive) blocked = false;
+    if (policyEpoch !== categoryPolicyEpoch) return [];
     results.push({
       id: item.id,
       blocked,
@@ -380,6 +469,9 @@ export async function evaluateSubItems(
       resolvedTitle: title,
     });
   }
+  // Later cards may await metadata even after an earlier classifier result
+  // passed its own check; the whole batch must still belong to one epoch.
+  if (policyEpoch !== categoryPolicyEpoch) return [];
   return results;
 }
 
@@ -462,6 +554,9 @@ function isYouTubeBrowsingSurface(url: string): boolean {
 }
 
 async function maybeCurtain(tabId: number, url: string, gen: number): Promise<void> {
+  // A query-level verdict must not hide the entire next search before that
+  // query settles. Result cards still use their normal selective masks.
+  if (isSerpUrl(url)) return;
   try {
     const settings = await getSettings();
     const lock = await getLockStatus();
@@ -487,7 +582,44 @@ async function maybeCurtain(tabId: number, url: string, gen: number): Promise<vo
   }
 }
 
+function invalidateSerpTitleEvaluation(tabId: number): number {
+  const pending = serpTitleTimers.get(tabId);
+  if (pending) clearTimeout(pending.timer);
+  serpTitleTimers.delete(tabId);
+  const next = (serpTitleGeneration.get(tabId) ?? 0) + 1;
+  serpTitleGeneration.set(tabId, next);
+  return next;
+}
+
+/** Route every external title trigger through the same SERP quiet/cancel path.
+ * The tab re-read prevents an obsolete timer from evaluating a recycled tab. */
+function requestTitleEvaluation(tabId: number, rawTitle: string, url: string): void {
+  const fail = (e: unknown) => console.error('[SmartBlocker] classification failed:', e);
+  if (!isSerpUrl(url)) {
+    invalidateSerpTitleEvaluation(tabId);
+    void onTitle(tabId, rawTitle, url).catch(fail);
+    return;
+  }
+
+  const key = `${url}|${rawTitle}`;
+  // title + status/SPA events often describe the same candidate. Do not move
+  // its quiet window later when an identical duplicate event arrives.
+  if (serpTitleTimers.get(tabId)?.key === key) return;
+  const generation = invalidateSerpTitleEvaluation(tabId);
+  const timer = setTimeout(() => {
+    if (serpTitleTimers.get(tabId)?.key === key) serpTitleTimers.delete(tabId);
+    void (async () => {
+      if (serpTitleGeneration.get(tabId) !== generation) return;
+      const tab = await api.tabs.get(tabId);
+      if (tab.url !== url || (tab.title ?? '') !== rawTitle) return;
+      await onTitle(tabId, rawTitle, url, generation);
+    })().catch(fail);
+  }, SERP_TITLE_QUIET_MS);
+  serpTitleTimers.set(tabId, { key, timer });
+}
+
 function clearTabTimers(tabId: number): void {
+  invalidateSerpTitleEvaluation(tabId);
   const mt = metaRecheckTimers.get(tabId);
   if (mt) {
     clearTimeout(mt);
@@ -522,7 +654,7 @@ function arm(tabId: number, url: string) {
       try {
         const tab = await api.tabs.get(tabId);
         if (!tab?.url || !isClassifiableUrl(tab.url)) return;
-        await onTitle(tabId, tab.title ?? '', tab.url);
+        requestTitleEvaluation(tabId, tab.title ?? '', tab.url);
       } catch {
         // tab closed or unreachable
       }
@@ -651,10 +783,12 @@ async function onSubFrame(
   const key = subFrameKey(tabId, frameId);
   trackSubFrameKey(tabId, key);
   const myGeneration = subFrameGeneration.get(key) ?? 0;
+  const policyEpoch = categoryPolicyEpoch;
 
   try {
     const settings = await getSettings();
     const lock = await getLockStatus();
+    const categorySchedules = (await getLockState()).categorySchedules ?? [];
     if (!settings.enabled && !lock.forceBlocking) {
       subFrameBlockedVerdict.delete(key);
       clearCurtain(tabId, frameId);
@@ -675,7 +809,8 @@ async function onSubFrame(
 
     // If onCommitted already blocked this sub-frame and onCompleted now fires,
     // re-ensure the block screen is mounted in case document parsing reset the DOM.
-    const priorBlocked = subFrameBlockedVerdict.get(key);
+    const priorBlocked =
+      policyEpoch === categoryPolicyEpoch ? subFrameBlockedVerdict.get(key) : undefined;
     if (priorBlocked && phase === 'completed') {
       if (priorBlocked.unavailable) {
         await api.scripting
@@ -687,6 +822,8 @@ async function onSubFrame(
           .catch(() => {});
         return;
       }
+      const overrideToken = await mintOverrideToken();
+      if (policyEpoch !== categoryPolicyEpoch) return;
       await api.scripting
         .executeScript({
           target: { tabId, frameIds: [frameId] },
@@ -697,7 +834,7 @@ async function onSubFrame(
             priorBlocked.title,
             0,
             priorBlocked.locked,
-            await mintOverrideToken(),
+            overrideToken,
             settings.blockThreshold,
             settings.surrenderMode,
           ],
@@ -718,6 +855,7 @@ async function onSubFrame(
     // Set only by a successful model verdict; deterministic/fail-closed paths
     // deliberately do not receive break relaxation.
     let classifierDriven = false;
+    let scopedScheduleEffect: CategoryScheduleEffect = 'none';
 
     const blockedSet = new Set(settings.blockedLabels);
     const isGameEmbed =
@@ -900,7 +1038,17 @@ async function onSubFrame(
               settings.blockedLabels,
               settings.blockThreshold,
             );
-            classifierDriven = blocked;
+            const categorySchedule = evaluateCategoryScheduleGate(
+              result,
+              blocked,
+              settings.blockThreshold,
+              categorySchedules,
+              new Date(),
+            );
+            blocked = categorySchedule.blocked;
+    scopedScheduleEffect = categorySchedule.effect;
+            classifierDriven = true;
+            if (policyEpoch !== categoryPolicyEpoch) return;
             if (!blocked && classifyFailedClosed) {
               // Recovered during backoff with an allow verdict — tear the
               // fail-closed screen back down (a block verdict overwrites it).
@@ -924,6 +1072,7 @@ async function onSubFrame(
     if (blocked && !lock.forceBlocking && (await isOverridden(title ?? '', hostnameOf(url)))) {
       blocked = false;
     }
+    if (classifierDriven) blocked = await applyAllowanceRelief(result.label, blocked, lock, scopedScheduleEffect);
     // Breaks relax real classifier verdicts only. Deterministic embed rules
     // and hard-lock classifier-unavailable results deliberately stay blocked.
     if (classifierDriven && lock.breakActive) blocked = false;
@@ -931,6 +1080,7 @@ async function onSubFrame(
     if ((subFrameGeneration.get(key) ?? 0) !== myGeneration) {
       return;
     }
+    if (classifierDriven && policyEpoch !== categoryPolicyEpoch) return;
 
     let injectMs = 0;
     if (blocked) {
@@ -947,6 +1097,10 @@ async function onSubFrame(
         // injected on first failure — do NOT overwrite it with a normal
         // category verdict screen claiming 100% confidence.
         if (!classifyFailedClosed) {
+          const overrideToken = await mintOverrideToken();
+          // Token minting is asynchronous; the scope may have become inactive
+          // after the earlier classifier check. Revalidate at application.
+          if (classifierDriven && policyEpoch !== categoryPolicyEpoch) return;
           await api.scripting.executeScript({
             target: { tabId, frameIds: [frameId] },
             func: showBlockScreen,
@@ -956,7 +1110,7 @@ async function onSubFrame(
               title ?? '',
               Date.now() - tStart,
               lock.settingsLocked,
-              await mintOverrideToken(),
+              overrideToken,
               settings.blockThreshold,
               settings.surrenderMode,
             ],
@@ -991,17 +1145,30 @@ async function onSubFrame(
   }
 }
 
-async function onTitle(tabId: number, rawTitle: string, url: string) {
+async function onTitle(
+  tabId: number,
+  rawTitle: string,
+  url: string,
+  requestedSerpGeneration?: number,
+) {
   const initialTitle = cleanTitle(rawTitle);
   if (initialTitle && lastClassified.get(tabId) === `${url}|${initialTitle}`) return;
   const flightToken = `${url}|${initialTitle ?? ''}`;
   if (inFlightKey.get(tabId) === flightToken) return;
   inFlightKey.set(tabId, flightToken);
   const myGeneration = navGeneration.get(tabId) ?? 0;
+  const isSerp = isSerpUrl(url);
+  const mySerpGeneration =
+    requestedSerpGeneration ?? (serpTitleGeneration.get(tabId) ?? 0);
+  const stillCurrentTitle = () =>
+    !isSerp || serpTitleGeneration.get(tabId) === mySerpGeneration;
+  const policyEpoch = categoryPolicyEpoch;
 
   try {
     const settings = await getSettings();
     const lock = await getLockStatus();
+    const categorySchedules = (await getLockState()).categorySchedules ?? [];
+    if (!stillCurrentTitle()) return;
     if (!settings.enabled && !lock.forceBlocking) {
       armedAt.delete(tabId);
       clearCurtain(tabId);
@@ -1071,6 +1238,7 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
     // Set only by a successful model verdict; deterministic/fail-closed paths
     // deliberately do not receive break relaxation.
     let classifierDriven = false;
+    let scopedScheduleEffect: CategoryScheduleEffect = 'none';
     // The channelBlocklist entry that matched this page's extracted channel,
     // when one did — set only in the classifier branch below, so the popup
     // status can render it as a rule hit ("channel @…") like a blocklist one.
@@ -1096,14 +1264,34 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
       reason: 'dnf-redirect' | 'classifier-unavailable';
     };
     let forceRedirectParams: ForceRedirectParams | null = null;
+    let forceRedirectCommitted = false;
+    let forceRedirectOwnedRuleId: number | null = null;
     let forceRedirectPromise: Promise<boolean> | null = null;
     const requestForceRedirect = (params: ForceRedirectParams): Promise<boolean> => {
       forceRedirectParams ??= params;
       forceRedirectPromise ??= (async () => {
-        const ok = await addForceRedirectRule(tabId, url, forceRedirectParams as ForceRedirectParams);
-        if (!ok) return false;
+        const installed = await addForceRedirectRule(
+          tabId,
+          url,
+          forceRedirectParams as ForceRedirectParams,
+        );
+        if (installed.status === 'failed') return false;
+        forceRedirectOwnedRuleId =
+          installed.status === 'installed' ? installed.ruleId : null;
+        if (classifierDriven && policyEpoch !== categoryPolicyEpoch) {
+          // Old scope ended while DNR was installing. Remove only the exact new
+          // rule this evaluator owns; a static/new evaluator's rule is not ours.
+          if (forceRedirectOwnedRuleId !== null) {
+            await clearForceRedirectRule(tabId, url, forceRedirectOwnedRuleId);
+          }
+          return false;
+        }
+        // Do not reload a newer query into an obsolete SERP verdict. Leave the
+        // URL-scoped rule for the current evaluation to replace or release.
+        if (!stillCurrentTitle()) return true;
         try {
           await api.tabs.reload(tabId);
+          forceRedirectCommitted = true;
         } catch (e) {
           // Rule exists but the reload itself failed (tab racing a close) —
           // the rule alone still enforces the NEXT load of this URL.
@@ -1133,6 +1321,7 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
       // URL fallbacks (hostname as channel, path hint prepended) live in
       // shared/url-signals.ts so the offline evaluator builds identical input.
       const meta = await gatherMeta(tabId);
+      if (!stillCurrentTitle()) return;
       const domTitle = cleanTitle(meta.fallbackTitle);
 
       // On YouTube video pages (/watch, /shorts, /live), if both document.title
@@ -1284,8 +1473,9 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
               focusContext,
             },
             isHardLocked(lock),
-            () => navGeneration.get(tabId) === myGeneration,
+            () => navGeneration.get(tabId) === myGeneration && stillCurrentTitle(),
             () => {
+              if (!stillCurrentTitle()) return;
               classifyFailedClosed = true;
               if (lock.forceBlocking) {
                 // P2: under a force-blocking lock the fail-closed screen IS the
@@ -1328,7 +1518,17 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
               settings.blockedLabels,
               settings.blockThreshold,
             );
-            classifierDriven = blocked;
+            const categorySchedule = evaluateCategoryScheduleGate(
+              result,
+              blocked,
+              settings.blockThreshold,
+              categorySchedules,
+              new Date(),
+            );
+            blocked = categorySchedule.blocked;
+    scopedScheduleEffect = categorySchedule.effect;
+            classifierDriven = true;
+            if (policyEpoch !== categoryPolicyEpoch) return;
             // Channel allowlist: rescue the page ONLY when the classifier
             // verdict alone blocks it — the blocklist and channelBlocklist
             // branches above never reach this check.
@@ -1363,10 +1563,15 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
       overridden = true;
     }
 
+    if (classifierDriven) blocked = await applyAllowanceRelief(result.label, blocked, lock, scopedScheduleEffect);
     // A break is the last classifier-verdict relaxation, after stored
     // overrides and channel allowlists. Rule hits, unavailable-classifier
     // fail-closed results, and daemon enforcement never consult this flag.
     if (classifierDriven && lock.breakActive) blocked = false;
+    if (classifierDriven && policyEpoch !== categoryPolicyEpoch) return;
+    // A newer SERP title invalidates both block and allow side effects, even
+    // when Chrome did not emit another document-navigation generation.
+    if (!stillCurrentTitle()) return;
 
     // The user may have navigated again (e.g. pressed back) while classify()
     // was still running — arm() would have bumped the generation. Painting a
@@ -1402,7 +1607,7 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
     let injectMs = 0;
     if (blocked) {
       const host = hostnameOf(url);
-      if (host) {
+      if (host && !isSerp) {
         if (recentlyBlockedHosts.size >= 50) {
           const oldest = recentlyBlockedHosts.keys().next().value;
           if (oldest) recentlyBlockedHosts.delete(oldest);
@@ -1426,6 +1631,22 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
           reason: classifyFailedClosed ? 'classifier-unavailable' : 'dnf-redirect',
         });
       }
+      if (!stillCurrentTitle()) return;
+      if (classifierDriven && policyEpoch !== categoryPolicyEpoch) {
+        if (forceRedirectCommitted && forceRedirectOwnedRuleId !== null) {
+          await clearForceRedirectRule(tabId, url, forceRedirectOwnedRuleId);
+          if (navGeneration.get(tabId) === myGeneration && armedUrl.get(tabId) === url) {
+            await api.tabs.update(tabId, { url });
+          } else {
+            // Do not yank a newer unrelated navigation back to this URL, but
+            // still revalidate its judgment under the current policy below.
+          }
+        }
+        // A rule+reload may have completed after the epoch check. Re-run the
+        // fresh policy on that navigation instead of trusting a stale ack.
+        await sweepOpenTabs();
+        return;
+      }
       if (!forceRedirected) {
         try {
           // Fail-closed: the "classifier unavailable" screen was already
@@ -1443,6 +1664,9 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
               });
             }
           } else {
+            const overrideToken = await mintOverrideToken();
+            if (classifierDriven && policyEpoch !== categoryPolicyEpoch) return;
+            if (!stillCurrentTitle()) return;
             await api.scripting.executeScript({
               target: { tabId },
               func: showBlockScreen,
@@ -1452,7 +1676,7 @@ async function onTitle(tabId: number, rawTitle: string, url: string) {
                 title ?? '',
                 Date.now() - tTitle,
                 lock.settingsLocked,
-                await mintOverrideToken(),
+                overrideToken,
                 settings.blockThreshold,
                 settings.surrenderMode,
               ],
@@ -1507,7 +1731,8 @@ export async function sweepOpenTabs(): Promise<void> {
     if (t.id === undefined || !t.url || !isClassifiableUrl(t.url)) continue;
     lastClassified.delete(t.id); // bypass the title-flicker guard
     inFlightKey.delete(t.id);
-    await onTitle(t.id, t.title ?? '', t.url).catch(() => {});
+    const generation = invalidateSerpTitleEvaluation(t.id);
+    await onTitle(t.id, t.title ?? '', t.url, generation).catch(() => {});
 
     let frames: { frameId: number; url: string; errorOccurred?: boolean }[] = [];
     try {
@@ -1541,8 +1766,48 @@ const SETTINGS_SWEEP_KEYS: (keyof Settings)[] = [
 ];
 
 let settingsSweepTimer: ReturnType<typeof setTimeout> | undefined;
+let allowanceSweepTimer: ReturnType<typeof setTimeout> | undefined;
 
 export function initBlocker() {
+  // Scoped writes invalidate both background evaluations and classifier-owned
+  // subitem states. lock-enforcer.ts performs the actual sweep immediately;
+  // boundary sweeps advance the epoch separately for time-only transitions.
+  api.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes['lockState']) return;
+    const change = changes['lockState'];
+    if (changedScopedPolicy(change.oldValue, change.newValue)) advanceCategoryPolicyEpoch();
+  });
+
+  // Restore grant boundaries on every browser/SW restart, update them when an
+  // authorized snapshot changes, and sweep at pending/expiry/idle boundaries.
+  api.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name !== ALLOWANCE_BOUNDARY_ALARM) return;
+    void (async () => {
+      await syncAllowanceBoundary(await getLocalAllowanceAuthority());
+      await sweepOpenTabs();
+    })().catch((error) => console.warn('[SmartBlocker] allowance boundary error:', error));
+  });
+  api.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes['allowanceAuthority']) return;
+    void syncAllowanceBoundary(changes['allowanceAuthority'].newValue).catch(() => {
+      // Invalid/cleared states have no future allowance boundary to arm.
+    });
+    // A grant can become actionable immediately (or an old grant can be
+    // cancelled). Coalesce bursts of snapshot/activity writes into one sweep;
+    // waiting for the next navigation would otherwise leave a blocked tab on
+    // its old verdict even though authority has already changed.
+    if (allowanceSweepTimer) clearTimeout(allowanceSweepTimer);
+    allowanceSweepTimer = setTimeout(() => {
+      allowanceSweepTimer = undefined;
+      void sweepOpenTabs().catch((error) =>
+        console.warn('[SmartBlocker] allowance change sweep failed:', error),
+      );
+    }, 0);
+  });
+  void getLocalAllowanceAuthority()
+    .then((state) => syncAllowanceBoundary(state))
+    .catch((error) => console.warn('[SmartBlocker] allowance clock restore error:', error));
+
   // P2: force-mode DNR redirect lifecycle (unlock/expiry release, tab-close
   // cleanup, SW-restart session-rule reconciliation). Registers its own
   // listeners synchronously per MV3 rules; a no-op if DNR is unavailable.
@@ -1596,13 +1861,9 @@ export function initBlocker() {
   api.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (!tab.url || !isClassifiableUrl(tab.url)) return;
     if (changeInfo.title) {
-      void onTitle(tabId, changeInfo.title, tab.url).catch((e) =>
-        console.error('[SmartBlocker] classification failed:', e),
-      );
+      requestTitleEvaluation(tabId, changeInfo.title, tab.url);
     } else if (changeInfo.status === 'complete' && armedAt.has(tabId)) {
-      void onTitle(tabId, tab.title ?? '', tab.url).catch((e) =>
-        console.error('[SmartBlocker] classification failed:', e),
-      );
+      requestTitleEvaluation(tabId, tab.title ?? '', tab.url);
     }
   });
   api.tabs.onRemoved.addListener((tabId) => {
@@ -1612,6 +1873,7 @@ export function initBlocker() {
     lastClassified.delete(tabId);
     inFlightKey.delete(tabId);
     navGeneration.delete(tabId);
+    serpTitleGeneration.delete(tabId);
     clearSubFrameStateForTab(tabId);
     void clearTabStatus(tabId);
   });

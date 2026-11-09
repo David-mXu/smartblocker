@@ -119,9 +119,11 @@ extension-owned `blocked.html`.
 
 ### Deliverable and observed result
 
-[scripts/verify-firefox-dnr.mjs](../../scripts/verify-firefox-dnr.mjs) —
-self-contained (embeds a store-only zip writer, no npm deps), driven by
-`SB_FIREFOX=/path/to/firefox`. Run against Firefox 159.0.1:
+[scripts/verify-firefox-dnr.mjs](../../scripts/verify-firefox-dnr.mjs) — no
+additional npm dependencies, driven by `SB_FIREFOX=/path/to/firefox`. Its
+store-only XPI writer and Marionette transport now live in the shared
+[firefox-marionette helper](../../scripts/lib/firefox-marionette.mjs). The
+original run was against Firefox 159.0.1:
 
 ```
 PASS SmartBlocker temporary add-on installed and active

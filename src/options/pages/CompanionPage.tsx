@@ -109,6 +109,8 @@ export function CompanionPage({ state }: { state: OptionsState }) {
           locked={state.lock.locked}
           companion={state.companion}
           now={state.now}
+          observation={state.companion?.extensionLoss ?? null}
+          graceSeconds={state.companion?.extensionLoss?.graceSeconds ?? null}
         />
       </SettingsSection>
 

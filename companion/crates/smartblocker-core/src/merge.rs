@@ -4,15 +4,15 @@
 //! so syncing never locks the two sides into disagreement); the shared
 //! fixtures assert both properties on every case. `now` is needed because
 //! the schedule rule consults activeness. Password and timer/frozen sources
-//! stay monotonic (merge can never SHORTEN them); the password arm/unlock
-//! and the schedule list are the two deliberate exceptions: unlocks and
-//! schedule edits must propagate, so those two carry timestamps and the
-//! newer write wins.
+//! stay monotonic (merge can never SHORTEN them); timestamped operations are
+//! deliberate exceptions: password, explicit-release gates, schedules and the
+//! daemon-only partner arm/release propagate through last-writer-wins stamps.
 
 use crate::lock_math::{
-    armed_delay, armed_random_text_length, derive_lock_status, LockState, ScheduleRule,
+    armed_delay, armed_partner_generation, armed_random_text_length, current_category_window_end,
+    derive_lock_status, CategoryScheduleRule, LockState, ScheduleRule,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// `None` = -inf: a set timestamp always beats an unset one.
 fn max_nullable(x: Option<i64>, y: Option<i64>) -> Option<i64> {
@@ -23,12 +23,19 @@ fn max_nullable(x: Option<i64>, y: Option<i64>) -> Option<i64> {
     }
 }
 
-/// Canonical rule identity for same-id conflicts: the TS builds
-/// `${startMinutes}|${endMinutes}|${sortedDays.join(',')}|${tzOff ?? ''}|${tzName ?? ''}`
-/// and keeps the lexicographically smaller string. ASCII-only, so Rust byte
-/// order and JS code-unit order agree. The tz pin is content: two same-id
-/// rules pinned to different zones must converge to ONE rule on both sides
-/// (equality compares full rules, so a skipped field would break the
+/// UTF-8 hex gives both languages the same total ordering for IDs and raw
+/// conflict material (JavaScript's native string order is UTF-16 instead).
+fn utf8_hex(value: &str) -> String {
+    value
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Canonical rule identity for same-id conflicts. The tz pin is content: two
+/// same-id rules pinned to different zones must converge to ONE rule on both
+/// sides (equality compares full rules, so a skipped field would break the
 /// commutativity the shared fixtures assert).
 fn canon(r: &ScheduleRule) -> String {
     let mut days = r.days.clone();
@@ -38,11 +45,56 @@ fn canon(r: &ScheduleRule) -> String {
         .tz_offset_minutes
         .map(|m| m.to_string())
         .unwrap_or_default();
-    let tz_name = r.tz_name.as_deref().unwrap_or_default();
+    let tz_name = utf8_hex(r.tz_name.as_deref().unwrap_or_default());
     format!(
         "{}|{}|{days}|{tz_off}|{tz_name}",
         r.start_minutes, r.end_minutes
     )
+}
+
+fn category_canon(r: &CategoryScheduleRule) -> String {
+    let mut categories = r.categories.iter().map(|c| utf8_hex(c)).collect::<Vec<_>>();
+    categories.sort();
+    format!("{}|{}", canon(&r.schedule), categories.join(","))
+}
+
+fn scoped_rule_active(rule: &CategoryScheduleRule, now: i64) -> bool {
+    current_category_window_end(std::slice::from_ref(rule), now).is_some()
+}
+
+/// Canonicalize combined scoped output and repair already-corrupt duplicate
+/// direct state. Active duplicates beat inactive material, then UTF-8 canon
+/// order decides. Unique inactive whole-list winners retain authored order.
+fn canonical_scoped_rules(
+    rules: &[CategoryScheduleRule],
+    now: i64,
+    force_canonical: bool,
+) -> Vec<CategoryScheduleRule> {
+    if !force_canonical {
+        let mut ids = BTreeSet::new();
+        if rules
+            .iter()
+            .all(|rule| ids.insert(rule.schedule.id.as_str()))
+        {
+            return rules.to_vec();
+        }
+    }
+    let mut by_id: BTreeMap<String, (&CategoryScheduleRule, bool)> = BTreeMap::new();
+    for rule in rules {
+        let active = scoped_rule_active(rule, now);
+        by_id
+            .entry(rule.schedule.id.clone())
+            .and_modify(|(prev, prev_active)| {
+                let replace = (active && !*prev_active)
+                    || (active == *prev_active && category_canon(rule) < category_canon(prev));
+                if replace {
+                    *prev = rule;
+                    *prev_active = active;
+                }
+            })
+            .or_insert((rule, active));
+    }
+    by_id.into_values().map(|(rule, _)| rule.clone()).collect()
 }
 
 fn delay_canon(s: &LockState) -> String {
@@ -150,6 +202,46 @@ pub fn merge_lock_states(a: &LockState, b: &LockState, now: i64) -> LockState {
         };
     }
 
+    // Accountability partner: optional whole-operation LWW. An absent stamp
+    // AND generation is an older peer with no vote, never a release. Newer
+    // stamps win; ties keep a valid arm, then the deterministic smaller ID.
+    let has_partner = |state: &LockState| {
+        state.partner_arm_generation.is_some() || state.partner_arm_updated_at.is_some()
+    };
+    let a_has_partner = has_partner(a);
+    let b_has_partner = has_partner(b);
+    let include_partner = a_has_partner || b_has_partner;
+    let a_partner_ts = a.partner_arm_updated_at.unwrap_or(0);
+    let b_partner_ts = b.partner_arm_updated_at.unwrap_or(0);
+    let a_partner = armed_partner_generation(a);
+    let b_partner = armed_partner_generation(b);
+    let partner_canon = |state: &LockState| {
+        format!(
+            "[{}]",
+            state.partner_arm_generation.as_deref().unwrap_or("null")
+        )
+    };
+    let mut partner_winner = a;
+    if !a_has_partner {
+        partner_winner = b;
+    } else if !b_has_partner {
+        partner_winner = a;
+    } else if a_partner_ts != b_partner_ts {
+        partner_winner = if a_partner_ts > b_partner_ts { a } else { b };
+    } else if a_partner.is_some() != b_partner.is_some() {
+        partner_winner = if a_partner.is_some() { a } else { b };
+    } else if let (Some(a_generation), Some(b_generation)) = (a_partner, b_partner) {
+        if a_generation != b_generation {
+            partner_winner = if a_generation < b_generation { a } else { b };
+        }
+    } else if partner_canon(a) != partner_canon(b) {
+        partner_winner = if partner_canon(a) < partner_canon(b) {
+            a
+        } else {
+            b
+        };
+    }
+
     // Schedules: edits are refused while locked (lock.ts setSchedules /
     // `derive_lock_status`), so the only way a peer's list changes mid-lock
     // is a forged/wiped write. If exactly one side is locked, the LOCKED
@@ -190,6 +282,69 @@ pub fn merge_lock_states(a: &LockState, b: &LockState, now: i64) -> LockState {
         }
         (by_id.into_values().collect(), a.schedules_updated_at)
     };
+
+    // Scoped schedules: absent means an older peer with no vote, while an
+    // explicit empty vector is a modern deletion. Legal edits are refused in
+    // active scopes, so EVERY active rule from both peers must survive even if
+    // both whole lists are protected. Select the normal protected/LWW winner,
+    // then overlay active rules by ID. With no active rules, ordinary list
+    // policy alone applies; unrelated timers do not retain the losing list's
+    // inactive rules beyond the existing global-lock winner policy.
+    let (category_schedules, category_schedules_updated_at) =
+        match (&a.category_schedules, &b.category_schedules) {
+            (None, None) => (None, 0),
+            (Some(rules), None) => (
+                Some(canonical_scoped_rules(rules, now, true)),
+                a.category_schedules_updated_at,
+            ),
+            (None, Some(rules)) => (
+                Some(canonical_scoped_rules(rules, now, true)),
+                b.category_schedules_updated_at,
+            ),
+            (Some(a_rules), Some(b_rules)) => {
+                let a_active = a_rules
+                    .iter()
+                    .filter(|rule| scoped_rule_active(rule, now))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let b_active = b_rules
+                    .iter()
+                    .filter(|rule| scoped_rule_active(rule, now))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let a_protected = a_locked || !a_active.is_empty();
+                let b_protected = b_locked || !b_active.is_empty();
+                let (mut selected, mut force_canonical, updated_at) = if a_protected != b_protected
+                {
+                    if a_protected {
+                        (a_rules.clone(), true, a.category_schedules_updated_at)
+                    } else {
+                        (b_rules.clone(), true, b.category_schedules_updated_at)
+                    }
+                } else if a.category_schedules_updated_at != b.category_schedules_updated_at {
+                    if a.category_schedules_updated_at > b.category_schedules_updated_at {
+                        (a_rules.clone(), true, a.category_schedules_updated_at)
+                    } else {
+                        (b_rules.clone(), true, b.category_schedules_updated_at)
+                    }
+                } else {
+                    (
+                        a_rules.iter().chain(b_rules.iter()).cloned().collect(),
+                        true,
+                        a.category_schedules_updated_at,
+                    )
+                };
+                if !a_active.is_empty() || !b_active.is_empty() {
+                    selected.extend(a_active);
+                    selected.extend(b_active);
+                    force_canonical = true;
+                }
+                (
+                    Some(canonical_scoped_rules(&selected, now, force_canonical)),
+                    updated_at,
+                )
+            }
+        };
 
     // Break: select the whole operation by its LWW stamp, never max individual
     // timestamps. Newer cancellation beats a stale relaxed interval. Ties fail
@@ -242,5 +397,17 @@ pub fn merge_lock_states(a: &LockState, b: &LockState, now: i64) -> LockState {
         frozen_until: max_nullable(a.frozen_until, b.frozen_until),
         schedules,
         schedules_updated_at,
+        category_schedules,
+        category_schedules_updated_at,
+        partner_arm_generation: if include_partner {
+            partner_winner.partner_arm_generation.clone()
+        } else {
+            None
+        },
+        partner_arm_updated_at: if include_partner {
+            Some(a_partner_ts.max(b_partner_ts))
+        } else {
+            None
+        },
     }
 }

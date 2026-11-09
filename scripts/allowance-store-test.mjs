@@ -1,0 +1,146 @@
+// Actual extension storage writer tests with a controlled async mock.
+import assert from 'node:assert/strict';
+import { registerHooks } from 'node:module';
+
+const KEY = '__smartblockerAllowanceStoreTest';
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    try {
+      return awaitResolve(specifier, context, nextResolve);
+    } catch (error) {
+      if ((specifier.startsWith('./') || specifier.startsWith('../')) && !specifier.endsWith('.ts')) {
+        return nextResolve(`${specifier}.ts`, context);
+      }
+      throw error;
+    }
+  },
+  load(url, context, nextLoad) {
+    const path = url.split('?')[0];
+    if (path.endsWith('/src/shared/api.ts')) {
+      return { format: 'module', shortCircuit: true, source: `export const api = globalThis.${KEY}.api;` };
+    }
+    if (path.endsWith('/src/shared/lock.ts')) {
+      return { format: 'module', shortCircuit: true, source: `export const getLockStatus = () => globalThis.${KEY}.getLockStatus();` };
+    }
+    return nextLoad(url, context);
+  },
+});
+// Useful above without wrapping a non-erasable helper around the hook.
+function awaitResolve(specifier, context, nextResolve) {
+  return nextResolve(specifier, context);
+}
+
+const STORAGE_KEY = 'allowanceAuthority';
+const values = {};
+const writes = [];
+let locked = false;
+let failNextWrite = false;
+const clone = (value) => value === undefined ? undefined : structuredClone(value);
+globalThis[KEY] = {
+  api: {
+    storage: {
+      local: {
+        async get(key) { return { [key]: clone(values[key]) }; },
+        async set(items) {
+          if (failNextWrite) { failNextWrite = false; throw new Error('injected persistence failure'); }
+          writes.push(clone(items));
+          Object.assign(values, clone(items));
+        },
+      },
+      onChanged: { addListener() {} },
+    },
+  },
+  getLockStatus: async () => ({ settingsLocked: locked }),
+};
+
+const T0 = 1_800_000_000_000;
+const DAY = '2026-11-08';
+const CONFIG = { dailyAllowanceMs: 600_000, dailyOpenings: 1, waitingBaseMs: 0, waitingStepMs: 0, waitingMaxMs: 0, rewardCapMs: 60_000 };
+const id = (n) => n.toString(16).padStart(32, '0');
+const command = (kind, n, extra = {}) => ({
+  kind, operationId: id(n), category: 'video games', grantId: 'g2', nowMs: T0, dayKey: DAY, ...extra,
+});
+const configure = () => ({ kind: 'configure', operationId: id(1), category: 'video games', config: CONFIG });
+const passed = [];
+async function test(name, fn) {
+  await fn();
+  passed.push(name);
+  console.log(`  PASS  ${name}`);
+}
+
+const {
+  allowanceLocalDayKey,
+  getLocalAllowanceAuthority,
+  submitLocalAllowanceCommand,
+} = await import('../src/shared/allowance-store.ts?store-test=1');
+
+console.log('allowance extension-store tests');
+await test('serialized commands persist increasing revisions and operation ids share no grant', async () => {
+  assert.equal((await submitLocalAllowanceCommand(configure())).state.revision, 1);
+  await Promise.all([
+    submitLocalAllowanceCommand(command('request', 2, { grantId: 'g2', durationMs: 60_000 })),
+    submitLocalAllowanceCommand(command('reward', 3, { earnedMs: 30_000 })),
+  ]);
+  const state = await getLocalAllowanceAuthority();
+  assert.equal(state.revision, 3);
+  assert.equal(state.receipts.length, 3);
+  assert.equal(state.categories['video games'].ledger.grant.id, 'g2');
+  assert.equal(state.categories['video games'].ledger.earnedRewardMs, 30_000);
+});
+
+await test('durable duplicate retries do not write or increment revisions', async () => {
+  const before = (await getLocalAllowanceAuthority()).revision;
+  const writesBefore = writes.length;
+  const request = command('request', 2, { grantId: 'g2', durationMs: 60_000 });
+  const retry = await submitLocalAllowanceCommand(request);
+  assert.equal(retry.duplicate, true);
+  assert.equal(retry.state.revision, before);
+  assert.equal(writes.length, writesBefore);
+  const mismatch = await submitLocalAllowanceCommand({ ...request, durationMs: 120_000 });
+  assert.equal(mismatch.ok, false);
+  assert.equal(mismatch.reason, 'duplicate-operation');
+});
+
+await test('a lock refusal does not poison the queue and performs no write', async () => {
+  const writesBefore = writes.length;
+  locked = true;
+  await assert.rejects(
+    submitLocalAllowanceCommand({ ...configure(), operationId: id(9) }),
+    /configuration cannot be changed/,
+  );
+  assert.equal(writes.length, writesBefore);
+  locked = false;
+  const cancelled = await submitLocalAllowanceCommand(command('cancel', 8, { grantId: 'g2' }));
+  assert.equal(cancelled.ok, true);
+  const result = await submitLocalAllowanceCommand(command('opening-start', 4, { grantId: 'open1' }));
+  assert.equal(result.ok, true);
+  assert.equal(result.state.categories['video games'].ledger.openingsUsed, 1);
+});
+
+await test('persistence errors are reported and the next valid command can proceed', async () => {
+  const before = await getLocalAllowanceAuthority();
+  failNextWrite = true;
+  await assert.rejects(
+    submitLocalAllowanceCommand(command('opening-close', 5, { grantId: 'open1' })),
+    /injected persistence failure/,
+  );
+  assert.deepEqual(await getLocalAllowanceAuthority(), before);
+  const result = await submitLocalAllowanceCommand(command('opening-close', 5, { grantId: 'open1' }));
+  assert.equal(result.ok, true);
+  assert.equal(result.state.categories['video games'].ledger.grant.endReason, 'explicit');
+});
+
+await test('a restarted writer deduplicates from the persisted receipt snapshot', async () => {
+  const restarted = await import('../src/shared/allowance-store.ts?store-test=restart');
+  const before = (await restarted.getLocalAllowanceAuthority()).revision;
+  const result = await restarted.submitLocalAllowanceCommand(command('opening-close', 5, { grantId: 'open1' }));
+  assert.equal(result.duplicate, true);
+  assert.equal(result.state.revision, before);
+});
+
+await test('local day keys are calendar-shaped local dates', () => {
+  assert.equal(allowanceLocalDayKey(new Date(2026, 10, 9)), '2026-11-09');
+  assert.equal(allowanceLocalDayKey(new Date(2026, 0, 1)), '2026-01-01');
+});
+
+console.log(`\n${passed.length} passed, 0 failed`);

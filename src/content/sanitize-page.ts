@@ -18,12 +18,18 @@
 //    knowledge panel ("MrBeast · American YouTuber"), and — as a DOM-agnostic
 //    backstop — any leftover link to a known distraction host, without
 //    blocking the user's entire search tab.
+// 3. YouTube Search Result Masking: keeps /results open while classifying each
+//    video/Short from its own title, channel and snippet instead of treating a
+//    broad search query as one verdict.
 
 export interface SanitizePageOptions {
   blockedLabels: string[];
   blocklist: string[];
   settingsLocked: boolean;
   maskSearchElements?: boolean;
+  /** Background-owned scoped-policy/boundary epoch used to invalidate only
+   * classifier-owned states, never deterministic rule masks. */
+  policyEpoch?: number;
 }
 
 export interface SubItemEvalRequest {
@@ -56,6 +62,11 @@ export function sanitizePage(opts: SanitizePageOptions): {
     __sbNextId?: number;
     __sbOrigMedia?: WeakMap<HTMLIFrameElement, { src?: string; srcdoc?: string }>;
   };
+  const previousPolicyEpoch = win.__sbSanitizeOpts?.policyEpoch;
+  let resetClassifierForPolicy =
+    previousPolicyEpoch !== undefined &&
+    opts.policyEpoch !== undefined &&
+    previousPolicyEpoch !== opts.policyEpoch;
   win.__sbSanitizeOpts = opts;
   if (!win.__sbNextId) win.__sbNextId = 1;
   // Original iframe src/srcdoc of masked embeds, kept in isolated-world JS
@@ -270,12 +281,43 @@ export function sanitizePage(opts: SanitizePageOptions): {
     }
   }
 
+  /** Re-open only model-owned verdicts after a scoped policy/boundary change.
+   * Deterministic masks have no classifier marker and deliberately survive.
+   * User-revealed content also stays revealed; stored override policy explains
+   * any subsequent independent verdict instead of discarding that choice. */
+  function resetClassifierArtifacts(deepRoots: DeepRoot[]): void {
+    const states = queryAllDeep('[data-smartblocker-state]', deepRoots);
+    for (let i = 0; i < states.length; i++) {
+      states[i].removeAttribute('data-smartblocker-state');
+      states[i].removeAttribute('data-smartblocker-id');
+    }
+    const masked = queryAllDeep('[data-smartblocker-classifier="1"]', deepRoots);
+    for (let i = 0; i < masked.length; i++) {
+      const el = masked[i];
+      if (el.getAttribute('data-smartblocker-masked') === 'revealed') continue;
+      el.querySelector(':scope > .smartblocker-mask-bar')?.remove();
+      el.removeAttribute('data-smartblocker-masked');
+      el.removeAttribute('data-smartblocker-classifier');
+      el.removeAttribute('data-smartblocker-reason');
+      el.removeAttribute('data-smartblocker-state');
+      el.removeAttribute('data-smartblocker-id');
+      const iframes = queryAllDeep('iframe', collectOpenRoots(el));
+      for (let j = 0; j < iframes.length; j++) {
+        const rec = origMedia.get(iframes[j] as HTMLIFrameElement);
+        if (!rec) continue;
+        if (rec.srcdoc !== undefined) iframes[j].setAttribute('srcdoc', rec.srcdoc);
+        if (rec.src !== undefined) iframes[j].setAttribute('src', rec.src);
+      }
+    }
+  }
+
   function maskElement(
     el: Element,
     kind: 'serp-shelf' | 'serp-card' | 'embed',
     reason: string,
     unloadIframes = true,
     followers: Element[] = [],
+    classifierOwned = false,
   ): boolean {
     const currentState = el.getAttribute('data-smartblocker-masked');
     if (currentState === 'revealed' || currentState === kind) return false;
@@ -289,12 +331,14 @@ export function sanitizePage(opts: SanitizePageOptions): {
       ensureMaskCss(f.getRootNode());
       f.setAttribute('data-smartblocker-masked', kind);
       f.setAttribute('data-smartblocker-reason', reason);
+      if (classifierOwned) f.setAttribute('data-smartblocker-classifier', '1');
       if (unloadIframes) pauseAndUnloadMedia(f);
     }
     ensureMaskCss(el.getRootNode());
     if (el.shadowRoot) ensureMaskCss(el.shadowRoot);
     el.setAttribute('data-smartblocker-masked', kind);
     el.setAttribute('data-smartblocker-reason', reason);
+    if (classifierOwned) el.setAttribute('data-smartblocker-classifier', '1');
     el.removeAttribute('data-smartblocker-state');
 
     if (unloadIframes) pauseAndUnloadMedia(el);
@@ -474,6 +518,10 @@ export function sanitizePage(opts: SanitizePageOptions): {
     const blockedSet = new Set(activeOpts.blockedLabels);
     const hostLower = location.hostname.toLowerCase().replace(/^www\./, '');
     const deepRoots = collectOpenRoots(document);
+    if (resetClassifierForPolicy) {
+      resetClassifierArtifacts(deepRoots);
+      resetClassifierForPolicy = false;
+    }
 
     // Re-ensure the mask stylesheet every scan: a hostile page can delete or
     // empty the injected <style> mid-session to unmask everything (#16). The
@@ -701,6 +749,84 @@ export function sanitizePage(opts: SanitizePageOptions): {
       }
     }
 
+    // ── YouTube Search: classify videos individually, never by their query ────
+    // /results is deliberately allowed as a browsing surface at the page level.
+    // That exemption must not turn the results themselves into an unclassified
+    // distraction feed: a "tech" search can contain both a useful repair guide
+    // and pure entertainment, so each real video/Short gets its own verdict.
+    const isYouTubeSearch =
+      (hostLower === 'youtube.com' || hostLower.endsWith('.youtube.com')) &&
+      /^\/results(?:\/|$)/i.test(location.pathname);
+
+    if (isYouTubeSearch) {
+      if (activeOpts.maskSearchElements === false) {
+        const maskedYouTubeCards = document.querySelectorAll(
+          '[data-smartblocker-masked="serp-card"]',
+        );
+        for (let i = 0; i < maskedYouTubeCards.length; i++) {
+          const card = maskedYouTubeCards[i];
+          card.setAttribute('data-smartblocker-masked', 'revealed');
+          card.querySelector(':scope > .smartblocker-mask-bar')?.remove();
+        }
+      } else {
+        const videoCards = document.querySelectorAll(
+          'ytd-video-renderer, ytd-grid-video-renderer, ytd-reel-item-renderer, ytd-shorts-lockup-view-model',
+        );
+        for (let i = 0; i < videoCards.length; i++) {
+          const card = videoCards[i];
+          if (
+            card.getAttribute('data-smartblocker-masked') ||
+            card.getAttribute('data-smartblocker-state') ||
+            card.closest('[data-smartblocker-masked]')
+          ) {
+            continue;
+          }
+
+          const link = card.querySelector(
+            'a#video-title[href], a[href*="/watch?v="], a[href*="/shorts/"]',
+          ) as HTMLAnchorElement | null;
+          const cardUrl = resolveResultHref(link?.getAttribute('href') || '');
+          if (!link || !extractYouTubeId(cardUrl)) continue;
+
+          const titleEl = card.querySelector(
+            '#video-title, h3, [class*="MetadataTitle"], .yt-lockup-metadata-view-model-wiz__title',
+          );
+          const cardTitle =
+            (link.getAttribute('title') || '').trim() ||
+            textOf(titleEl) ||
+            textOf(link) ||
+            (link.getAttribute('aria-label') || '').trim();
+          if (!cardTitle) continue;
+
+          const blHit = matchesBlocklist(cardUrl, cardTitle, activeOpts.blocklist);
+          if (blHit) {
+            if (maskElement(card, 'serp-card', `blocked rule "${blHit}"`)) maskedCards++;
+            continue;
+          }
+
+          if (pendingEval.length < 20) {
+            const itemId = nextId('sb-card');
+            const channelName = textOf(
+              card.querySelector('ytd-channel-name #text a, ytd-channel-name a, #channel-name a'),
+            );
+            const snippet = textOf(
+              card.querySelector('.metadata-snippet-text, #description-text, #description'),
+            );
+            card.setAttribute('data-smartblocker-id', itemId);
+            card.setAttribute('data-smartblocker-state', 'evaluated');
+            pendingEval.push({
+              id: itemId,
+              url: cardUrl,
+              title: cardTitle,
+              channel: channelName ? `${channelName} (youtube.com)` : 'youtube.com',
+              context: `YouTube search result.${snippet ? ` ${snippet}` : ''}`,
+              kind: 'serp-card',
+            });
+          }
+        }
+      }
+    }
+
     // ── PART B: Two-Pass SERP Distraction Masking ────────────────────────────
     const isSerpHost =
       /^(?:(?:www|cn|m|html|lite|search|images|video|videos|shopping)\.)?(?:google\.[a-z]{2,3}(?:\.[a-z]{2})?|bing\.com|duckduckgo\.com|brave\.com|yahoo\.[a-z]{2,3}(?:\.[a-z]{2})?|baidu\.com|yandex\.[a-z]{2,3}|naver\.com|ecosia\.org)$/i.test(
@@ -724,6 +850,30 @@ export function sanitizePage(opts: SanitizePageOptions): {
         /^\/(?:videos?|videohub)\b/i.test(location.pathname) ||
         /\/videos\/search\b/i.test(location.pathname) ||
         /[?&]ia=videos?\b/i.test(location.search);
+
+      // Google's Images tab renders the whole grid, plus interleaved modules
+      // such as "Related searches", inside ONE div.MjjYud. A rule that treats
+      // that div as a single shelf or result card therefore hides every image.
+      // Image surfaces are judged by the query alone, which the page-level
+      // classifier already does for the whole search tab.
+      const isGoogleSearch = /(?:^|\.)google\.[a-z.]+$/i.test(hostLower);
+      const isGoogleImagesTab =
+        isGoogleSearch && /[?&](?:udm=2|tbm=isch)\b/i.test(location.search);
+      const IMAGE_ROW_HEADING_RE = /^images(?:\s+for\b.*)?$/i;
+      const resultPassElements = (selector: string): ArrayLike<Element> =>
+        isGoogleImagesTab ? [] : document.querySelectorAll(selector);
+
+      if (isGoogleImagesTab) {
+        // The user's own rules still apply to each image's landing page.
+        const tiles = document.querySelectorAll('#rso [data-lpage]');
+        for (let i = 0; i < tiles.length; i++) {
+          const tile = tiles[i];
+          const landingPage = tile.getAttribute('data-lpage') || '';
+          const alt = tile.querySelector('img[alt]')?.getAttribute('alt') || '';
+          const blHit = matchesBlocklist(landingPage, alt, activeOpts.blocklist);
+          if (blHit && maskElement(tile, 'serp-card', `blocked rule "${blHit}"`)) maskedCards++;
+        }
+      }
 
       // 1. Direct ad / PLA / shopping containers
       if (blockedSet.has('online shopping')) {
@@ -774,9 +924,8 @@ export function sanitizePage(opts: SanitizePageOptions): {
         /^(?:movies|tv shows|watch movie|where to watch|cast|episodes|trailers|popular movies)$/i;
       const GAMES_HEADING_RE =
         /^(?:games from google|play minesweeper|play pac-man|play snake|play solitaire|tic-tac-toe)$/i;
-      const RELATED_BAIT_RE = /^(?:people also search for|related searches)$/i;
 
-      const shelfCandidates = document.querySelectorAll(
+      const shelfCandidates = resultPassElements(
         '#rso > div, #rso div.ULSxyf, #rso div.MjjYud, #botstuff div.MjjYud, #rhs > div, #b_results > li.b_ans, #b_results > li.b_vidAns, [data-testid="videos"], [data-testid="news"]',
       );
 
@@ -841,10 +990,6 @@ export function sanitizePage(opts: SanitizePageOptions): {
             shelfReason = `Entertainment module (${hText})`;
             break;
           }
-          if (RELATED_BAIT_RE.test(hText)) {
-            shelfReason = `Search rabbit-hole suggestions (${hText})`;
-            break;
-          }
         }
 
         // Structural evidence fallback when Google omits/obfuscates the heading
@@ -892,7 +1037,7 @@ export function sanitizePage(opts: SanitizePageOptions): {
       const NEWS_ARTICLE_HOST_RE =
         /(?:^|\.)(?:nytimes\.com|cnn\.com|foxnews\.com|bbc\.com|bbc\.co\.uk|theguardian\.com|washingtonpost\.com|wsj\.com|reuters\.com|apnews\.com|nbcnews\.com|cbsnews\.com|abcnews\.go\.com|usatoday\.com|nypost\.com|dailymail\.co\.uk|theglobeandmail\.com|cbc\.ca|ctvnews\.ca|globalnews\.ca|forbes\.com|businessinsider\.com|cnbc\.com|politico\.com|thehill\.com|axios\.com|huffpost\.com|people\.com|variety\.com|hollywoodreporter\.com|deadline\.com|driveteslacanada\.ca)$/i;
 
-      const cardEls = document.querySelectorAll(
+      const cardEls = resultPassElements(
         '#rso div.MjjYud, #b_results > li.b_algo, article[data-testid="result"]',
       );
       const pendingBudget = isVideoVertical ? 20 : 15;
@@ -932,7 +1077,8 @@ export function sanitizePage(opts: SanitizePageOptions): {
             break;
           }
         }
-        if (!cardUrl || !cardHost) continue;
+        const isImageRow = isGoogleSearch && IMAGE_ROW_HEADING_RE.test(cardTitle);
+        if (!isImageRow && (!cardUrl || !cardHost)) continue;
 
         const snippetEl = card.querySelector(
           '.VwiC3b, [data-sncf], .b_caption p, [data-testid="result-snippet"]',
@@ -945,6 +1091,14 @@ export function sanitizePage(opts: SanitizePageOptions): {
           if (maskElement(card, 'serp-card', `blocked rule "${blHit}" (${cardHost})`)) {
             maskedCards++;
           }
+          continue;
+        }
+
+        // An image row is titled just "Images", and its first link is whichever
+        // site happens to supply the first thumbnail. Neither says what the
+        // row is about, so only the page-level query verdict applies.
+        if (isImageRow) {
+          card.setAttribute('data-smartblocker-image-row', '1');
           continue;
         }
 
@@ -1160,12 +1314,12 @@ export function sanitizePage(opts: SanitizePageOptions): {
         return best;
       };
 
-      const sweepLinks = document.querySelectorAll(
+      const sweepLinks = resultPassElements(
         '#rcnt a[href], #botstuff a[href], #b_content a[href], #links a[href], section[data-testid="mainline"] a[href], section[data-area="mainline"] a[href]',
       );
       for (let i = 0; i < sweepLinks.length; i++) {
         const a = sweepLinks[i];
-        if (a.closest('[data-smartblocker-masked]')) continue;
+        if (a.closest('[data-smartblocker-masked], [data-smartblocker-image-row]')) continue;
         const reason = sweepReason(linkHost(a));
         if (!reason) continue;
         const tile = sweepTile(a);
@@ -1181,10 +1335,12 @@ export function sanitizePage(opts: SanitizePageOptions): {
       typeof chrome !== 'undefined' &&
       chrome.runtime?.sendMessage
     ) {
+      const requestPolicyEpoch = activeOpts.policyEpoch;
       try {
         chrome.runtime.sendMessage(
           { type: 'EVAL_SUBITEMS', items: pendingEval },
           (resp?: { ok?: boolean; results?: SubItemEvalResult[] }) => {
+            if (win.__sbSanitizeOpts?.policyEpoch !== requestPolicyEpoch) return;
             if (!resp?.ok || !Array.isArray(resp.results)) return;
             for (let i = 0; i < resp.results.length; i++) {
               const r = resp.results[i];
@@ -1205,6 +1361,7 @@ export function sanitizePage(opts: SanitizePageOptions): {
                   `${titleHint}${r.label}`,
                   true,
                   followers,
+                  true,
                 );
               } else {
                 target.setAttribute('data-smartblocker-state', 'allowed');

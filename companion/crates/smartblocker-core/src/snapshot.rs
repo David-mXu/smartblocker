@@ -33,6 +33,18 @@ pub struct BrowserInfo {
     pub last_seen_ms: i64,
 }
 
+/// An active browser-close grace track. This is intentionally separate from
+/// `browsers`: the relay can disappear exactly when the warning matters most.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserGraceInfo {
+    pub kind: CompanionBrowser,
+    /// Wall-clock receipt/display anchor for this daemon observation.
+    pub observed_at_ms: i64,
+    pub grace_seconds: u64,
+    pub grace_remaining_ms: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatusSnapshot {
@@ -42,6 +54,10 @@ pub struct StatusSnapshot {
     /// One entry per browser kind (the freshest connection wins when several
     /// profiles of the same browser are paired), sorted chrome/edge/firefox.
     pub browsers: Vec<BrowserInfo>,
+    /// Enforcer-owned grace tracks, including browsers whose relay is gone.
+    /// Missing in older snapshots, hence the additive default.
+    #[serde(default)]
+    pub browser_grace: Vec<BrowserGraceInfo>,
 }
 
 impl StatusSnapshot {
@@ -88,6 +104,21 @@ pub fn read_live_snapshot(store: &Store, now_ms: i64) -> Option<StatusSnapshot> 
     read_snapshot(store).filter(|s| s.is_fresh(now_ms))
 }
 
+/// Desktop status must combine the latest persisted lock with the daemon's
+/// latest tick. An unlock can happen between ticks; stale grace must disappear
+/// immediately rather than survive until the enforcer clears its next track.
+pub fn browser_grace_for_lock(
+    snapshot: Option<&StatusSnapshot>,
+    settings_locked: bool,
+) -> Vec<BrowserGraceInfo> {
+    if !settings_locked {
+        return Vec::new();
+    }
+    snapshot
+        .map(|snapshot| snapshot.browser_grace.clone())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,6 +142,12 @@ mod tests {
             started_at_ms: NOW - 5_000,
             written_at_ms: NOW,
             browsers: vec![info(CompanionBrowser::Edge, "0.5.0", NOW - 1)],
+            browser_grace: vec![BrowserGraceInfo {
+                kind: CompanionBrowser::Edge,
+                observed_at_ms: NOW,
+                grace_seconds: 60,
+                grace_remaining_ms: 42_000,
+            }],
         };
         write_snapshot(&store, &snap).unwrap();
         assert_eq!(read_snapshot(&store), Some(snap.clone()));
@@ -122,6 +159,36 @@ mod tests {
         assert_eq!(raw["browsers"][0]["kind"], "edge");
         assert_eq!(raw["browsers"][0]["extVersion"], "0.5.0");
         assert_eq!(raw["browsers"][0]["lastSeenMs"], NOW - 1);
+        assert_eq!(raw["browserGrace"][0]["observedAtMs"], NOW);
+        assert_eq!(raw["browserGrace"][0]["graceRemainingMs"], 42_000);
+
+        assert_eq!(
+            browser_grace_for_lock(Some(&snap), true),
+            snap.browser_grace
+        );
+        assert!(
+            browser_grace_for_lock(Some(&snap), false).is_empty(),
+            "an unlock between enforcing ticks hides stale grace immediately"
+        );
+        assert!(browser_grace_for_lock(None, true).is_empty());
+    }
+
+    #[test]
+    fn old_snapshot_without_grace_defaults_to_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(SNAPSHOT_FILE),
+            serde_json::to_vec(&serde_json::json!({
+                "pid": 1,
+                "startedAtMs": NOW,
+                "writtenAtMs": NOW,
+                "browsers": [],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let snap = read_snapshot(&Store::new(dir.path())).unwrap();
+        assert!(snap.browser_grace.is_empty());
     }
 
     #[test]
@@ -137,6 +204,7 @@ mod tests {
             started_at_ms: NOW,
             written_at_ms: NOW,
             browsers: vec![],
+            browser_grace: vec![],
         };
         write_snapshot(&store, &snap).unwrap();
         assert!(read_live_snapshot(&store, NOW + SNAPSHOT_STALE_MS).is_some());

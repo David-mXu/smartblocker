@@ -8,6 +8,11 @@
 //!   smartblocker-daemon install [--host-path PATH]   # NM manifests + autostart
 //!   smartblocker-daemon uninstall
 //!   smartblocker-daemon status
+//!   smartblocker-daemon block start|stop|toggle [--socket NAME]
+//!   smartblocker-daemon lock MINUTES [--socket NAME]
+//!   smartblocker-daemon partner add-key HEX|arm|begin|redeem TOKEN
+//!   smartblocker-daemon partner-keygen                 # offline, prints once
+//!   smartblocker-daemon partner-sign OPERATION_JSON EXPIRES_MS PRIVATE_KEY_HEX
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
@@ -17,6 +22,8 @@ use smartblocker_core::daemon::{self, describe_status, run_daemon, DaemonOptions
 use smartblocker_core::enforcer;
 use smartblocker_core::ipc::DEFAULT_SOCKET_NAME;
 use smartblocker_core::lock_math::derive_lock_status;
+use smartblocker_core::partner::generate_signing_material;
+use smartblocker_core::protocol::{BlockAction, CompanionMessage, PROTOCOL_VERSION};
 use smartblocker_core::registration;
 use smartblocker_core::store::Store;
 use smartblocker_core::supervisor;
@@ -28,6 +35,29 @@ const WATCHDOG_TICK: Duration = Duration::from_secs(2);
 /// false-positive on a loaded daemon, short enough that a squatter costs at
 /// most one extra watchdog tick.
 const PROBE_LEG_TIMEOUT: Duration = Duration::from_millis(500);
+const COMMAND_LEG_TIMEOUT: Duration = Duration::from_secs(2);
+
+fn print_command_result(result: std::io::Result<CompanionMessage>) -> ExitCode {
+    match result {
+        Ok(CompanionMessage::CommandResult { ok, message, .. }) => {
+            if ok {
+                println!("{message}");
+                ExitCode::SUCCESS
+            } else {
+                eprintln!("error: {message}");
+                ExitCode::FAILURE
+            }
+        }
+        Ok(other) => {
+            eprintln!("error: unexpected daemon reply: {other:?}");
+            ExitCode::FAILURE
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -98,6 +128,21 @@ fn run_watchdog(socket: &str, data_dir: Option<PathBuf>) -> ! {
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let command = args.next().unwrap_or_default();
+    // Peel off only declared positionals; all remaining words retain the
+    // existing run/install flag parsing. Offline commands never use `socket`.
+    let partner_action = if command == "partner" {
+        args.next()
+    } else {
+        None
+    };
+    let positional_count = match command.as_str() {
+        "block" | "lock" => 1,
+        "partner-sign" => 3,
+        "partner" if matches!(partner_action.as_deref(), Some("add-key" | "redeem")) => 1,
+        _ => 0,
+    };
+    let positionals: Vec<String> = args.by_ref().take(positional_count).collect();
+    let operand = positionals.first().cloned();
 
     let mut socket = DEFAULT_SOCKET_NAME.to_string();
     let mut data_dir: Option<PathBuf> = None;
@@ -247,12 +292,118 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         }
+        "block" => {
+            let action = match operand.as_deref() {
+                Some("start") => BlockAction::Start,
+                Some("stop") => BlockAction::Stop,
+                Some("toggle") => BlockAction::Toggle,
+                _ => {
+                    eprintln!(
+                        "usage: smartblocker-daemon block <start|stop|toggle> [--socket NAME]"
+                    );
+                    return ExitCode::FAILURE;
+                }
+            };
+            print_command_result(daemon::send_command(
+                &socket,
+                &CompanionMessage::BlockCommand {
+                    v: PROTOCOL_VERSION,
+                    action,
+                },
+                COMMAND_LEG_TIMEOUT,
+            ))
+        }
+        "lock" => {
+            let Some(minutes) = operand
+                .as_deref()
+                .and_then(|value| value.parse::<u64>().ok())
+            else {
+                eprintln!("error: lock needs a positive whole number of minutes");
+                return ExitCode::FAILURE;
+            };
+            let Some(duration_ms) = minutes.checked_mul(60_000).filter(|_| minutes > 0) else {
+                eprintln!("error: lock needs a positive whole number of minutes");
+                return ExitCode::FAILURE;
+            };
+            print_command_result(daemon::send_command(
+                &socket,
+                &CompanionMessage::LockCommand {
+                    v: PROTOCOL_VERSION,
+                    duration_ms,
+                },
+                COMMAND_LEG_TIMEOUT,
+            ))
+        }
+        "partner" => {
+            let command = match (partner_action.as_deref(), operand) {
+                (Some("add-key"), Some(public_key)) => CompanionMessage::PartnerAddKey {
+                    v: PROTOCOL_VERSION,
+                    public_key,
+                },
+                (Some("arm"), None) => CompanionMessage::PartnerArm {
+                    v: PROTOCOL_VERSION,
+                },
+                (Some("begin"), None) => CompanionMessage::PartnerBeginOperation {
+                    v: PROTOCOL_VERSION,
+                },
+                (Some("redeem"), Some(token)) => CompanionMessage::PartnerRedeem {
+                    v: PROTOCOL_VERSION,
+                    token,
+                },
+                _ => {
+                    eprintln!(
+                        "usage: smartblocker-daemon partner <add-key HEX|arm|begin|redeem TOKEN> [--socket NAME]"
+                    );
+                    return ExitCode::FAILURE;
+                }
+            };
+            print_command_result(daemon::send_command(&socket, &command, COMMAND_LEG_TIMEOUT))
+        }
+        "partner-keygen" => match generate_signing_material() {
+            Ok((private_key, public_key)) => {
+                // Explicit one-time CLI output only. The secret is never sent
+                // to the daemon, persisted by core, or included in event logs.
+                println!("PRIVATE_KEY_HEX={private_key}");
+                println!("PUBLIC_KEY_HEX={public_key}");
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("error: partner key generation failed: {error}");
+                ExitCode::FAILURE
+            }
+        },
+        "partner-sign" => {
+            let [operation_json, expires, private_key] = positionals.as_slice() else {
+                eprintln!(
+                    "usage: smartblocker-daemon partner-sign OPERATION_JSON EXPIRES_MS PRIVATE_KEY_HEX"
+                );
+                return ExitCode::FAILURE;
+            };
+            let expires_at_ms = match expires.parse::<i64>() {
+                Ok(value) => value,
+                Err(_) => {
+                    eprintln!("error: EXPIRES_MS must be a whole epoch-millisecond number");
+                    return ExitCode::FAILURE;
+                }
+            };
+            match daemon::sign_partner_operation_offline(operation_json, expires_at_ms, private_key)
+            {
+                Ok(token) => {
+                    println!("{token}");
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         "status" => {
             print!("{}", describe_status(&store_from(data_dir)));
             ExitCode::SUCCESS
         }
         _ => {
-            eprintln!("usage: smartblocker-daemon <run|watchdog|install|uninstall|status> [flags]");
+            eprintln!("usage: smartblocker-daemon <run|watchdog|install|uninstall|status|block|lock|partner|partner-keygen|partner-sign> [flags]");
             ExitCode::FAILURE
         }
     }

@@ -7,9 +7,10 @@
 //!
 //! Contract invariants shared with the TS side:
 //! - expiry is strict `>` (a lock ending exactly `now` is inactive);
-//! - `reasons` order is fixed: timer, password, delay, random-text, frozen, schedule;
+//! - `reasons` order is fixed: timer, password, delay, random-text, frozen,
+//!   schedule, partner;
 //! - overnight windows are expressed as `endMinutes < startMinutes`;
-//! - armed password/delay/random-text gates make `until` indefinite (`null`).
+//! - armed password/delay/random-text/partner gates make `until` indefinite.
 
 use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,7 @@ pub const MIN_DELAY_LOCK_MS: i64 = 60_000;
 pub const MAX_DELAY_LOCK_MS: i64 = 40 * 24 * 3_600_000;
 pub const MIN_RANDOM_TEXT_LOCK_LENGTH: u16 = 1;
 pub const MAX_RANDOM_TEXT_LOCK_LENGTH: u16 = 5_000;
+const MAX_SAFE_TIMESTAMP_MS: u64 = 9_007_199_254_740_991;
 
 fn is_zero(value: &u64) -> bool {
     *value == 0
@@ -59,6 +61,48 @@ pub struct ScheduleRule {
     /// — evaluation uses ONLY `tz_offset_minutes`.
     #[serde(default)]
     pub tz_name: Option<String>,
+}
+
+/// Additive category-scoped schedule shape. Flattening preserves the exact
+/// ScheduleRule JSON fields and adds `categories`; this is deliberately not a
+/// LockState.schedules replacement or a nested wire object.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CategoryScheduleRule {
+    #[serde(flatten)]
+    pub schedule: ScheduleRule,
+    /// Exact classifier labels. Empty is invalid and never means all.
+    pub categories: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CategoryScheduleScores {
+    pub labels: Vec<String>,
+    pub scores: Vec<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CategoryScheduleVerdict {
+    pub label: String,
+    pub score: f64,
+    #[serde(default)]
+    pub all: Option<CategoryScheduleScores>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CategoryScheduleEffect {
+    ActiveBlock,
+    InactiveRescue,
+    None,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CategoryScheduleGateResult {
+    pub blocked: bool,
+    /// The schedule branch that owned the decision, not necessarily a change.
+    pub effect: CategoryScheduleEffect,
+    /// Complete active set for active-block, or matching inactive set for rescue.
+    pub categories: Vec<String>,
 }
 
 /// Persisted shape (`lock-state.json` here, storage.local `lockState` in the
@@ -115,6 +159,22 @@ pub struct LockState {
     /// `now` on sanitize: a forged future stamp would hold the list hostage
     /// under last-writer-wins.
     pub schedules_updated_at: u64,
+    /// Additive category-scoped windows. `None` = an older peer with no
+    /// capability; `Some(vec![])` = an intentional modern deletion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category_schedules: Option<Vec<CategoryScheduleRule>>,
+    /// Scoped-list LWW stamp, independent of legacy global schedules.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub category_schedules_updated_at: u64,
+    /// Accountability-partner arm: 32 random bytes as 64 lowercase hex chars.
+    /// None is a release when the additive operation is present; both fields
+    /// absent means an older peer with no vote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partner_arm_generation: Option<String>,
+    /// Optional LWW stamp. Option preserves a present zero-valued vote while
+    /// allowing legacy states to omit every partner field exactly as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partner_arm_updated_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,6 +187,7 @@ pub enum LockReason {
     RandomText,
     Frozen,
     Schedule,
+    Partner,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,8 +205,9 @@ pub struct LockStatus {
     /// master toggle is off, and stored overrides are ignored.
     pub force_blocking: bool,
     pub reasons: Vec<LockReason>,
-    /// When the current lock fully ends; `None` = indefinite (password or an
-    /// explicit-release delay/random-text gate armed) or nothing active.
+    /// When the current lock fully ends; `None` = indefinite (password,
+    /// partner, or an explicit-release delay/random-text gate armed) or
+    /// nothing active.
     pub until: Option<i64>,
     /// New-gate status is omitted for legacy and released states, matching the
     /// extension's optional properties and preserving exact legacy results.
@@ -182,6 +244,18 @@ pub(crate) fn armed_random_text_length(state: &LockState) -> Option<u16> {
     state
         .random_text_len
         .filter(|len| (MIN_RANDOM_TEXT_LOCK_LENGTH..=MAX_RANDOM_TEXT_LOCK_LENGTH).contains(len))
+}
+
+pub(crate) fn armed_partner_generation(state: &LockState) -> Option<&str> {
+    state
+        .partner_arm_generation
+        .as_deref()
+        .filter(|generation| {
+            generation.len() == 64
+                && generation
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        })
 }
 
 /// A nullable end timestamp that is still in the future (strict `>`).
@@ -310,6 +384,21 @@ pub fn is_in_schedule_window_in<Tz: TimeZone>(
     current_window_end_in(rules, now_ms, tz).is_some()
 }
 
+pub fn current_category_window_end_in<Tz: TimeZone>(
+    rules: &[CategoryScheduleRule],
+    now_ms: i64,
+    tz: &Tz,
+) -> Option<i64> {
+    rules
+        .iter()
+        .filter_map(|r| rule_window_end(&r.schedule, now_ms, tz))
+        .max()
+}
+
+pub fn current_category_window_end(rules: &[CategoryScheduleRule], now_ms: i64) -> Option<i64> {
+    current_category_window_end_in(rules, now_ms, &chrono::Local)
+}
+
 /// Next start-or-end instant strictly after `now` across all sources, or
 /// None when nothing is pending. Drives the promptness-only boundary alarm.
 pub fn next_boundary_in<Tz: TimeZone>(state: &LockState, now: i64, tz: &Tz) -> Option<i64> {
@@ -327,7 +416,12 @@ pub fn next_boundary_in<Tz: TimeZone>(state: &LockState, now: i64, tz: &Tz) -> O
         candidates.push(until);
     }
     candidates.extend(active(state.frozen_until, now));
-    for r in &state.schedules {
+    let scoped_rules = state
+        .category_schedules
+        .iter()
+        .flatten()
+        .map(|r| &r.schedule);
+    for r in state.schedules.iter().chain(scoped_rules) {
         // Per-rule zone dispatch — mirrors rule_window_end: a pinned rule's
         // boundaries are computed in its OWN fixed offset, legacy rules in
         // the caller's zone, so a mixed list works after a device tz change.
@@ -395,6 +489,10 @@ pub fn derive_lock_status_in<Tz: TimeZone>(state: &LockState, now: i64, tz: &Tz)
         reasons.push(LockReason::Schedule);
         ends.push(e);
     }
+    let partner_arm = armed_partner_generation(state);
+    if partner_arm.is_some() {
+        reasons.push(LockReason::Partner);
+    }
     LockStatus {
         break_active: active_break_interval(state, now).is_some(),
         break_started_at: state.break_started_at,
@@ -402,7 +500,11 @@ pub fn derive_lock_status_in<Tz: TimeZone>(state: &LockState, now: i64, tz: &Tz)
         break_ends_at: state.break_ends_at,
         settings_locked: !reasons.is_empty(),
         force_blocking: window_end.is_some() || reasons.contains(&LockReason::Frozen),
-        until: if password_armed(state) || delay.is_some() || random_text_len.is_some() {
+        until: if password_armed(state)
+            || delay.is_some()
+            || random_text_len.is_some()
+            || partner_arm.is_some()
+        {
             None
         } else {
             ends.into_iter().max()
@@ -430,6 +532,111 @@ pub fn current_window_end(rules: &[ScheduleRule], now_ms: i64) -> Option<i64> {
     current_window_end_in(rules, now_ms, &chrono::Local)
 }
 
+fn unique_category_labels(rules: &[&CategoryScheduleRule]) -> Vec<String> {
+    let mut categories = Vec::new();
+    for rule in rules {
+        for category in &rule.categories {
+            if !categories.contains(category) {
+                categories.push(category.clone());
+            }
+        }
+    }
+    categories
+}
+
+/// Mirrors effectiveBlockScore + shouldBlockClassifierVerdict for this gate.
+/// Only the top label selects rules; top-2 mass preserves confidence policy.
+fn should_block_category_classifier_verdict(
+    verdict: &CategoryScheduleVerdict,
+    blocked_labels: &[String],
+    block_threshold: f64,
+) -> bool {
+    if !blocked_labels.contains(&verdict.label) {
+        return false;
+    }
+    let mut effective_score = verdict.score;
+    if verdict.label.starts_with("neutral: ") {
+        effective_score = 0.0;
+    } else if let Some(all) = &verdict.all {
+        if all.labels.len() >= 2 && all.scores.len() >= 2 && blocked_labels.contains(&all.labels[1])
+        {
+            effective_score = (all.scores[0] + all.scores[1]).min(1.0);
+        }
+    }
+    effective_score >= block_threshold
+}
+
+/// Apply scoped schedules to a normal classifier decision. Deterministic
+/// rules, global forced locks, master/break/allowance state, and classifier
+/// errors remain caller responsibilities. Active matching rules take
+/// precedence, even below threshold; otherwise a configured rule rescues the
+/// normal classifier block. Labels absent from every rule remain unchanged.
+pub fn evaluate_category_schedule_gate_in<Tz: TimeZone>(
+    verdict: &CategoryScheduleVerdict,
+    normally_blocked: bool,
+    block_threshold: f64,
+    rules: &[CategoryScheduleRule],
+    now_ms: i64,
+    tz: &Tz,
+) -> CategoryScheduleGateResult {
+    let configured_rules: Vec<_> = rules
+        .iter()
+        .filter(|rule| rule.categories.contains(&verdict.label))
+        .collect();
+    if configured_rules.is_empty() {
+        return CategoryScheduleGateResult {
+            blocked: normally_blocked,
+            effect: CategoryScheduleEffect::None,
+            categories: Vec::new(),
+        };
+    }
+
+    // Reuse the established window engine, including pinned offsets and
+    // overnight start-day behavior, rather than creating a second time path.
+    let active_rules: Vec<_> = rules
+        .iter()
+        .filter(|rule| {
+            current_window_end_in(std::slice::from_ref(&rule.schedule), now_ms, tz).is_some()
+        })
+        .collect();
+    if active_rules
+        .iter()
+        .any(|rule| rule.categories.contains(&verdict.label))
+    {
+        let categories = unique_category_labels(&active_rules);
+        let active_blocked =
+            should_block_category_classifier_verdict(verdict, &categories, block_threshold);
+        return CategoryScheduleGateResult {
+            blocked: normally_blocked || active_blocked,
+            effect: CategoryScheduleEffect::ActiveBlock,
+            categories,
+        };
+    }
+
+    CategoryScheduleGateResult {
+        blocked: false,
+        effect: CategoryScheduleEffect::InactiveRescue,
+        categories: unique_category_labels(&configured_rules),
+    }
+}
+
+pub fn evaluate_category_schedule_gate(
+    verdict: &CategoryScheduleVerdict,
+    normally_blocked: bool,
+    block_threshold: f64,
+    rules: &[CategoryScheduleRule],
+    now_ms: i64,
+) -> CategoryScheduleGateResult {
+    evaluate_category_schedule_gate_in(
+        verdict,
+        normally_blocked,
+        block_threshold,
+        rules,
+        now_ms,
+        &chrono::Local,
+    )
+}
+
 /// Returns a human-readable problem, or None when the rule is valid.
 /// Integrality/negativity is enforced by the field types (serde rejects
 /// non-integers before wire input ever reaches this); ranges match the TS.
@@ -454,8 +661,39 @@ pub fn validate_schedule_rule(r: &ScheduleRule) -> Option<&'static str> {
             return Some("Timezone offset must be between UTC−12:00 and UTC+14:00.");
         }
     }
-    if r.tz_name.as_deref().is_some_and(|n| n.len() > 64) {
+    // JavaScript's String.length counts UTF-16 code units, not UTF-8 bytes.
+    if r.tz_name
+        .as_deref()
+        .is_some_and(|n| n.encode_utf16().count() > 64)
+    {
         return Some("Timezone name must be a short string.");
+    }
+    None
+}
+
+/// Category checks run after the exact base-window validator. JavaScript's
+/// string length counts UTF-16 code units, so encode_utf16 preserves that
+/// boundary for non-ASCII labels as well as the ordinary ASCII case.
+pub fn validate_category_schedule_rule(r: &CategoryScheduleRule) -> Option<&'static str> {
+    if let Some(problem) = validate_schedule_rule(&r.schedule) {
+        return Some(problem);
+    }
+    if r.categories.is_empty() {
+        return Some("Pick at least one category.");
+    }
+    if r.categories.len() > 64 {
+        return Some("Choose no more than 64 categories.");
+    }
+    for (index, category) in r.categories.iter().enumerate() {
+        if category.is_empty() || category.encode_utf16().count() > 64 {
+            return Some("Categories must be nonempty strings of at most 64 characters.");
+        }
+        if category.trim() != category {
+            return Some("Categories cannot have leading or trailing whitespace.");
+        }
+        if r.categories[..index].contains(category) {
+            return Some("Categories must be unique.");
+        }
     }
     None
 }
@@ -473,9 +711,14 @@ pub fn sanitize_lock_state(raw: &Value, now: i64, max_lock_ms: i64) -> LockState
     let cap = now + max_lock_ms;
     // Merge-ordering metadata: never admit a stamp from the future.
     let stamp = |key: &str| -> u64 {
+        // Match Number.isSafeInteger: fractions never truncate into a valid
+        // merge-ordering stamp, and unsafe JSON integers stay neutral too.
+        let now = u64::try_from(now).unwrap_or(0).min(MAX_SAFE_TIMESTAMP_MS);
         raw.get(key)
             .and_then(Value::as_f64)
-            .filter(|&n| n > 0.0)
+            .filter(|n| {
+                n.is_finite() && *n > 0.0 && n.fract() == 0.0 && *n <= MAX_SAFE_TIMESTAMP_MS as f64
+            })
             .map(|n| n.min(now as f64) as u64)
             .unwrap_or(0)
     };
@@ -498,6 +741,32 @@ pub fn sanitize_lock_state(raw: &Value, now: i64, max_lock_ms: i64) -> LockState
                 .collect()
         })
         .unwrap_or_default();
+    let category_schedules = raw
+        .get("categorySchedules")
+        .and_then(Value::as_array)
+        .and_then(|arr| {
+            // All-or-neutral: a malformed scoped list is not an empty delete.
+            arr.iter()
+                .map(|value| {
+                    serde_json::from_value::<CategoryScheduleRule>(value.clone())
+                        .ok()
+                        .filter(|rule| validate_category_schedule_rule(rule).is_none())
+                })
+                .collect::<Option<Vec<_>>>()
+                .and_then(|rules| {
+                    // Duplicate identities make canonical merge results depend
+                    // on list position; reject the whole additive update.
+                    let mut ids = std::collections::BTreeSet::new();
+                    if rules
+                        .iter()
+                        .all(|rule| ids.insert(rule.schedule.id.clone()))
+                    {
+                        Some(rules)
+                    } else {
+                        None
+                    }
+                })
+        });
     let break_cap = now + MAX_BREAK_MS;
     let break_timestamp = |key: &str| -> Option<i64> {
         let n = raw.get(key)?.as_f64()?;
@@ -573,6 +842,33 @@ pub fn sanitize_lock_state(raw: &Value, now: i64, max_lock_ms: i64) -> LockState
         (None, 0)
     };
 
+    let has_partner = ["partnerArmGeneration", "partnerArmUpdatedAt"]
+        .iter()
+        .any(|key| raw.get(key).is_some());
+    let partner_released = raw.get("partnerArmGeneration").is_none_or(Value::is_null);
+    let partner_generation = raw
+        .get("partnerArmGeneration")
+        .and_then(Value::as_str)
+        .filter(|generation| {
+            generation.len() == 64
+                && generation
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        });
+    let (partner_arm_generation, partner_arm_updated_at) = if !has_partner {
+        (None, None)
+    } else if partner_released {
+        (None, Some(stamp("partnerArmUpdatedAt")))
+    } else if let Some(generation) = partner_generation {
+        (
+            Some(generation.to_owned()),
+            Some(stamp("partnerArmUpdatedAt")),
+        )
+    } else {
+        // A malformed active arm is neutral, never a fresh release tombstone.
+        (None, None)
+    };
+
     LockState {
         break_started_at: if valid_break { started_at } else { None },
         break_not_before: if valid_break { not_before } else { None },
@@ -593,6 +889,14 @@ pub fn sanitize_lock_state(raw: &Value, now: i64, max_lock_ms: i64) -> LockState
         frozen_until: until("frozenUntil"),
         schedules,
         schedules_updated_at: stamp("schedulesUpdatedAt"),
+        category_schedules_updated_at: if category_schedules.is_some() {
+            stamp("categorySchedulesUpdatedAt")
+        } else {
+            0
+        },
+        category_schedules,
+        partner_arm_generation,
+        partner_arm_updated_at,
     }
 }
 
@@ -980,5 +1284,262 @@ mod tests {
         );
         assert_eq!(state.schedules.len(), 1);
         assert_eq!(state.schedules[0].id, "ok");
+    }
+
+    fn scoped(schedule: ScheduleRule, categories: &[&str]) -> CategoryScheduleRule {
+        CategoryScheduleRule {
+            schedule,
+            categories: categories
+                .iter()
+                .map(|category| (*category).into())
+                .collect(),
+        }
+    }
+
+    fn category_verdict(label: &str, score: f64) -> CategoryScheduleVerdict {
+        CategoryScheduleVerdict {
+            label: label.into(),
+            score,
+            all: None,
+        }
+    }
+
+    #[test]
+    fn category_schedule_validation_matches_ts() {
+        let valid = scoped(workdays(), &["video games"]);
+        assert_eq!(validate_category_schedule_rule(&valid), None);
+        assert_eq!(validate_schedule_rule(&valid.schedule), None);
+        assert_eq!(
+            validate_category_schedule_rule(&scoped(workdays(), &[])),
+            Some("Pick at least one category.")
+        );
+
+        let maximum: Vec<String> = (0..64).map(|index| format!("category {index}")).collect();
+        let mut maximum_rule = CategoryScheduleRule {
+            schedule: workdays(),
+            categories: maximum,
+        };
+        assert_eq!(validate_category_schedule_rule(&maximum_rule), None);
+        maximum_rule.categories.push("overflow".into());
+        assert_eq!(
+            validate_category_schedule_rule(&maximum_rule),
+            Some("Choose no more than 64 categories.")
+        );
+
+        assert_eq!(
+            validate_category_schedule_rule(&scoped(workdays(), &["a".repeat(64).as_str()])),
+            None
+        );
+        assert_eq!(
+            validate_category_schedule_rule(&scoped(workdays(), &["a".repeat(65).as_str()])),
+            Some("Categories must be nonempty strings of at most 64 characters.")
+        );
+        assert!(validate_category_schedule_rule(&scoped(workdays(), &[""])).is_some());
+        for category in [" games", "games ", "   ", "\tgames"] {
+            assert_eq!(
+                validate_category_schedule_rule(&scoped(workdays(), &[category])),
+                Some("Categories cannot have leading or trailing whitespace.")
+            );
+        }
+        assert_eq!(
+            validate_category_schedule_rule(&scoped(workdays(), &["games", "games"])),
+            Some("Categories must be unique.")
+        );
+        assert_eq!(
+            validate_category_schedule_rule(&scoped(workdays(), &["games", "Games"])),
+            None
+        );
+
+        let mut invalid_base = scoped(workdays(), &[]);
+        invalid_base.schedule.days.clear();
+        assert_eq!(
+            validate_category_schedule_rule(&invalid_base),
+            Some("Pick at least one day.")
+        );
+    }
+
+    #[test]
+    fn category_schedule_rule_flattens_exact_schedule_json() {
+        let scoped = scoped(
+            pinned("scoped", &[1, 2, 3], 540, 1020, 330),
+            &["video games", "online shopping"],
+        );
+        let wire = json!({
+            "id": "scoped",
+            "days": [1, 2, 3],
+            "startMinutes": 540,
+            "endMinutes": 1020,
+            "tzOffsetMinutes": 330,
+            "tzName": "Test/Zone",
+            "categories": ["video games", "online shopping"]
+        });
+        assert_eq!(serde_json::to_value(&scoped).unwrap(), wire);
+        assert_eq!(
+            serde_json::from_value::<CategoryScheduleRule>(wire).unwrap(),
+            scoped
+        );
+        assert!(serde_json::to_value(&scoped)
+            .unwrap()
+            .get("schedule")
+            .is_none());
+    }
+
+    #[test]
+    fn category_schedule_active_precedence_and_inactive_rescue() {
+        let utc = FixedOffset::east_opt(0).unwrap();
+        let active = scoped(workdays(), &["video games"]);
+        let inactive = scoped(
+            rule("inactive", &[1, 2, 3, 4, 5], 13 * 60, 14 * 60),
+            &["video games"],
+        );
+        let rules = vec![inactive, active];
+        let now = at(&utc, 8, 12, 0);
+
+        let active_result = evaluate_category_schedule_gate_in(
+            &category_verdict("video games", 0.9),
+            false,
+            0.5,
+            &rules,
+            now,
+            &utc,
+        );
+        assert!(active_result.blocked);
+        assert_eq!(active_result.effect, CategoryScheduleEffect::ActiveBlock);
+        assert_eq!(active_result.categories, vec!["video games"]);
+
+        // Active same-category precedence applies even when confidence cannot
+        // block: this must not fall through to the other rule as a rescue.
+        let low_confidence = evaluate_category_schedule_gate_in(
+            &category_verdict("video games", 0.4),
+            false,
+            0.5,
+            &rules,
+            now,
+            &utc,
+        );
+        assert!(!low_confidence.blocked);
+        assert_eq!(low_confidence.effect, CategoryScheduleEffect::ActiveBlock);
+
+        let normal_block = evaluate_category_schedule_gate_in(
+            &category_verdict("video games", 0.4),
+            true,
+            0.5,
+            &rules,
+            now,
+            &utc,
+        );
+        assert!(normal_block.blocked);
+        assert_eq!(normal_block.effect, CategoryScheduleEffect::ActiveBlock);
+
+        let rescue = evaluate_category_schedule_gate_in(
+            &category_verdict("video games", 0.9),
+            true,
+            0.5,
+            &rules,
+            at(&utc, 8, 18, 0),
+            &utc,
+        );
+        assert!(!rescue.blocked);
+        assert_eq!(rescue.effect, CategoryScheduleEffect::InactiveRescue);
+        assert_eq!(rescue.categories, vec!["video games"]);
+    }
+
+    #[test]
+    fn category_schedule_uses_complete_active_set_for_top_two_mass() {
+        let utc = FixedOffset::east_opt(0).unwrap();
+        let mut split = category_verdict("video games", 0.4);
+        split.all = Some(CategoryScheduleScores {
+            labels: vec![
+                "video games".into(),
+                "online shopping".into(),
+                "music".into(),
+            ],
+            scores: vec![0.4, 0.3, 0.3],
+        });
+        let games = scoped(workdays(), &["video games"]);
+        let shopping = scoped(
+            rule("shopping", &[1, 2, 3, 4, 5], 540, 1020),
+            &["online shopping"],
+        );
+        let rules = vec![games.clone(), shopping];
+        let now = at(&utc, 8, 12, 0);
+        let combined = evaluate_category_schedule_gate_in(&split, false, 0.6, &rules, now, &utc);
+        assert!(combined.blocked);
+        assert_eq!(combined.categories, vec!["video games", "online shopping"]);
+
+        // The top label is still active, but an inactive runner-up is not in
+        // the complete ACTIVE set, so its probability mass cannot be added.
+        let inactive_shopping = scoped(
+            rule("shopping", &[1, 2, 3, 4, 5], 13 * 60, 14 * 60),
+            &["online shopping"],
+        );
+        let top_one_only = evaluate_category_schedule_gate_in(
+            &split,
+            false,
+            0.6,
+            &[games, inactive_shopping],
+            now,
+            &utc,
+        );
+        assert!(!top_one_only.blocked);
+        assert_eq!(top_one_only.effect, CategoryScheduleEffect::ActiveBlock);
+        assert_eq!(top_one_only.categories, vec!["video games"]);
+
+        let unrelated = evaluate_category_schedule_gate_in(
+            &category_verdict("music", 0.99),
+            true,
+            0.5,
+            &rules,
+            now,
+            &utc,
+        );
+        assert_eq!(
+            unrelated,
+            CategoryScheduleGateResult {
+                blocked: true,
+                effect: CategoryScheduleEffect::None,
+                categories: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn category_schedule_reuses_overnight_and_pinned_windows() {
+        let utc = FixedOffset::east_opt(0).unwrap();
+        let overnight = scoped(mon_overnight(), &["video games"]);
+        let active = evaluate_category_schedule_gate_in(
+            &category_verdict("video games", 0.9),
+            false,
+            0.5,
+            std::slice::from_ref(&overnight),
+            at(&utc, 7, 3, 0),
+            &utc,
+        );
+        assert!(active.blocked);
+        let ended = evaluate_category_schedule_gate_in(
+            &category_verdict("video games", 0.9),
+            true,
+            0.5,
+            &[overnight],
+            at(&utc, 7, 6, 0),
+            &utc,
+        );
+        assert_eq!(ended.effect, CategoryScheduleEffect::InactiveRescue);
+        assert!(!ended.blocked);
+
+        let ist = scoped(
+            pinned("ist", &[1, 2, 3, 4, 5], 540, 1020, 330),
+            &["video games"],
+        );
+        // Wed 11:00 UTC = 16:30 IST, inside the pinned 09:00–17:00 rule.
+        let pinned_result = evaluate_category_schedule_gate_in(
+            &category_verdict("video games", 0.9),
+            false,
+            0.5,
+            &[ist],
+            at(&utc, 8, 11, 0),
+            &utc,
+        );
+        assert!(pinned_result.blocked);
     }
 }

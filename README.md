@@ -36,7 +36,8 @@ plan is in [`ROADMAP.md`](ROADMAP.md). What works today:
    reach; and a two-pass SERP/embed sanitizer (`src/content/sanitize-page.ts`)
    that masks distraction shelves and result cards on whitelisted search
    pages and chatbot workspaces (walking the light DOM and **open**
-   shadow roots) while leaving productive results alone.
+   shadow roots), plus individual video/Short results on YouTube Search,
+   while leaving productive results and the search page itself alone.
 5. **The classifier learns from you.** Corrections (the override button, and
    the popup's "Should've been blocked" report) are stored on-device and fold
    into the classifier's category prototypes. The options page can export
@@ -54,6 +55,13 @@ plan is in [`ROADMAP.md`](ROADMAP.md). What works today:
    and companion tray icons. The scroll-triggered editorial showcase lives
    on the standalone marketing site (`site/`, GSAP narrative) instead of
    inside settings.
+8. **Configurable relief and accountability.** Daily allowance/reward pools,
+   limited opening sessions, earned-focus timers, and separate Pomodoro cycles
+   run through one daemon-revisioned command authority or a clearly labeled
+   browser fallback. Category-scoped schedules can block a chosen category
+   during focus hours and rescue its classifier blocks outside them. Offline
+   Ed25519 accountability-partner codes, with a 24-hour public-key activation
+   delay, release only their exact arm — without lifting other locks.
 
 Nothing ever leaves your machine (the model, ~35MB one-time, is downloaded
 from the Hugging Face Hub and cached; all inference and history analysis are
@@ -123,6 +131,13 @@ npm run build        # -> dist/chrome (also Edge) and dist/firefox
 npm run build:site   # -> dist-site (standalone marketing landing page)
 ```
 
+> **Env gotcha (WSL/Linux hosts with CUDA 13):** use
+> `npm ci --onnxruntime-node-install-cuda=skip` — onnxruntime-node 1.21.0's
+> postinstall can't parse CUDA 13 and builds a broken download URL. The CPU
+> runtime is bundled in the tarball, so typecheck/build/eval are unaffected.
+
+
+
 ## Try it
 
 **Chrome / Edge**
@@ -141,9 +156,9 @@ npm run build:site   # -> dist-site (standalone marketing landing page)
    toggle which categories to block, set the block threshold, and hit
    **Scan my history** to see your top distraction vs productive categories.
    Reopen it anytime from the extensions menu → "Options" (or the popup).
-2. Click the toolbar popup → **Test Pair**. First click downloads the model
-   (~35MB, watch the background console); you'll see label distributions and
-   per-title timings.
+2. Open **Options → Advanced → Diagnostics → Test classifier**. The first run
+   downloads the model (~35MB, watch the background console); you'll see label
+   distributions and per-title timings.
 3. **Scan History** → live progress + a category histogram of your recent
    browsing (all sites except the whitelist).
 4. Visit a gaming video on YouTube → **block screen**. Click *"This is actually
@@ -157,11 +172,21 @@ npm run build:site   # -> dist-site (standalone marketing landing page)
 ## Automated checks
 
 ```sh
+npm run typecheck && npm run build                           # typecheck + build both extension targets
 npm run eval                                                # regression gate — fails on any regression
 node scripts/benchmark.mjs embed:Xenova/bge-small-en-v1.5   # model bake-off (compare candidates)
 node scripts/e2e-test.mjs                                   # full extension e2e in a real Chromium
+node scripts/e2e-protection-verification.mjs                # cold-profile Chromium onboarding + recovery
+SB_FIREFOX=/path/to/firefox node scripts/e2e-firefox-onboarding.mjs  # packed-XPI Firefox runtime suite
+SB_FIREFOX=/path/to/firefox node scripts/verify-firefox-dnr.mjs      # packed-XPI Firefox force redirect
 node feedback-worker/test/local-test.mjs                    # feedback worker (stubbed D1)
 ```
+
+Run the browser suites after building the matching target. Both Firefox suites
+install the actual `dist/firefox` bundle as a temporary XPI and drive it through
+Marionette; ordinary WebDriver navigation cannot open `moz-extension://` pages.
+The cold onboarding suite performs real Hugging Face model downloads, so its
+first run needs network access and can take several minutes.
 
 `npm run eval` is the one that answers *"did that change make the model
 better?"* It runs the shipped config over **15,874 eval cases** (slices `v1`

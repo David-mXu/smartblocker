@@ -110,8 +110,9 @@ export function PopupApp({ initial }: { initial: PopupData | null }) {
     };
   }, [patch, refreshCompanion, refreshLock, refreshTab]);
 
-  // Re-read the existing background companion cache while this popup is open.
-  // This is not a daemon request: v2 has no cheap status-request/reply pair.
+  // Re-read the background companion cache while this popup is open. Grace
+  // transitions/10-second refreshes arrive over Native Messaging; this is not
+  // a new daemon request or a heartbeat-send-derived countdown.
   useEffect(() => {
     const id = setInterval(() => void refreshCompanion(), 10_000);
     return () => clearInterval(id);
@@ -321,6 +322,8 @@ export function PopupApp({ initial }: { initial: PopupData | null }) {
         locked={locked}
         companion={data?.companion ?? null}
         now={now}
+        observation={data?.companion?.extensionLoss ?? null}
+        graceSeconds={data?.companion?.extensionLoss?.graceSeconds ?? null}
         className="rounded-none border-x-0 border-t-0 px-4 py-2.5"
       />
 

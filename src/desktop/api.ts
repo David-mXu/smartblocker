@@ -27,6 +27,33 @@ export interface BrowserInfo {
   lastSeenMs: number;
 }
 
+export interface BrowserGraceInfo {
+  kind: string;
+  /** Daemon wall clock when graceRemainingMs was observed. */
+  observedAtMs: number;
+  graceSeconds: number;
+  graceRemainingMs: number;
+}
+
+export type BrowserInstallationStatus = 'installed' | 'notDetected';
+export type BrowserRegistrationStatus = 'healthy' | 'missing' | 'invalid' | 'unreadable';
+
+export interface BrowserIntegration {
+  browser: string;
+  /** Positive executable/App-Paths evidence; not an installed-extension claim. */
+  installation: BrowserInstallationStatus;
+  /** Saved Native Messaging registration health, independent of connection. */
+  registration: BrowserRegistrationStatus;
+}
+
+export interface BrowserRepairResult {
+  browser: string;
+  outcome: 'repaired' | 'alreadyHealthy' | 'notDetected' | 'skippedTestMode';
+  registration: BrowserRegistrationStatus;
+  /** Exact selected outcome; a repaired registration is not an installed extension. */
+  message: string;
+}
+
 export type LicenseState = 'none' | 'valid' | 'expired' | 'grace' | 'invalid' | 'dev-open';
 
 export interface LicenseInfo {
@@ -54,6 +81,10 @@ export interface DesktopStatus {
   pendingSession: PendingSession | null;
   /** Currently connected + authenticated browsers (daemon snapshot). */
   browsers: BrowserInfo[];
+  /** Post-tick enforcer grace, retained even after a browser relay drops. */
+  browserGrace: BrowserGraceInfo[];
+  /** Installed-browser + registration evidence; empty means inspection failed. */
+  browserIntegrations: BrowserIntegration[];
   appBlocklist: string[];
   license: LicenseInfo;
   policyProtected: boolean;
@@ -90,6 +121,8 @@ export interface Commands {
   get_recent_activity: [{ limit: number }, ActivityEvent[]];
   set_license_key: [{ key: string }, LicenseInfo];
   install_integration: [undefined, string];
+  /** Repairs one detected browser's registration, never its extension. */
+  repair_browser: [{ browser: string }, BrowserRepairResult];
   /** Spawns the embedded companion if its socket is dead. */
   start_companion: [undefined, void];
 }

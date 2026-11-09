@@ -12,6 +12,7 @@
 
 import type {
   ActivityEvent,
+  BrowserRepairResult,
   DesktopStatus,
   LicenseInfo,
   LockReason,
@@ -125,6 +126,12 @@ function baseState(now: number): MockState {
         { kind: 'chrome', extVersion: '0.5.0', lastSeenMs: now - 3_000 },
         { kind: 'edge', extVersion: '0.5.0', lastSeenMs: now - 8_000 },
       ],
+      browserGrace: [],
+      browserIntegrations: [
+        { browser: 'chrome', installation: 'installed', registration: 'healthy' },
+        { browser: 'edge', installation: 'installed', registration: 'healthy' },
+        { browser: 'firefox', installation: 'installed', registration: 'missing' },
+      ],
       appBlocklist: ['steam', 'discord', 'epicgameslauncher'],
       license: { pro: false, state: 'none', expiresAtMs: null, keyHint: null },
       policyProtected: false,
@@ -161,6 +168,7 @@ const SCENARIOS: Record<string, Patch> = {
   'no-daemon': (s) => {
     s.status.daemon = { running: false, pid: null, startedAtMs: null };
     s.status.browsers = [];
+    s.status.browserGrace = [];
   },
   'start-fails': (s) => {
     s.startError = "Couldn't start the companion: smartblocker-daemon wasn't found next to the app.";
@@ -171,12 +179,35 @@ const SCENARIOS: Record<string, Patch> = {
   'browsers-missing': (s) => {
     s.status.browsers = [];
   },
+  'integration-unavailable': (s) => {
+    s.status.browserIntegrations = [];
+  },
+  'no-browsers-detected': (s) => {
+    s.status.browsers = [];
+    s.status.browserIntegrations = s.status.browserIntegrations.map((entry) => ({
+      ...entry,
+      installation: 'notDetected',
+    }));
+  },
+  'browser-repair-needed': (s) => {
+    const chrome = s.status.browserIntegrations.find((entry) => entry.browser === 'chrome');
+    if (chrome) chrome.registration = 'invalid';
+  },
+  'extension-grace': (s, now) => {
+    // Relay loss and an active grace track are deliberately independent.
+    s.status.browsers = s.status.browsers.filter((b) => b.kind !== 'chrome');
+    s.status.browserGrace = [
+      { kind: 'chrome', observedAtMs: now, graceSeconds: 60, graceRemainingMs: 42_000 },
+    ];
+  },
   'all-browsers': (s, now) => {
     s.status.browsers = [
       { kind: 'chrome', extVersion: '0.5.0', lastSeenMs: now - 3_000 },
       { kind: 'edge', extVersion: '0.5.0', lastSeenMs: now - 8_000 },
       { kind: 'firefox', extVersion: '0.5.0', lastSeenMs: now - 14_000 },
     ];
+    const firefox = s.status.browserIntegrations.find((entry) => entry.browser === 'firefox');
+    if (firefox) firefox.registration = 'healthy';
   },
   pro: (s, now) => {
     s.status.license = { pro: true, state: 'valid', expiresAtMs: now + 300 * DAY, keyHint: 'SBPRO1…a3f9' };
@@ -193,7 +224,8 @@ const SCENARIOS: Record<string, Patch> = {
   },
   'test-mode': (s) => {
     s.status.testMode = true;
-    s.status.autostart = false; // test mode never enables autostart
+    // Test mode leaves the real startup setting untouched; the UI presents an
+    // explicit Unchanged non-state instead of claiming it is On or Off.
     s.status.dataDir = 'C:\\Users\\sam\\AppData\\Local\\Temp\\smartblocker-test';
     s.events = s.events.map((e) => (e.kind === 'kill' ? { ...e, kind: 'kill-dry-run' } : e));
     s.events = s.events.map((e) => (e.kind === 'daemon-start' ? { ...e, detail: 'socket smartblocker-test' } : e));
@@ -245,6 +277,7 @@ function deriveLock(s: MockState, now: number): void {
     if (r === 'frozen' || r === 'schedule') force = true;
   }
   s.status.lock = { settingsLocked: reasons.length > 0, forceBlocking: force, reasons, until };
+  if (reasons.length === 0) s.status.browserGrace = [];
 }
 
 /** Daemon-tick stand-in: commit a due pending session, refresh heartbeats. */
@@ -296,6 +329,41 @@ function keyExpiry(key: string): number | null {
 
 function log(s: MockState, kind: string, detail: string): void {
   s.events.unshift({ tsMs: Date.now(), kind, detail });
+}
+
+function repairBrowser(s: MockState, browser: string): BrowserRepairResult {
+  const name = browser === 'chrome' ? 'Chrome' : browser === 'edge' ? 'Edge' : browser === 'firefox' ? 'Firefox' : null;
+  if (!name) throw `Unsupported browser: ${browser}`;
+  const integration = s.status.browserIntegrations.find((entry) => entry.browser === browser);
+  if (s.status.testMode) {
+    return {
+      browser,
+      outcome: 'skippedTestMode',
+      registration: integration?.registration ?? 'unreadable',
+      message: `Test mode: ${name}'s registration and startup settings were left alone. No extension was installed.`,
+    };
+  }
+  if (!integration) throw `Couldn't inspect ${name}'s browser connection.`;
+  if (integration.installation === 'notDetected') {
+    return {
+      browser,
+      outcome: 'notDetected',
+      registration: integration.registration,
+      message: `${name} wasn't detected. No registration was changed, and no extension was installed.`,
+    };
+  }
+
+  const outcome = integration.registration === 'healthy' ? 'alreadyHealthy' : 'repaired';
+  integration.registration = 'healthy';
+  return {
+    browser,
+    outcome,
+    registration: 'healthy',
+    message:
+      outcome === 'repaired'
+        ? `${name}'s browser connection was repaired and verified. This did not install the extension; install or enable it if needed, then restart ${name}.`
+        : `${name}'s browser connection is already registered. This does not verify that the extension is installed or enabled.`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -393,16 +461,34 @@ export async function mockInvoke(cmd: string, args: Record<string, unknown> = {}
       return clone(info);
     }
 
-    case 'install_integration':
-      if (s.status.testMode) return 'Test mode: nothing was registered, and autostart was left off.';
+    case 'install_integration': {
+      if (s.status.testMode) {
+        return 'Test mode: browser connections and startup settings were left alone. No extension was installed.';
+      }
+      if (s.status.browserIntegrations.length === 0) {
+        throw 'Couldn\'t inspect browser connections.';
+      }
+      const detected = s.status.browserIntegrations.filter((entry) => entry.installation === 'installed');
+      if (detected.length === 0) {
+        return 'No supported browser was detected. No registration or startup settings were changed, and no extension was installed.';
+      }
+      const message = detected.map((entry) => repairBrowser(s, entry.browser).message).join(' ');
       s.status.autostart = true;
-      return 'Browser connection repaired for Chrome, Edge and Firefox. SmartBlocker will start with Windows.';
+      return `${message} SmartBlocker will start with your computer.`;
+    }
+
+    case 'repair_browser': {
+      // Registration repair never fabricates a browsers[] connection and a
+      // selected repair has no autostart side effect.
+      return clone(repairBrowser(s, String(args.browser ?? '')));
+    }
 
     case 'start_companion': {
       if (s.startError) throw s.startError;
       if (!s.status.daemon.running) {
         s.status.daemon = { running: true, pid: 9044, startedAtMs: now };
         s.status.browsers = baseState(now).status.browsers;
+        s.status.browserGrace = [];
         log(s, 'daemon-start', s.status.testMode ? 'socket smartblocker-test' : 'socket smartblocker');
       }
       return undefined;

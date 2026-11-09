@@ -38,11 +38,12 @@ use smartblocker_core::license::{self, LicenseInfo};
 use smartblocker_core::lock_math::{
     current_window_end, derive_lock_status, LockReason, LockState, MAX_LOCK_MS,
 };
-use smartblocker_core::protocol::PROTOCOL_VERSION;
-use smartblocker_core::snapshot::{self, BrowserInfo};
+use smartblocker_core::onboarding::{
+    self, BrowserIntegration, BrowserRepairResult, InstallationStatus, RegistrationStatus,
+};
+use smartblocker_core::protocol::{CompanionBrowser, PROTOCOL_VERSION};
+use smartblocker_core::snapshot::{self, BrowserGraceInfo, BrowserInfo};
 use smartblocker_core::store::Store;
-
-use smartblocker_core::registration;
 
 const NOT_RUNNING: &str = "The companion isn't running. Start it, then try again.";
 
@@ -240,6 +241,10 @@ struct DesktopStatus {
     lock: LockInfo,
     pending_session: Option<PendingSession>,
     browsers: Vec<BrowserInfo>,
+    /// Active post-tick grace tracks, even when their relay has disconnected.
+    browser_grace: Vec<BrowserGraceInfo>,
+    /// Disk/registry evidence only; an authenticated connection is separate.
+    browser_integrations: Vec<BrowserIntegration>,
     app_blocklist: Vec<String>,
     license: LicenseInfo,
     policy_protected: bool,
@@ -267,6 +272,90 @@ fn lock_info(state: &LockState, now: i64) -> LockInfo {
     }
 }
 
+fn nm_host_location() -> Result<(PathBuf, PathBuf), String> {
+    const FAILED: &str = "Couldn't inspect browser connections";
+    let exe = std::env::current_exe().map_err(|e| format!("{FAILED}: {e}"))?;
+    let exe_dir = exe.parent().ok_or(FAILED)?.to_path_buf();
+    let nm_host = exe_dir.join(if cfg!(windows) {
+        "smartblocker-nm-host.exe"
+    } else {
+        "smartblocker-nm-host"
+    });
+    Ok((exe_dir, nm_host))
+}
+
+/// Empty means inspection failed, not that no browser is installed. The UI
+/// distinguishes that unavailable state from positive executable evidence.
+fn browser_integrations() -> Result<Vec<BrowserIntegration>, String> {
+    let (_manifest_dir, nm_host) = nm_host_location()?;
+    #[cfg(windows)]
+    return Ok(onboarding::windows::integrations(&_manifest_dir, &nm_host));
+    #[cfg(not(windows))]
+    {
+        let home = PathBuf::from(
+            std::env::var("HOME")
+                .map_err(|e| format!("Couldn't inspect browser connections: {e}"))?,
+        );
+        let path = std::env::var_os("PATH");
+        Ok(onboarding::linux::integrations(
+            &home,
+            path.as_deref(),
+            &nm_host,
+        ))
+    }
+}
+
+fn repair_registration(
+    ctx: &AppCtx,
+    browser: CompanionBrowser,
+) -> Result<BrowserRepairResult, String> {
+    if ctx.test_mode {
+        let registration = browser_integrations()
+            .ok()
+            .and_then(|all| {
+                all.into_iter()
+                    .find(|entry| entry.browser == browser)
+                    .map(|entry| entry.registration)
+            })
+            .unwrap_or(RegistrationStatus::Unreadable);
+        return Ok(onboarding::skipped_test_mode(browser, registration));
+    }
+    let (_manifest_dir, nm_host) = nm_host_location()?;
+    if !nm_host.is_file() {
+        return Err(format!(
+            "Couldn't repair {}'s browser connection: a required file is missing. Reinstall SmartBlocker. No extension was installed.",
+            onboarding::browser_name(browser)
+        ));
+    }
+    #[cfg(windows)]
+    let repaired = onboarding::windows::repair(&_manifest_dir, &nm_host, browser);
+    #[cfg(not(windows))]
+    let repaired = {
+        let home = PathBuf::from(std::env::var("HOME").map_err(|e| {
+            format!(
+                "Couldn't repair {}'s browser connection: {e}",
+                onboarding::browser_name(browser)
+            )
+        })?);
+        let path = std::env::var_os("PATH");
+        onboarding::linux::repair(&home, path.as_deref(), &nm_host, browser)
+    };
+    repaired.map_err(|e| {
+        format!(
+            "Couldn't repair {}'s browser connection: {e}. No extension was installed.",
+            onboarding::browser_name(browser)
+        )
+    })
+}
+
+fn append_autostart_result(app: &AppHandle, message: &mut String) {
+    if app.autolaunch().enable().is_err() {
+        message.push_str(" SmartBlocker couldn't set itself to start with your computer.");
+    } else {
+        message.push_str(" SmartBlocker will start with your computer.");
+    }
+}
+
 // Every command below is `async`, which moves it off the main thread: the
 // process list and file reads would otherwise stall the window.
 
@@ -276,6 +365,8 @@ fn get_status(app: AppHandle, ctx: State<'_, AppCtx>) -> Result<DesktopStatus, S
     let now = now_ms();
     let config = store.load_config();
     let live = snapshot::read_live_snapshot(&store, now);
+    let lock = lock_info(&store.load_lock_state(), now);
+    let browser_grace = snapshot::browser_grace_for_lock(live.as_ref(), lock.settings_locked);
     Ok(DesktopStatus {
         version: env!("CARGO_PKG_VERSION"),
         test_mode: ctx.test_mode,
@@ -285,9 +376,14 @@ fn get_status(app: AppHandle, ctx: State<'_, AppCtx>) -> Result<DesktopStatus, S
             pid: live.as_ref().map(|s| s.pid),
             started_at_ms: live.as_ref().map(|s| s.started_at_ms),
         },
-        lock: lock_info(&store.load_lock_state(), now),
+        lock,
         pending_session: focus_session::read_pending_session(&store),
-        browsers: live.map(|s| s.browsers).unwrap_or_default(),
+        browsers: live
+            .as_ref()
+            .map(|s| s.browsers.clone())
+            .unwrap_or_default(),
+        browser_grace,
+        browser_integrations: browser_integrations().unwrap_or_default(),
         license: license::license_info(&config, now),
         policy_protected: config.policy_enforce && config.extension_update_url.is_some(),
         app_blocklist: config.app_blocklist,
@@ -377,34 +473,43 @@ fn start_companion(app: AppHandle, ctx: State<'_, AppCtx>) -> Result<(), String>
 #[tauri::command(async)]
 fn install_integration(app: AppHandle, ctx: State<'_, AppCtx>) -> Result<String, String> {
     if ctx.test_mode {
-        return Ok("Test mode: browser connection and startup settings were left alone.".into());
+        return Ok("Test mode: browser connections and startup settings were left alone. No extension was installed.".into());
     }
-    const FAILED: &str = "Couldn't repair the browser connection";
-    let exe = std::env::current_exe().map_err(|e| format!("{FAILED}: {e}"))?;
-    let exe_dir = exe.parent().ok_or(FAILED)?.to_path_buf();
-    let nm_host = exe_dir.join(if cfg!(windows) {
-        "smartblocker-nm-host.exe"
-    } else {
-        "smartblocker-nm-host"
-    });
-    if !nm_host.is_file() {
-        return Err(format!(
-            "{FAILED}: a required file is missing. Reinstall SmartBlocker."
-        ));
+    let installed: Vec<_> = browser_integrations()?
+        .into_iter()
+        .filter(|entry| entry.installation == InstallationStatus::Installed)
+        .collect();
+    if installed.is_empty() {
+        return Ok("No supported browser was detected. No registration or startup settings were changed, and no extension was installed.".into());
     }
 
-    #[cfg(windows)]
-    registration::windows::install(&exe_dir, &nm_host).map_err(|e| format!("{FAILED}: {e}"))?;
-    #[cfg(not(windows))]
-    {
-        let home = PathBuf::from(std::env::var("HOME").map_err(|e| format!("{FAILED}: {e}"))?);
-        registration::install_linux(&home, &nm_host).map_err(|e| format!("{FAILED}: {e}"))?;
+    let mut messages = Vec::new();
+    let mut failures = Vec::new();
+    for entry in installed {
+        match repair_registration(&ctx, entry.browser) {
+            Ok(result) => messages.push(result.message),
+            Err(error) => failures.push(error),
+        }
     }
+    if !failures.is_empty() {
+        // Earlier selected repairs may have succeeded; never collapse the
+        // partial result into an all-browser success or an all-browser failure.
+        messages.extend(failures);
+        return Err(messages.join(" "));
+    }
+    let mut message = messages.join(" ");
+    append_autostart_result(&app, &mut message);
+    Ok(message)
+}
 
-    if app.autolaunch().enable().is_err() {
-        return Ok("Browser connection repaired, but SmartBlocker couldn't set itself to start with your computer.".into());
-    }
-    Ok("Browser connection repaired for Chrome, Edge and Firefox. SmartBlocker will start with your computer.".into())
+#[tauri::command(async)]
+fn repair_browser(
+    ctx: State<'_, AppCtx>,
+    browser: CompanionBrowser,
+) -> Result<BrowserRepairResult, String> {
+    // A selected repair has no unrelated startup side effect. Only the global
+    // Settings action preserves install_integration's historical autostart.
+    repair_registration(&ctx, browser)
 }
 
 fn show_main_window(app: &AppHandle) {
@@ -468,6 +573,7 @@ fn main() {
             get_recent_activity,
             set_license_key,
             install_integration,
+            repair_browser,
             start_companion
         ])
         .setup(|app| {

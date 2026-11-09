@@ -63,6 +63,13 @@ export interface ForceRedirectInfo {
   reason: ForceRedirectReason;
 }
 
+/** Add ownership is explicit: an idempotent hit on an already-enforced rule is
+ * not permission for this caller to delete that rule if its verdict goes stale. */
+export type ForceRedirectInstallResult =
+  | { status: 'installed'; ruleId: number }
+  | { status: 'already-enforced' }
+  | { status: 'failed' };
+
 interface ForceRedirectEntry {
   ruleId: number;
   tabId: number;
@@ -207,21 +214,22 @@ async function removeRuleIds(ruleIds: number[]): Promise<void> {
 }
 
 /**
- * Install (or no-op: idempotent) a session-scoped main_frame redirect rule for
- * (tabId, url) pointing at blocked.html carrying the verdict params. Returns
- * false on ANY failure — callers then fall back to the injected overlay
- * (force mode loses its extra hardening but never its block).
+ * Install (or idempotently observe) a session-scoped main_frame redirect rule
+ * for (tabId, url) pointing at blocked.html carrying the verdict params. Only
+ * the 'installed' result grants ownership for stale-evaluation rollback.
+ * 'already-enforced' belongs to another evaluator/reconciled browser session;
+ * 'failed' asks the caller to use the injected overlay (never an allow).
  */
 export async function addForceRedirectRule(
   tabId: number,
   url: string,
   info: ForceRedirectInfo,
-): Promise<boolean> {
-  if (!forceRedirectAvailable()) return false;
+): Promise<ForceRedirectInstallResult> {
+  if (!forceRedirectAvailable()) return { status: 'failed' };
   await ensureReady();
   const canonical = canonicalizeUrl(url);
-  if (!canonical) return false;
-  if (ruleIdsByTabUrl.get(tabId)?.has(canonical)) return true; // already enforced
+  if (!canonical) return { status: 'failed' };
+  if (ruleIdsByTabUrl.get(tabId)?.has(canonical)) return { status: 'already-enforced' };
 
   const rule: chrome.declarativeNetRequest.Rule = {
     id: nextRuleId++,
@@ -241,7 +249,7 @@ export async function addForceRedirectRule(
     await api.declarativeNetRequest.updateSessionRules({ addRules: [rule] });
   } catch (e) {
     console.warn('[SmartBlocker] force redirect rule rejected (falling back to overlay):', e);
-    return false;
+    return { status: 'failed' };
   }
   indexRule({ ruleId: rule.id, tabId, url: canonical });
 
@@ -250,18 +258,23 @@ export async function addForceRedirectRule(
     const overflow = allocatedOrder.slice(0, allocatedOrder.length - MAX_FORCE_REDIRECT_RULES);
     void removeRuleIds(overflow);
   }
-  return true;
+  return { status: 'installed', ruleId: rule.id };
 }
 
 /** Verdict-clear release: an allowed verdict for a rule-carrying URL lets it
- *  load again (classifier recovery during fail-closed backoff). */
-export async function clearForceRedirectRule(tabId: number, url: string): Promise<void> {
+ *  load again (classifier recovery during fail-closed backoff). A stale caller
+ *  may pass its owned rule ID; a replacement owned by newer work is retained. */
+export async function clearForceRedirectRule(
+  tabId: number,
+  url: string,
+  ownedRuleId?: number,
+): Promise<void> {
   if (!forceRedirectAvailable()) return;
   await ensureReady();
   const canonical = canonicalizeUrl(url);
   if (!canonical) return;
   const ruleId = ruleIdsByTabUrl.get(tabId)?.get(canonical);
-  if (ruleId === undefined) return;
+  if (ruleId === undefined || (ownedRuleId !== undefined && ruleId !== ownedRuleId)) return;
   await removeRuleIds([ruleId]);
 }
 

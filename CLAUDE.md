@@ -115,6 +115,12 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   deterministic rule (`src/shared/rules.ts` `isAdultHost`, same
   erasable-syntax-only constraint) plus a source tripwire for the in-page
   `<meta name="rating">` probe's accepted strings.
+- `node scripts/e2e-serp-stability.mjs` — focused Google SPA search-stability
+  regression (run after `npm run build:chrome`). Records every overlay/curtain
+  insertion, not just final DOM state: transient queries cannot flash an old
+  verdict, a settled query still blocks, and one blocked query cannot curtain a
+  later productive search. Uses routed fixtures + `SB_E2E_PROFILE`, preserves
+  CacheStorage, requires the warm-model final allow when a model cache exists.
 - `node scripts/e2e-test.mjs` — full e2e in a real Chromium (Playwright):
   boots the SW, runs Test Pair, fakes YouTube pages via network interception
   to verify block/allow + latency + feedback capture, seeds and runs the
@@ -132,11 +138,22 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   sabotage, recovery, permission denial, incompatible custom settings,
   stale-response rejection, external-change refresh, and commit-pending UI.
   Recreates `.dev-profile-protection/` on each run.
+- `SB_FIREFOX=/path/to/firefox node scripts/e2e-firefox-onboarding.mjs` —
+  packed-XPI Firefox cold-profile runtime suite (run after `npm run
+  build:firefox`). Uses the shared raw-Marionette helper and a multi-minute
+  model deadline. Rejects genuine event-page fetch before cold inference,
+  repairs the same page, requires fresh gaming/block + programming/allow
+  verdicts, then disables/re-enables the add-on with verdicts preserved but
+  model CacheStorage and network unavailable. Also covers incompatible policy,
+  unverified exit, permission denial, stale responses, external changes,
+  verified completion, popup/options round-trips, and fresh non-DNR navigation
+  overlay block/clear behavior. Recreates a disposable profile on each run.
 - `SB_FIREFOX=/path/to/firefox node scripts/verify-firefox-dnr.mjs` — live
-  Firefox DNR check (red-team #4): packs dist/firefox, drives raw marionette
-  (both WebDriver flavors refuse moz-extension:// navigation), asserts the
-  Frozen Turkey force-redirect to `blocked.html`, the live session rule, and
-  rule drain on unlock. Self-contained, no npm deps.
+  Firefox DNR check (red-team #4, run after `npm run build:firefox`): packs
+  dist/firefox, drives the shared raw-Marionette helper (both WebDriver flavors
+  refuse moz-extension:// navigation), asserts the Frozen Turkey force-redirect
+  to `blocked.html`, the live session rule, and rule drain on unlock. No
+  additional npm deps beyond the built extension.
 - `node feedback-worker/test/local-test.mjs` — feedback ingestion worker
   tests against a stubbed D1 (no Cloudflare account needed).
 - `cd companion && cargo test && cargo clippy --all-targets -- -D warnings &&
@@ -216,7 +233,10 @@ Commit and push when appropriate.
     `channelBlocklist` blocks deterministically (no inference),
     `channelAllowlist` rescues ONLY a classifier verdict, never a rule hit.
     Otherwise gathers richer signals (`extractMeta`), classifies, checks
-    settings + overrides, injects `blockscreen.ts`.
+    settings + overrides, injects `blockscreen.ts`. Main-frame SERPs wait for a
+    650ms quiet title and use per-tab candidate generations so superseded query
+    verdicts cannot inject/clear overlays or poison later searches with a dark
+    pre-curtain; settled full-query blocking and item-level masking are kept.
   - `blockscreen.ts` — injected full block screen; the override button sends
     `OVERRIDE` with title + label + score (→ override store + a rich
     false-positive feedback record). Takes a `locked` flag: when a lock is

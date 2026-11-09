@@ -1,5 +1,5 @@
 {
-  "_note": "Golden cross-language fixtures for the lock-state contract, consumed by BOTH scripts/lock-math-test.mjs (src/shared/lock-math.ts) and the smartblocker-core cargo tests (lock_math.rs / merge.rs). Every case here must pass identically in TypeScript and Rust — that is the parity guarantee between the extension and the desktop companion. Schedule rules pinned to `tzOffsetMinutes` evaluate against that FIXED offset regardless of the host zone, so the tz-pinned cases below are host-independent by design (red-team #26); UNPINNED rules still follow the device's current zone, which the Rust runner pins to Utc and the TS runner leaves local — legacy-window behavior is therefore covered by each language's own unit tests instead of this file. The DST-residual case documents the accepted cost of fixed-offset pins: a rule pinned on winter time fires one hour off the civil clock after a DST change (the mirror has no IANA tz database — offline build constraint). The merge runner additionally asserts commutativity (merge(b,a) == expect) and idempotence (merge(expect,expect) == expect) for every case. `reasons` array order is fixed: timer, password, delay, random-text, frozen, schedule. Delay and random-text are whole-gate LWW operations: newer releases beat stale arms, newer arms beat old releases, equal stamps keep armed/reset/longer states, and legacy peers without the new fields cannot erase active gates. Merge cases carry an optional `now` (default 0): the schedule rule asks whether exactly one side is settings_locked at merge time — with fixture stamps in the small thousands, an active timer/frozen/password means locked. The password is a timestamped arm/unlock tombstone CRDT (greater passwordTs wins; a tie keeps an armed hash over a cleared one, and two armed hashes keep the lexicographically smaller); schedules are last-writer-wins EXCEPT that a locked side's list beats an unlocked peer regardless of stamps. passwordTs and schedulesUpdatedAt are clamped to `now` by sanitize (never now+maxLockMs): both order last-writer-wins merges, so forged future stamps must never be admitted. Same-id rules at equal schedule stamps resolve by a canonical content string that includes the tz pin, so two same-id rules pinned to different zones still converge deterministically.",
+  "_note": "Golden cross-language fixtures for the lock-state contract, consumed by BOTH scripts/lock-math-test.mjs (src/shared/lock-math.ts) and the smartblocker-core cargo tests (lock_math.rs / merge.rs). Every case here must pass identically in TypeScript and Rust — that is the parity guarantee between the extension and the desktop companion. Schedule rules pinned to `tzOffsetMinutes` evaluate against that FIXED offset regardless of the host zone, so the tz-pinned cases below are host-independent by design (red-team #26); UNPINNED rules still follow the device's current zone, which the Rust runner pins to Utc and the TS runner leaves local — legacy-window behavior is therefore covered by each language's own unit tests instead of this file. The DST-residual case documents the accepted cost of fixed-offset pins: a rule pinned on winter time fires one hour off the civil clock after a DST change (the mirror has no IANA tz database — offline build constraint). The merge runner additionally asserts commutativity (merge(b,a) == expect) and idempotence (merge(expect,expect) == expect) for every case. `reasons` array order is fixed: timer, password, delay, random-text, frozen, schedule. Delay and random-text are whole-gate LWW operations: newer releases beat stale arms, newer arms beat old releases, equal stamps keep armed/reset/longer states, and legacy peers without the new fields cannot erase active gates. Merge cases carry an optional `now` (default 0): the schedule rule asks whether exactly one side is settings_locked at merge time — with fixture stamps in the small thousands, an active timer/frozen/password means locked. The password is a timestamped arm/unlock tombstone CRDT (greater passwordTs wins; a tie keeps an armed hash over a cleared one, and two armed hashes keep the lexicographically smaller); schedules are last-writer-wins EXCEPT that a locked side's list beats an unlocked peer regardless of stamps. passwordTs and schedulesUpdatedAt are clamped to `now` by sanitize (never now+maxLockMs): both order last-writer-wins merges, so forged future stamps must never be admitted. Same-id rules at equal schedule stamps resolve by a canonical content string that includes the tz pin, so two same-id rules pinned to different zones still converge deterministically. Scoped merge overlays every currently-active rule from both peers on the normal whole-list winner; once no rule is active, ordinary scoped protected/LWW/deletion policy applies. Accepted scoped lists have unique IDs. Merge-ordering metadata stamps accept only safe nonnegative integers (fractions sanitize to 0), and rule/ID canonical ordering uses UTF-8 bytes in both languages.",
   "mergeLockStates": [
     {
       "name": "empty states merge to empty",
@@ -231,6 +231,115 @@
       "a": { "breakStartedAt": 100, "breakNotBefore": null, "breakEndsAt": 900, "breakUpdatedAt": 100, "timerUntil": 9000, "passwordHash": null, "delayUntil": 4000, "delayDurationMs": 60000, "delayUpdatedAt": 100, "randomTextLen": null, "randomTextUpdatedAt": 200, "frozenUntil": 7000, "schedules": [] },
       "b": { "timerUntil": 2000, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "passwordTs": 300, "delayUntil": null, "delayDurationMs": null, "delayUpdatedAt": 50, "randomTextLen": 100, "randomTextUpdatedAt": 300, "frozenUntil": null, "schedules": [] },
       "expect": { "breakStartedAt": 100, "breakNotBefore": null, "breakEndsAt": 900, "breakUpdatedAt": 100, "timerUntil": 9000, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "passwordTs": 300, "frozenUntil": 7000, "schedules": [], "schedulesUpdatedAt": 0, "delayUntil": 4000, "delayDurationMs": 60000, "delayUpdatedAt": 100, "randomTextLen": 100, "randomTextUpdatedAt": 300 }
+    },
+    {
+      "name": "an older peer without scoped fields cannot delete category schedules",
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [] },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "categorySchedules": [{ "id": "games", "days": [1], "startMinutes": 540, "endMinutes": 1020, "categories": ["video games"] }], "categorySchedulesUpdatedAt": 100 },
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0, "categorySchedules": [{ "id": "games", "days": [1], "startMinutes": 540, "endMinutes": 1020, "categories": ["video games"] }], "categorySchedulesUpdatedAt": 100 }
+    },
+    {
+      "name": "a newer explicit empty scoped list deletes inactive category schedules",
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "categorySchedules": [{ "id": "games", "days": [1], "startMinutes": 540, "endMinutes": 1020, "categories": ["video games"] }], "categorySchedulesUpdatedAt": 100 },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "categorySchedules": [], "categorySchedulesUpdatedAt": 200 },
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0, "categorySchedules": [], "categorySchedulesUpdatedAt": 200 }
+    },
+    {
+      "name": "an active scoped window survives a newer empty list from an unlocked peer",
+      "now": 1783512000000,
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "categorySchedules": [{ "id": "games", "days": [3], "startMinutes": 0, "endMinutes": 1439, "tzOffsetMinutes": 0, "categories": ["video games"] }], "categorySchedulesUpdatedAt": 100 },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "categorySchedules": [], "categorySchedulesUpdatedAt": 200 },
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0, "categorySchedules": [{ "id": "games", "days": [3], "startMinutes": 0, "endMinutes": 1439, "tzOffsetMinutes": 0, "categories": ["video games"] }], "categorySchedulesUpdatedAt": 100 }
+    },
+    {
+      "name": "active scoped enforcement survives a newer empty timer-protected list without retaining old inactive rules",
+      "now": 1783512000000,
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "categorySchedules": [{ "id": "games", "days": [3], "startMinutes": 0, "endMinutes": 1439, "tzOffsetMinutes": 0, "categories": ["video games"] }, { "id": "stale", "days": [4], "startMinutes": 0, "endMinutes": 1439, "tzOffsetMinutes": 0, "categories": ["news"] }], "categorySchedulesUpdatedAt": 100 },
+      "b": { "timerUntil": 1783512100000, "passwordHash": null, "frozenUntil": null, "schedules": [], "categorySchedules": [], "categorySchedulesUpdatedAt": 200 },
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": 1783512100000, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0, "categorySchedules": [{ "id": "games", "days": [3], "startMinutes": 0, "endMinutes": 1439, "tzOffsetMinutes": 0, "categories": ["video games"] }], "categorySchedulesUpdatedAt": 200 }
+    },
+    {
+      "name": "two different active scoped lists retain enforcement from both peers",
+      "now": 1783512000000,
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "categorySchedules": [{ "id": "games", "days": [3], "startMinutes": 0, "endMinutes": 1439, "tzOffsetMinutes": 0, "categories": ["video games"] }], "categorySchedulesUpdatedAt": 100 },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "categorySchedules": [{ "id": "shopping", "days": [3], "startMinutes": 0, "endMinutes": 1439, "tzOffsetMinutes": 0, "categories": ["online shopping"] }], "categorySchedulesUpdatedAt": 200 },
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0, "categorySchedules": [{ "id": "games", "days": [3], "startMinutes": 0, "endMinutes": 1439, "tzOffsetMinutes": 0, "categories": ["video games"] }, { "id": "shopping", "days": [3], "startMinutes": 0, "endMinutes": 1439, "tzOffsetMinutes": 0, "categories": ["online shopping"] }], "categorySchedulesUpdatedAt": 200 }
+    },
+    {
+      "name": "active scoped material replaces a newer timer-protected inactive rule with the same id",
+      "now": 1783512000000,
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "categorySchedules": [{ "id": "shared", "days": [3], "startMinutes": 0, "endMinutes": 1439, "tzOffsetMinutes": 0, "categories": ["video games"] }], "categorySchedulesUpdatedAt": 100 },
+      "b": { "timerUntil": 1783512100000, "passwordHash": null, "frozenUntil": null, "schedules": [], "categorySchedules": [{ "id": "shared", "days": [4], "startMinutes": 0, "endMinutes": 1439, "tzOffsetMinutes": 0, "categories": ["news"] }], "categorySchedulesUpdatedAt": 200 },
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": 1783512100000, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0, "categorySchedules": [{ "id": "shared", "days": [3], "startMinutes": 0, "endMinutes": 1439, "tzOffsetMinutes": 0, "categories": ["video games"] }], "categorySchedulesUpdatedAt": 200 }
+    },
+    {
+      "name": "corrupt duplicate scoped ids fail closed to active material and an idempotent canonical list",
+      "now": 1783512000000,
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "categorySchedules": [{ "id": "duplicate", "days": [3], "startMinutes": 0, "endMinutes": 1, "tzOffsetMinutes": 0, "categories": ["news"] }, { "id": "duplicate", "days": [3], "startMinutes": 600, "endMinutes": 1020, "tzOffsetMinutes": 0, "categories": ["video games"] }], "categorySchedulesUpdatedAt": 100 },
+      "b": { "timerUntil": 1783512100000, "passwordHash": null, "frozenUntil": null, "schedules": [], "categorySchedules": [], "categorySchedulesUpdatedAt": 200 },
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": 1783512100000, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0, "categorySchedules": [{ "id": "duplicate", "days": [3], "startMinutes": 600, "endMinutes": 1020, "tzOffsetMinutes": 0, "categories": ["video games"] }], "categorySchedulesUpdatedAt": 200 }
+    },
+    {
+      "name": "same-id scoped conflicts use identical UTF-8 ordering across languages",
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "categorySchedules": [{ "id": "custom", "days": [1], "startMinutes": 540, "endMinutes": 1020, "categories": ["😀"] }], "categorySchedulesUpdatedAt": 100 },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "categorySchedules": [{ "id": "custom", "days": [1], "startMinutes": 540, "endMinutes": 1020, "categories": ["é"] }], "categorySchedulesUpdatedAt": 100 },
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0, "categorySchedules": [{ "id": "custom", "days": [1], "startMinutes": 540, "endMinutes": 1020, "categories": ["é"] }], "categorySchedulesUpdatedAt": 100 }
+    },
+    {
+      "name": "legacy and scoped output ids use UTF-8 order for emoji and private-use characters",
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "😀", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 0 }], "categorySchedules": [{ "id": "😀", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 0, "categories": ["video games"] }] },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "\uE000", "days": [1], "startMinutes": 600, "endMinutes": 660, "tzOffsetMinutes": 0 }], "categorySchedules": [{ "id": "\uE000", "days": [1], "startMinutes": 600, "endMinutes": 660, "tzOffsetMinutes": 0, "categories": ["news"] }] },
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [{ "id": "\uE000", "days": [1], "startMinutes": 600, "endMinutes": 660, "tzOffsetMinutes": 0 }, { "id": "😀", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 0 }], "schedulesUpdatedAt": 0, "categorySchedules": [{ "id": "\uE000", "days": [1], "startMinutes": 600, "endMinutes": 660, "tzOffsetMinutes": 0, "categories": ["news"] }, { "id": "😀", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 0, "categories": ["video games"] }], "categorySchedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "same-id raw non-ASCII timezone conflicts use UTF-8 order for legacy and scoped rules",
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "zone", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 0, "tzName": "😀" }], "categorySchedules": [{ "id": "zone", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 0, "tzName": "😀", "categories": ["é"] }] },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "zone", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 0, "tzName": "\uE000" }], "categorySchedules": [{ "id": "zone", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 0, "tzName": "\uE000", "categories": ["é"] }] },
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [{ "id": "zone", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 0, "tzName": "\uE000" }], "schedulesUpdatedAt": 0, "categorySchedules": [{ "id": "zone", "days": [1], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 0, "tzName": "\uE000", "categories": ["é"] }], "categorySchedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "unsorted inactive scoped winners are canonical on the first merge",
+      "now": 1783512000000,
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "categorySchedules": [{ "id": "z", "days": [4], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 0, "categories": ["news"] }, { "id": "a", "days": [5], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 0, "categories": ["video games"] }], "categorySchedulesUpdatedAt": 100 },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "categorySchedules": [], "categorySchedulesUpdatedAt": 50 },
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0, "categorySchedules": [{ "id": "a", "days": [5], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 0, "categories": ["video games"] }, { "id": "z", "days": [4], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 0, "categories": ["news"] }], "categorySchedulesUpdatedAt": 100 }
+    },
+    {
+      "name": "a peer without partner fields has no vote against an arm",
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [] },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "partnerArmGeneration": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "partnerArmUpdatedAt": 100 },
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0, "partnerArmGeneration": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "partnerArmUpdatedAt": 100 }
+    },
+    {
+      "name": "a newer partner release tombstone beats an older arm",
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "partnerArmGeneration": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "partnerArmUpdatedAt": 100 },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "partnerArmGeneration": null, "partnerArmUpdatedAt": 200 },
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0, "partnerArmGeneration": null, "partnerArmUpdatedAt": 200 }
+    },
+    {
+      "name": "a newer partner arm beats an older release",
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "partnerArmGeneration": null, "partnerArmUpdatedAt": 100 },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "partnerArmGeneration": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "partnerArmUpdatedAt": 200 },
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0, "partnerArmGeneration": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "partnerArmUpdatedAt": 200 }
+    },
+    {
+      "name": "a same-stamp partner arm beats release and smaller generation resolves arm conflicts",
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "partnerArmGeneration": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "partnerArmUpdatedAt": 100 },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "partnerArmGeneration": null, "partnerArmUpdatedAt": 100 },
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0, "partnerArmGeneration": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "partnerArmUpdatedAt": 100 }
+    },
+    {
+      "name": "same-stamp partner arms choose the deterministic smaller generation",
+      "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "partnerArmGeneration": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "partnerArmUpdatedAt": 100 },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "partnerArmGeneration": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "partnerArmUpdatedAt": 100 },
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0, "partnerArmGeneration": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "partnerArmUpdatedAt": 100 }
+    },
+    {
+      "name": "partner release preserves every other independent lock and break",
+      "now": 1000,
+      "a": { "breakStartedAt": 100, "breakNotBefore": null, "breakEndsAt": 900, "breakUpdatedAt": 100, "timerUntil": 5000, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "passwordTs": 300, "delayUntil": 0, "delayDurationMs": 60000, "delayUpdatedAt": 100, "randomTextLen": 25, "randomTextUpdatedAt": 100, "frozenUntil": 6000, "schedules": [{ "id": "keep", "days": [1], "startMinutes": 540, "endMinutes": 1020 }], "schedulesUpdatedAt": 200, "partnerArmGeneration": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "partnerArmUpdatedAt": 400 },
+      "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "partnerArmGeneration": null, "partnerArmUpdatedAt": 500 },
+      "expect": { "breakStartedAt": 100, "breakNotBefore": null, "breakEndsAt": 900, "breakUpdatedAt": 100, "timerUntil": 5000, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "passwordTs": 300, "frozenUntil": 6000, "schedules": [{ "id": "keep", "days": [1], "startMinutes": 540, "endMinutes": 1020 }], "schedulesUpdatedAt": 200, "delayUntil": 0, "delayDurationMs": 60000, "delayUpdatedAt": 100, "randomTextLen": 25, "randomTextUpdatedAt": 100, "partnerArmGeneration": null, "partnerArmUpdatedAt": 500 }
     }
   ],
   "deriveLockStatus": [
@@ -238,6 +347,12 @@
       "name": "empty state is unlocked",
       "state": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [] },
       "now": 1000000,
+      "expect": { "breakActive": false, "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "settingsLocked": false, "forceBlocking": false, "reasons": [], "until": null }
+    },
+    {
+      "name": "an active category schedule is not a legacy forced lock",
+      "state": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "categorySchedules": [{ "id": "games", "days": [3], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 0, "categories": ["video games"] }] },
+      "now": 1783512000000,
       "expect": { "breakActive": false, "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "settingsLocked": false, "forceBlocking": false, "reasons": [], "until": null }
     },
     {
@@ -353,6 +468,18 @@
       "state": { "timerUntil": null, "passwordHash": null, "delayUntil": null, "delayDurationMs": null, "delayUpdatedAt": 900000, "randomTextLen": null, "randomTextUpdatedAt": 900000, "frozenUntil": null, "schedules": [] },
       "now": 1000000,
       "expect": { "breakActive": false, "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "settingsLocked": false, "forceBlocking": false, "reasons": [], "until": null }
+    },
+    {
+      "name": "partner reason appends after every prior lock source without forcing blocking",
+      "state": { "timerUntil": 1767609060000, "passwordHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "delayUntil": 0, "delayDurationMs": 60000, "delayUpdatedAt": 900000, "randomTextLen": 25, "randomTextUpdatedAt": 900000, "frozenUntil": 1767609120000, "schedules": [{ "id": "all", "days": [0, 1, 2, 3, 4, 5, 6], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 0 }], "partnerArmGeneration": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "partnerArmUpdatedAt": 900000 },
+      "now": 1767609000000,
+      "expect": { "breakActive": false, "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "settingsLocked": true, "forceBlocking": true, "reasons": ["timer", "password", "delay", "random-text", "frozen", "schedule", "partner"], "until": null, "delayUntil": 0, "delayDurationMs": 60000, "delayReady": false, "randomTextLen": 25 }
+    },
+    {
+      "name": "partner arm alone is indefinite and does not force ordinary blocking",
+      "state": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "partnerArmGeneration": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "partnerArmUpdatedAt": 900000 },
+      "now": 1000000,
+      "expect": { "breakActive": false, "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "settingsLocked": true, "forceBlocking": false, "reasons": ["partner"], "until": null }
     }
   ],
   "nextBoundary": [
@@ -427,6 +554,12 @@
       "state": { "timerUntil": null, "passwordHash": null, "randomTextLen": 100, "randomTextUpdatedAt": 900000, "frozenUntil": null, "schedules": [] },
       "now": 1000000,
       "expect": null
+    },
+    {
+      "name": "scoped schedule end wakes enforcement without becoming a lock reason",
+      "state": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "categorySchedules": [{ "id": "games", "days": [3], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 0, "categories": ["video games"] }] },
+      "now": 1783512000000,
+      "expect": 1783530000000
     }
   ],
   "sanitizeLockState": [
@@ -591,6 +724,76 @@
       "now": 1000000,
       "maxLockMs": 2592000000,
       "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0, "delayUntil": null, "delayDurationMs": null, "delayUpdatedAt": 800000, "randomTextLen": null, "randomTextUpdatedAt": 900000 }
+    },
+    {
+      "name": "valid scoped rules survive and their future stamp clamps to now",
+      "raw": { "categorySchedules": [{ "id": "games", "days": [3], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 0, "categories": ["video games", "é"] }], "categorySchedulesUpdatedAt": 9000000000000000 },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0, "categorySchedules": [{ "id": "games", "days": [3], "startMinutes": 540, "endMinutes": 1020, "tzOffsetMinutes": 0, "categories": ["video games", "é"] }], "categorySchedulesUpdatedAt": 1000000 }
+    },
+    {
+      "name": "an explicit empty scoped list is not confused with an absent capability",
+      "raw": { "categorySchedules": [], "categorySchedulesUpdatedAt": 900000 },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0, "categorySchedules": [], "categorySchedulesUpdatedAt": 900000 }
+    },
+    {
+      "name": "any malformed scoped rule makes the additive update neutral",
+      "raw": { "categorySchedules": [{ "id": "good", "days": [3], "startMinutes": 540, "endMinutes": 1020, "categories": ["video games"] }, { "id": "bad", "days": [3], "startMinutes": 540, "endMinutes": 1020, "categories": [] }], "categorySchedulesUpdatedAt": 900000 },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "duplicate scoped ids make the whole additive update neutral",
+      "raw": { "categorySchedules": [{ "id": "same", "days": [3], "startMinutes": 540, "endMinutes": 1020, "categories": ["video games"] }, { "id": "same", "days": [4], "startMinutes": 600, "endMinutes": 660, "categories": ["news"] }], "categorySchedulesUpdatedAt": 900000 },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "fractional legacy and scoped metadata stamps are neutral rather than truncated",
+      "raw": { "passwordTs": 700000.5, "schedules": [{ "id": "legacy", "days": [3], "startMinutes": 540, "endMinutes": 1020 }], "schedulesUpdatedAt": 800000.5, "categorySchedules": [{ "id": "scoped", "days": [3], "startMinutes": 540, "endMinutes": 1020, "categories": ["video games"] }], "categorySchedulesUpdatedAt": 900000.5 },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [{ "id": "legacy", "days": [3], "startMinutes": 540, "endMinutes": 1020 }], "schedulesUpdatedAt": 0, "categorySchedules": [{ "id": "scoped", "days": [3], "startMinutes": 540, "endMinutes": 1020, "categories": ["video games"] }], "categorySchedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "timezone name limits count UTF-16 code units for legacy and scoped rules",
+      "raw": { "schedules": [{ "id": "base-valid", "days": [3], "startMinutes": 540, "endMinutes": 1020, "tzName": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀" }, { "id": "base-too-long", "days": [3], "startMinutes": 540, "endMinutes": 1020, "tzName": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀" }], "schedulesUpdatedAt": 800000, "categorySchedules": [{ "id": "scoped-valid", "days": [3], "startMinutes": 540, "endMinutes": 1020, "tzName": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀", "categories": ["video games"] }], "categorySchedulesUpdatedAt": 900000 },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [{ "id": "base-valid", "days": [3], "startMinutes": 540, "endMinutes": 1020, "tzName": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀" }], "schedulesUpdatedAt": 800000, "categorySchedules": [{ "id": "scoped-valid", "days": [3], "startMinutes": 540, "endMinutes": 1020, "tzName": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀", "categories": ["video games"] }], "categorySchedulesUpdatedAt": 900000 }
+    },
+    {
+      "name": "valid partner arm survives sanitize and future metadata clamps to now",
+      "raw": { "timerUntil": 1500000, "passwordHash": null, "frozenUntil": null, "schedules": [], "partnerArmGeneration": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "partnerArmUpdatedAt": 9000000000000000 },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": 1500000, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0, "partnerArmGeneration": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "partnerArmUpdatedAt": 1000000 }
+    },
+    {
+      "name": "partner stamp-only and null releases preserve their tombstones",
+      "raw": { "partnerArmGeneration": null, "partnerArmUpdatedAt": 900000 },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0, "partnerArmGeneration": null, "partnerArmUpdatedAt": 900000 }
+    },
+    {
+      "name": "malformed partner arm becomes neutral instead of a release tombstone",
+      "raw": { "partnerArmGeneration": "not-a-generation", "partnerArmUpdatedAt": 900000 },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "uppercase partner generation is not a valid arm",
+      "raw": { "partnerArmGeneration": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "partnerArmUpdatedAt": 900000 },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
     }
   ]
 }

@@ -475,10 +475,22 @@ without giving up our architectural ones.
    guilt copy — per the PNAS finding; FocusMe's typo-restart trick).
 8. **Visible extension-loss grace countdown** (companion + popup: "browser
    closes in 60 s unless the extension returns", re-check every 10 s).
-   **Extension-side partial (2026-11-08):** pure grace math plus a locked,
-   non-numeric disconnect warning landed. The truthful numeric countdown is
-   blocked until `companionStatus` carries the daemon's actual grace state and
-   remaining time; outgoing heartbeat sends cannot substitute for it. See
+   **Implemented; focused review clean (2026-11-08):** an additive v2 status
+   observation exposes the authenticated recipient's post-tick enforcer grace
+   state/remainder; transitions publish immediately and active grace refreshes
+   every 10 seconds. Popup/options interpolate locally, clear the number on
+   relay loss, and retain the honest non-numeric disconnect fallback. Desktop
+   reads a separate relay-independent grace snapshot and suppresses stale
+   grace when the current lock is inactive. Browser identity is pinned;
+   personalized queue handoff revalidates identity and grace-track revision,
+   while per-recipient observation-sequence high-water marks prevent both
+   grace-after-recovery and same-track remainder inversions. Older
+   peers/snapshots remain compatible. The final combined item 8/11 gates pass:
+   **180 core + 4 fixture + 2 stdio Rust tests**, 24 grace tests, typecheck,
+   clippy/fmt, Chrome/Firefox/desktop frontend builds, full Linux
+   Chromium/native-messaging/daemon E2E, and ten labeled desktop-preview
+   checks (including 42s → 41s). No native-Windows or Tauri-shell verification
+   is claimed. See
    `docs/learning-notes/2026-11-08-extension-loss-grace-countdown.md`.
 
 ### Batch 3 — retention + admin (bigger surfaces)
@@ -511,19 +523,52 @@ without giving up our architectural ones.
     cost per use — Opal Waiting-Room pattern).
 11. **Multi-browser onboarding + "Fix extensions" surface** (companion
     detects installed browsers, per-browser install/fix flow).
+    **Implemented; focused review clean (2026-11-08):** positive executable/App
+    Paths detection, per-browser registration inspection and selected repair,
+    exact manifest/host and Windows registry readback, and detected-only global
+    repair are implemented. Installation, registration, and authenticated
+    extension connection remain independent; repair never claims to install or
+    verify an extension. New Windows writes use browser-specific manifests while
+    healthy legacy shared Chromium registrations remain compatible. Selected
+    repair has no autostart side effect; global repair preserves its scoped
+    autostart behavior, and test mode explicitly skips writes. Unavailable and
+    unreadable evidence is not treated as absence. Combined final gates pass:
+    **180 core + 4 fixture + 2 stdio Rust tests** (12 onboarding), 24 grace
+    tests, typecheck, clippy/fmt, Chrome/Firefox/desktop frontend builds, full
+    Linux companion E2E, and ten labeled desktop-preview checks. No native-
+    Windows registry execution or real Tauri-shell verification is claimed. See
+    `docs/learning-notes/2026-11-08-multi-browser-onboarding.md`.
 12. **Windows companion verification pass** (service-name randomization,
     exe file-locks during blocks, Task-Manager protection — CT's own
     settings schema is the checklist; see audit §3.2) → flip
     `policy_enforce` after the Phase 3 store listing.
+    **Threat model and acceptance baseline defined (2026-11-08); execution
+    remains open:** `docs/design-notes-windows-verification.md` distinguishes
+    the primary unprivileged same-user adversary from the explicit
+    admin/SYSTEM/kernel residual and requires real-hardware service, ACL,
+    file-lock, process-recovery, browser, persistence, and installer evidence.
+    Random service names and Task-Manager blocking are supporting controls,
+    not authorization boundaries. Linux/WSL, mock previews, and frontend
+    builds do not close this item.
 13. **Wildcard list grammar** (`*` anywhere in blocklist/whitelist rules —
     CT-compatible) + **CLI on the daemon socket** (`block start|stop|toggle`,
     `lock`) for automation tools; accountability-partner codes remain item 14.
-    **Extension-side wildcard grammar complete (2026-11-08):**
-    star-free legacy behavior is preserved; wildcard blocking uses ordered
-    literals, constrained allows remain anchored, SERP guards precede allows,
-    and popup allow display/removal uses the shared matcher. The **daemon CLI
-    remains open**, and partner codes belong to item 14. See
-    `docs/learning-notes/2026-11-08-wildcard-list-grammar.md`.
+    **Implemented; focused review clean (2026-11-08):** star-free legacy
+    behavior is preserved; wildcard blocking uses ordered literals,
+    constrained allows remain anchored, SERP guards precede allows, and popup
+    allow display/removal uses the shared matcher. The v2 daemon CLI supports
+    `block start|stop|toggle`, `lock MINUTES`, and truthful `status`; ordinary
+    blocking has durable authenticated revision intents, stale-write refusal,
+    lock-time disable guards, echo-loop suppression, latest-intent recovery,
+    and restart synchronization. Final gates include 196 Rust tests across
+    six suites, ten pure and ten actual-background synchronization tests,
+    typecheck, Chrome/Firefox builds, clippy/fmt, and repeated real Linux
+    Chromium/native-messaging/daemon/CLI passes. One rebuilt-browser run had
+    three non-reproduced rapid-sync failures before two consecutive unchanged
+    passes; no root cause is claimed. Native Windows and real Tauri-shell
+    behavior remain outside this evidence. Accountability-partner codes belong
+    to item 14. See `docs/learning-notes/2026-11-08-wildcard-list-grammar.md`
+    and `docs/learning-notes/2026-11-08-daemon-cli-blocking-authority.md`.
 14. **Per-category schedules** (then per-list after the multi-list UI
     redesign) and **accountability-partner unlock codes** (offline-signed,
     24 h partner-activation delay).

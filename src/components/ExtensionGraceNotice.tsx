@@ -13,8 +13,7 @@ interface ExtensionGraceNoticeProps {
   locked: boolean;
   companion: CompanionSnapshot | null;
   now: number;
-  /** Optional enforcing-peer observation. Protocol v2 has no such field, so
-   *  current callers leave this null rather than deriving one from sends. */
+  /** Validated enforcing-peer observation, or null for old peers/disconnect. */
   observation?: ExtensionGraceObservation | null;
   /** Must come from the enforcer too; a local setting would not control it. */
   graceSeconds?: number | null;
@@ -22,9 +21,9 @@ interface ExtensionGraceNoticeProps {
 }
 
 /** Locked-only extension-loss warning. Real daemon observations render the
- *  per-second countdown. With today's status payload, a known companion that
- *  disconnected gets an explicitly non-numeric warning; not-installed and
- *  never-observed companions stay completely quiet. */
+ *  per-second countdown. A known companion without a live observation (older
+ *  daemon or disconnected relay) gets an explicitly non-numeric warning;
+ *  not-installed and never-observed companions stay completely quiet. */
 export function ExtensionGraceNotice({
   id,
   locked,

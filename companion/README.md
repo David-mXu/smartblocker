@@ -108,7 +108,7 @@ browser ──connectNative('dev.davidxu.smartblocker')──▶ smartblocker-nm
 
 Crates (`crates/`): `smartblocker-core` (all logic; Linux-tested),
 `smartblocker-nm-host` (stdio↔IPC relay), `smartblocker-daemon` (headless CLI:
-`run` / `watchdog` / `install` / `uninstall` / `status`),
+`run` / `watchdog` / `install` / `uninstall` / `status` / `block` / `lock`),
 `smartblocker-companion` (Tauri shell — **not** in workspace default-members;
 it needs webkit2gtk to even compile on Linux, so `cargo test`/`cargo build`
 never touch it. Don't use `--workspace` in headless runs).
@@ -129,6 +129,51 @@ cargo build --release
 ./target/release/smartblocker-daemon install   # NM manifests + XDG autostart (launches the watchdog supervisor)
 ./target/release/smartblocker-daemon run       # direct run; autostart normally spawns this via `watchdog`
 ```
+
+Automation against a running daemon:
+
+```bash
+./target/release/smartblocker-daemon block start
+./target/release/smartblocker-daemon block stop
+./target/release/smartblocker-daemon block toggle
+./target/release/smartblocker-daemon lock 30    # minutes; also enables ordinary blocking
+./target/release/smartblocker-daemon status
+```
+
+`block` changes the daemon's persisted ordinary-blocking value and revision,
+then synchronizes every connected browser. It does not start or cancel a lock.
+`lock` starts a timer or extends the existing deadline, whichever is later;
+there is no shorten/cancel command. `block stop` and a toggle that would turn
+blocking off are refused while **any** lock is active. Successful commands
+reply only after their state is persisted; refusals and write failures exit
+nonzero. Add `--socket NAME` to target a non-default/test daemon.
+
+### Accountability-partner codes
+
+```bash
+./target/release/smartblocker-daemon partner-keygen                                    # prints a secret + public pair once
+./target/release/smartblocker-daemon partner add-key PUBLIC_KEY_HEX                    # activates after 24 hours
+./target/release/smartblocker-daemon partner arm                                       # requires an already-active key and no other lock
+./target/release/smartblocker-daemon partner begin                                     # prints the pending operation JSON
+./target/release/smartblocker-daemon partner sign OPERATION_JSON EXPIRES_MS PRIVATE_KEY_HEX
+./target/release/smartblocker-daemon partner redeem SBP1.<payload>.<signature>
+```
+
+Run `partner-keygen` on the partner's device and give the user only
+`PUBLIC_KEY_HEX`. Its private half must stay there. `partner-keygen` and
+`partner sign` operate entirely offline and never contact the daemon. Signing
+binds the installation, exact arm generation, operation ID, nonce, and expiry
+(15 minutes maximum). The daemon uses strict Ed25519 verification; a code
+redeems only that exact arm and leaves timer/Frozen/schedule/password/delay/
+random-text locks and ordinary `enabled` unchanged. Replay tombstones are
+persisted before release, so a second use or a stale arm cannot succeed.
+There is no expedited activation route; changing keys never releases an arm.
+
+`allowance-state.json` stores revisioned per-category allowance, opening,
+Pomodoro, and idempotency receipts. Browser commands are accepted only with the
+current base revision and persist before being acknowledged. A browser may
+recover a snapshot only into a genuinely uninitialized daemon; present corrupt
+files prevent startup rather than silently becoming a new daily pool.
 
 ## Windows build (the real target)
 

@@ -103,6 +103,7 @@ const {
   getLockState,
   getLockStatus,
   mergeRemoteLockState,
+  setCategorySchedules,
   startDelayUnlock,
 } = await import('../src/shared/lock.ts');
 const {
@@ -503,6 +504,70 @@ await test('a stale random-text arm cannot erase a newer release tombstone', asy
   assert.deepEqual(await getLockState(), released);
 });
 
+await test('category schedule writes preserve legacy state and pin only the scoped list', async () => {
+  now = NOW;
+  const legacy = { ...schedule, id: 'legacy', days: [2], tzOffsetMinutes: -300 };
+  const before = { ...emptyState(), schedules: [legacy], schedulesUpdatedAt: NOW - 500 };
+  seed(before);
+  const scoped = {
+    ...schedule,
+    id: 'scoped',
+    days: [new Date(now + 24 * 3_600_000).getUTCDay()],
+    categories: ['video games', 'é'],
+  };
+  await setCategorySchedules([scoped]);
+  assert.equal(writes.length, 1);
+  const next = await getLockState();
+  assert.deepEqual(next.schedules, before.schedules);
+  assert.equal(next.schedulesUpdatedAt, before.schedulesUpdatedAt);
+  assert.equal(next.categorySchedulesUpdatedAt, NOW);
+  assert.deepEqual(next.categorySchedules[0].categories, scoped.categories);
+  assert.equal(next.categorySchedules[0].tzOffsetMinutes, 0);
+  assert.equal(next.categorySchedules[0].tzName, 'UTC');
+  assert.equal((await getLockStatus()).forceBlocking, false);
+});
+
+await test('active category windows and independent legacy locks refuse edits with zero writes', async () => {
+  now = NOW;
+  const currentMinute = new Date(now).getUTCHours() * 60 + new Date(now).getUTCMinutes();
+  const active = {
+    ...schedule,
+    id: 'active-scope',
+    days: [new Date(now).getUTCDay()],
+    startMinutes: currentMinute,
+    endMinutes: (currentMinute + 10) % 1440,
+    categories: ['video games'],
+  };
+  seed({ ...emptyState(), categorySchedules: [active], categorySchedulesUpdatedAt: NOW - 1 });
+  await assert.rejects(setCategorySchedules([]), /category window is active/);
+  assert.equal(writes.length, 0);
+  seed({
+    ...emptyState(),
+    timerUntil: NOW + 60_000,
+    categorySchedules: [],
+    categorySchedulesUpdatedAt: NOW - 1,
+  });
+  await assert.rejects(setCategorySchedules([]), /SmartBlocker is locked/);
+  assert.equal(writes.length, 0);
+});
+
+await test('invalid or duplicate category rules and older-peer absence cannot erase scoped state', async () => {
+  now = NOW;
+  const scoped = { ...schedule, id: 'kept', categories: ['video games'] };
+  seed(emptyState());
+  await assert.rejects(setCategorySchedules([{ ...scoped, categories: [] }]), /at least one category/);
+  await assert.rejects(
+    setCategorySchedules([scoped, { ...scoped, startMinutes: 60 }]),
+    /IDs must be unique/,
+  );
+  assert.equal(writes.length, 0);
+  const before = { ...emptyState(), categorySchedules: [scoped], categorySchedulesUpdatedAt: NOW - 1 };
+  seed(before);
+  assert.equal(await mergeRemoteLockState(emptyState()), false);
+  assert.equal(writes.length, 0);
+  assert.deepEqual((await getLockState()).categorySchedules, before.categorySchedules);
+});
+
 await test('forward clock compensation extends only active wall-clock deadlines and preserves gate metadata', async () => {
   // Stub the unrelated tab sweeper. The real enforcer, storage transitions,
   // skew detector, and background delay completion remain under test.
@@ -511,7 +576,7 @@ await test('forward clock compensation extends only active wall-clock deadlines 
       if (url.endsWith('/src/background/blocker.ts')) {
         return {
           format: 'module',
-          source: 'export async function sweepOpenTabs() {}',
+          source: 'export async function sweepOpenTabs() {} export function advanceCategoryPolicyEpoch() {}',
           shortCircuit: true,
         };
       }

@@ -9,6 +9,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Target,
+  Timer,
   type Icon,
 } from '@phosphor-icons/react';
 import { api } from '../shared/api';
@@ -20,6 +21,7 @@ import { BlockingPage } from './pages/BlockingPage';
 import { SitesPage } from './pages/SitesPage';
 import { FocusPage } from './pages/FocusPage';
 import { LocksPage } from './pages/LocksPage';
+import { AllowancePage } from './pages/AllowancePage';
 import { SchedulePage } from './pages/SchedulePage';
 import { CompanionPage } from './pages/CompanionPage';
 import { PrivacyPage } from './pages/PrivacyPage';
@@ -42,6 +44,7 @@ const PAGES: PageDef[] = [
   { id: 'sites', label: 'Sites', icon: Globe, Component: SitesPage },
   { id: 'focus', label: 'Focus', icon: Target, Component: FocusPage },
   { id: 'locks', label: 'Locks', icon: LockSimple, Component: LocksPage },
+  { id: 'allowance', label: 'Breaks', icon: Timer, Component: AllowancePage },
   { id: 'schedule', label: 'Focus hours', icon: CalendarBlank, Component: SchedulePage },
   { id: 'usage', label: 'Usage', icon: ChartLineUp, Component: UsagePage },
   { id: 'companion', label: 'Desktop app', icon: Desktop, Component: CompanionPage },

@@ -2,6 +2,7 @@
 // no Tauri) — the same phrasing as the extension popup (src/popup/popup-model.ts)
 // so "Locks in 0:42" and "until 4:28 PM" read identically on every surface.
 
+import { deriveExtensionGrace, type ExtensionGraceResult } from '../shared/grace-math';
 import type { BrowserInfo, DesktopStatus, LockInfo, LockReason } from './api';
 
 /** "3:40 PM", "1:15 AM tomorrow", or "Mon 3:40 PM" further out. */
@@ -133,6 +134,26 @@ export const SUPPORTED_BROWSERS = [
 
 export function connectedBrowser(status: DesktopStatus, kind: string): BrowserInfo | undefined {
   return status.browsers.find((b) => b.kind.toLowerCase() === kind);
+}
+
+/** Count down from the desktop snapshot's own observation timestamp. */
+export function browserGrace(
+  status: DesktopStatus,
+  kind: string,
+  now: number,
+): ExtensionGraceResult | null {
+  const observed = status.browserGrace.find((b) => b.kind === kind);
+  if (!observed) return null;
+  return deriveExtensionGrace(
+    now,
+    {
+      state: 'grace',
+      observedAtMs: observed.observedAtMs,
+      lastHeartbeatAtMs: null,
+      graceRemainingMs: observed.graceRemainingMs,
+    },
+    observed.graceSeconds,
+  );
 }
 
 export function protectedCount(status: DesktopStatus): number {

@@ -22,7 +22,7 @@ export type TabStatusKind =
   | 'blocked-rule'
   /** Would have been blocked, but the user said "this is actually productive". */
   | 'overridden'
-  /** A browse/search surface deliberately never blocked (YouTube home, search). */
+  /** A browse/search container kept open; individual results may be masked. */
   | 'browsing';
 
 export interface TabStatus {

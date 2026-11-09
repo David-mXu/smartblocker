@@ -33,6 +33,12 @@ export interface ScheduleRule {
   tzName?: string;
 }
 
+/** Category-scoped windows are stored separately from legacy global locks. */
+export interface CategoryScheduleRule extends ScheduleRule {
+  /** Exact classifier labels. An empty list is invalid and never means all. */
+  categories: string[];
+}
+
 /** Persisted shape (storage.local `lockState`). Sources are independent and
  *  compose — a frozen session and a schedule window can be active at once. */
 export const MAX_BREAK_MS = 24 * 3_600_000;
@@ -87,6 +93,17 @@ export interface LockState {
    *  Sanitized to `<= now`: a forged future stamp would hold the list
    *  hostage, rejecting every honest write for days. */
   schedulesUpdatedAt?: number;
+  /** Optional additive scoped windows. Absence means an older peer has no
+   * capability; an explicit empty list with a stamp is a real deletion. */
+  categorySchedules?: CategoryScheduleRule[];
+  /** Last-writer-wins stamp for the scoped list only, clamped to `now`. */
+  categorySchedulesUpdatedAt?: number;
+  /** Accountability-partner arm: 32 random bytes as 64 lowercase hex chars.
+   *  Null is an explicit release tombstone; absence is an older peer with no
+   *  vote. Only daemon partner commands may originate either operation. */
+  partnerArmGeneration?: string | null;
+  /** Whole-operation LWW stamp, clamped to `now` on untrusted input. */
+  partnerArmUpdatedAt?: number;
 }
 
 export interface LockStatus {
@@ -101,9 +118,9 @@ export interface LockStatus {
   /** Frozen Turkey or an in-window schedule: blocking runs even if the
    *  master toggle is off, and stored overrides are ignored. */
   forceBlocking: boolean;
-  reasons: ('timer' | 'password' | 'delay' | 'random-text' | 'frozen' | 'schedule')[];
-  /** When the current lock fully ends; null = indefinite (password or an
-   *  explicit-release delay/random-text gate armed) or nothing active. */
+  reasons: ('timer' | 'password' | 'delay' | 'random-text' | 'frozen' | 'schedule' | 'partner')[];
+  /** When the current lock fully ends; null = indefinite (password, partner,
+   *  or an explicit-release delay/random-text gate armed) or nothing active. */
   until: number | null;
   /** Present only while the corresponding NEW gate is armed. Omitting them
    *  for legacy/released states keeps pre-existing exact status results. */
@@ -219,6 +236,14 @@ export function armedRandomTextLength(state: LockState): number | null {
     : null;
 }
 
+/** A persisted partner arm is meaningful only in its complete canonical form. */
+function armedPartnerGeneration(state: LockState): string | null {
+  const generation = state.partnerArmGeneration;
+  return typeof generation === 'string' && /^[0-9a-f]{64}$/.test(generation)
+    ? generation
+    : null;
+}
+
 /** Window length in ms; end < start wraps overnight. start === end is an
  *  invalid (empty) rule and yields 0. */
 function windowDurationMs(r: ScheduleRule): number {
@@ -297,7 +322,9 @@ export function nextBoundary(state: LockState, now: number): number | null {
   const delay = armedDelayLock(state);
   if (delay && delay.until > now) candidates.push(delay.until);
   if (state.frozenUntil !== null && state.frozenUntil > now) candidates.push(state.frozenUntil);
-  for (const r of state.schedules) {
+  // Scoped windows do not become lock reasons, but their start/end still
+  // wakes enforcement so active blocks and inactive rescues change promptly.
+  for (const r of [...state.schedules, ...(state.categorySchedules ?? [])]) {
     const dur = windowDurationMs(r);
     if (dur <= 0) continue;
     // From yesterday (an in-progress overnight window still has its end
@@ -335,6 +362,8 @@ export function deriveLockStatus(state: LockState, now: number): LockStatus {
     reasons.push('schedule');
     ends.push(windowEnd);
   }
+  const partnerArm = armedPartnerGeneration(state);
+  if (partnerArm !== null) reasons.push('partner');
   const status: LockStatus = {
     breakActive: activeBreakInterval(state, now) !== null,
     breakStartedAt: state.breakStartedAt ?? null,
@@ -344,7 +373,7 @@ export function deriveLockStatus(state: LockState, now: number): LockStatus {
     forceBlocking: windowEnd !== null || reasons.includes('frozen'),
     reasons,
     until:
-      state.passwordHash || delay || randomTextLen !== null
+      state.passwordHash || delay || randomTextLen !== null || partnerArm !== null
         ? null
         : ends.length
           ? Math.max(...ends)
@@ -359,14 +388,71 @@ export function deriveLockStatus(state: LockState, now: number): LockStatus {
   return status;
 }
 
+/** UTF-8 hex gives Rust and JavaScript the same total ordering even for custom
+ *  non-ASCII values (JS UTF-16 and Rust UTF-8 string order otherwise differ). */
+function utf8Hex(value: string): string {
+  return [...new TextEncoder().encode(value)]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function compareUtf8(a: string, b: string): number {
+  const aHex = utf8Hex(a);
+  const bHex = utf8Hex(b);
+  return aHex < bHex ? -1 : aHex > bHex ? 1 : 0;
+}
+
+function scheduleCanon(r: ScheduleRule): string {
+  return (
+    `${r.startMinutes}|${r.endMinutes}|${[...r.days].sort((x, y) => x - y).join(',')}|` +
+    `${r.tzOffsetMinutes ?? ''}|${utf8Hex(r.tzName ?? '')}`
+  );
+}
+
+/** UTF-8 hex gives Rust and JavaScript the same total ordering even for custom
+ * non-ASCII labels (JS UTF-16 and Rust UTF-8 string order otherwise differ). */
+function categoryScheduleCanon(r: CategoryScheduleRule): string {
+  return `${scheduleCanon(r)}|${r.categories.map(utf8Hex).sort().join(',')}`;
+}
+
+function scopedRuleActive(r: CategoryScheduleRule, now: number): boolean {
+  return currentWindowEnd([r], new Date(now)) !== null;
+}
+
+/** Canonicalize combined scoped output and repair already-corrupt duplicate
+ *  direct state. An active duplicate always beats inactive material; otherwise
+ *  the smallest UTF-8 canonical rule wins. Unique inactive whole-list winners
+ *  retain their authored order, while every union/active result is ID-sorted. */
+function canonicalCategoryRules(
+  rules: CategoryScheduleRule[],
+  now: number,
+  forceCanonical: boolean,
+): CategoryScheduleRule[] {
+  if (!forceCanonical && new Set(rules.map((r) => r.id)).size === rules.length) return rules;
+  const byId = new Map<string, { rule: CategoryScheduleRule; active: boolean }>();
+  for (const rule of rules) {
+    const active = scopedRuleActive(rule, now);
+    const prev = byId.get(rule.id);
+    if (
+      !prev ||
+      (active && !prev.active) ||
+      (active === prev.active && categoryScheduleCanon(rule) < categoryScheduleCanon(prev.rule))
+    ) {
+      byId.set(rule.id, { rule, active });
+    }
+  }
+  return [...byId.values()]
+    .map(({ rule }) => rule)
+    .sort((x, y) => compareUtf8(x.id, y.id));
+}
+
 /** Merge two lock states (commutative, idempotent — the desktop companion
  *  and the extension each keep a copy and converge by merging, so syncing
  *  never locks the two sides into disagreement). `now` is needed because the
- *  schedule rule consults activeness. Password and timer/frozen sources stay
- *  monotonic (merge can never SHORTEN them); the password arm/unlock and the
- *  schedule list are the two deliberate exceptions: unlocks and schedule
- *  edits must propagate, so those two carry timestamps and the newer write
- *  wins. Mirrored by `merge.rs` in the companion; change both together,
+ *  schedule rule consults activeness. Timer/frozen sources stay monotonic;
+ *  password, explicit-release gates, schedules and daemon-only partner
+ *  arm/release operations are timestamped exceptions whose newer write wins.
+ *  Mirrored by `merge.rs` in the companion; change both together,
  *  covered by the shared fixtures in
  *  companion/crates/smartblocker-core/tests/fixtures/lock-cases.json. */
 export function mergeLockStates(a: LockState, b: LockState, now: number): LockState {
@@ -443,6 +529,34 @@ export function mergeLockStates(a: LockState, b: LockState, now: number): LockSt
       JSON.stringify([a.randomTextLen ?? null]) < JSON.stringify([b.randomTextLen ?? null]) ? a : b;
   }
 
+  // Accountability partner: one optional LWW arm/release operation. Missing
+  // fields carry no vote at all; a present null generation is a tombstone.
+  // Equal stamps fail closed to an arm, then to the deterministic smaller ID.
+  const hasPartnerFields = (s: LockState) =>
+    s.partnerArmGeneration !== undefined || s.partnerArmUpdatedAt !== undefined;
+  const aHasPartner = hasPartnerFields(a);
+  const bHasPartner = hasPartnerFields(b);
+  const includePartner = aHasPartner || bHasPartner;
+  const aPartnerTs = a.partnerArmUpdatedAt ?? 0;
+  const bPartnerTs = b.partnerArmUpdatedAt ?? 0;
+  const aPartner = armedPartnerGeneration(a);
+  const bPartner = armedPartnerGeneration(b);
+  const partnerCanon = (s: LockState) => JSON.stringify([s.partnerArmGeneration ?? null]);
+  let partnerWinner = a;
+  if (!aHasPartner) {
+    partnerWinner = b;
+  } else if (!bHasPartner) {
+    partnerWinner = a;
+  } else if (aPartnerTs !== bPartnerTs) {
+    partnerWinner = aPartnerTs > bPartnerTs ? a : b;
+  } else if ((aPartner !== null) !== (bPartner !== null)) {
+    partnerWinner = aPartner !== null ? a : b;
+  } else if (aPartner !== null && bPartner !== null && aPartner !== bPartner) {
+    partnerWinner = aPartner < bPartner ? a : b;
+  } else if (partnerCanon(a) !== partnerCanon(b)) {
+    partnerWinner = partnerCanon(a) < partnerCanon(b) ? a : b;
+  }
+
   // Schedules: edits are refused while locked (lock.ts setSchedules), so the
   // only way a peer's list changes mid-lock is a forged/wiped write. If
   // exactly one side is locked, the LOCKED side's list wins — a browser
@@ -471,16 +585,55 @@ export function mergeLockStates(a: LockState, b: LockState, now: number): LockSt
     // union stays commutative regardless of argument order. The tz fields are
     // part of the content: two same-id rules pinned to different zones must
     // still converge to ONE rule on both sides.
-    const canon = (r: ScheduleRule) =>
-      `${r.startMinutes}|${r.endMinutes}|${[...r.days].sort((x, y) => x - y).join(',')}|` +
-      `${r.tzOffsetMinutes ?? ''}|${r.tzName ?? ''}`;
     const byId = new Map<string, ScheduleRule>();
     for (const r of [...a.schedules, ...b.schedules]) {
       const prev = byId.get(r.id);
-      if (!prev || canon(r) < canon(prev)) byId.set(r.id, r);
+      if (!prev || scheduleCanon(r) < scheduleCanon(prev)) byId.set(r.id, r);
     }
-    schedules = [...byId.values()].sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+    schedules = [...byId.values()].sort((x, y) => compareUtf8(x.id, y.id));
     schedulesUpdatedAt = aTs;
+  }
+
+  // Scoped schedules are a separate additive list. An absent field is an
+  // older peer with NO VOTE, never an empty-list deletion. Legal edits are
+  // still refused during an active scope, so merge must retain EVERY active
+  // rule from both peers even when both whole lists are protected by locks or
+  // activity. Start with the normal protected/LWW winner, then overlay those
+  // active rules by ID. Once no rule is active, the ordinary list policy alone
+  // applies: an unrelated timer never retains the losing list's inactive
+  // rules (apart from the existing global-lock winner policy itself).
+  const aHasCategory = a.categorySchedules !== undefined;
+  const bHasCategory = b.categorySchedules !== undefined;
+  let categorySchedules: CategoryScheduleRule[] | undefined;
+  let categorySchedulesUpdatedAt = 0;
+  if (aHasCategory || bHasCategory) {
+    const aCategory = a.categorySchedules ?? [];
+    const bCategory = b.categorySchedules ?? [];
+    const aCategoryTs = a.categorySchedulesUpdatedAt ?? 0;
+    const bCategoryTs = b.categorySchedulesUpdatedAt ?? 0;
+    const aActive = aCategory.filter((r) => scopedRuleActive(r, now));
+    const bActive = bCategory.filter((r) => scopedRuleActive(r, now));
+    const aProtected = aLocked || aActive.length > 0;
+    const bProtected = bLocked || bActive.length > 0;
+    let selected: CategoryScheduleRule[];
+    categorySchedulesUpdatedAt = Math.max(aCategoryTs, bCategoryTs);
+    if (!aHasCategory || !bHasCategory) {
+      selected = aHasCategory ? aCategory : bCategory;
+      categorySchedulesUpdatedAt = aHasCategory ? aCategoryTs : bCategoryTs;
+    } else if (aProtected !== bProtected) {
+      selected = aProtected ? aCategory : bCategory;
+      categorySchedulesUpdatedAt = aProtected ? aCategoryTs : bCategoryTs;
+    } else if (aCategoryTs !== bCategoryTs) {
+      selected = aCategoryTs > bCategoryTs ? aCategory : bCategory;
+    } else {
+      selected = [...aCategory, ...bCategory];
+      // Canonicalize every winner so self-merge is idempotent.
+    }
+    if (aActive.length > 0 || bActive.length > 0) {
+      selected = [...selected, ...aActive, ...bActive];
+      // Canonicalize every winner so self-merge is idempotent.
+    }
+    categorySchedules = canonicalCategoryRules(selected, now, true);
   }
 
   // Break: one timestamped LWW operation, NOT independent timestamp maxima.
@@ -522,6 +675,10 @@ export function mergeLockStates(a: LockState, b: LockState, now: number): LockSt
     schedules,
     schedulesUpdatedAt,
   };
+  if (categorySchedules !== undefined) {
+    merged.categorySchedules = categorySchedules;
+    merged.categorySchedulesUpdatedAt = categorySchedulesUpdatedAt;
+  }
   if (includeDelay) {
     merged.delayUntil = delayWinner.delayUntil ?? null;
     merged.delayDurationMs = delayWinner.delayDurationMs ?? null;
@@ -530,6 +687,10 @@ export function mergeLockStates(a: LockState, b: LockState, now: number): LockSt
   if (includeRandom) {
     merged.randomTextLen = randomWinner.randomTextLen ?? null;
     merged.randomTextUpdatedAt = Math.max(aRandomTs, bRandomTs);
+  }
+  if (includePartner) {
+    merged.partnerArmGeneration = partnerWinner.partnerArmGeneration ?? null;
+    merged.partnerArmUpdatedAt = Math.max(aPartnerTs, bPartnerTs);
   }
   return merged;
 }
@@ -546,7 +707,7 @@ export function sanitizeLockState(raw: unknown, now: number, maxLockMs: number):
   const until = (v: unknown): number | null =>
     typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.min(v, cap) : null;
   const stamp = (v: unknown): number =>
-    typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.min(v, now) : 0;
+    typeof v === 'number' && Number.isSafeInteger(v) && v > 0 ? Math.min(v, now) : 0;
   const schedules = Array.isArray(o.schedules)
     ? (o.schedules as ScheduleRule[]).filter(
         (r) =>
@@ -556,6 +717,24 @@ export function sanitizeLockState(raw: unknown, now: number, maxLockMs: number):
           validateScheduleRule(r) === null,
       )
     : [];
+  let categorySchedules: CategoryScheduleRule[] | undefined;
+  if (Array.isArray(o.categorySchedules)) {
+    const candidates = o.categorySchedules.filter(
+      (r): r is CategoryScheduleRule =>
+        r !== null &&
+        typeof r === 'object' &&
+        typeof (r as CategoryScheduleRule).id === 'string' &&
+        validateCategoryScheduleRule(r as CategoryScheduleRule) === null,
+    );
+    // All-or-neutral: a malformed scoped list (including duplicate IDs) must
+    // not become an explicit empty deletion or retain only convenient rules.
+    if (
+      candidates.length === o.categorySchedules.length &&
+      new Set(candidates.map((r) => r.id)).size === candidates.length
+    ) {
+      categorySchedules = candidates;
+    }
+  }
   const breakCap = now + MAX_BREAK_MS;
   const breakTimestamp = (v: unknown): number | null =>
     typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.min(v, breakCap) : null;
@@ -624,6 +803,18 @@ export function sanitizeLockState(raw: unknown, now: number, maxLockMs: number):
       };
     }
   }
+  let partner: Pick<LockState, 'partnerArmGeneration' | 'partnerArmUpdatedAt'> | null = null;
+  if (owns('partnerArmGeneration') || owns('partnerArmUpdatedAt')) {
+    const released = o.partnerArmGeneration === null || o.partnerArmGeneration === undefined;
+    const armed =
+      typeof o.partnerArmGeneration === 'string' && /^[0-9a-f]{64}$/.test(o.partnerArmGeneration);
+    if (released || armed) {
+      partner = {
+        partnerArmGeneration: released ? null : (o.partnerArmGeneration as string),
+        partnerArmUpdatedAt: stamp(o.partnerArmUpdatedAt),
+      };
+    }
+  }
 
   const sanitized: LockState = {
     breakStartedAt: validBreak ? startedAt : null,
@@ -640,8 +831,13 @@ export function sanitizeLockState(raw: unknown, now: number, maxLockMs: number):
     schedules,
     schedulesUpdatedAt: stamp(o.schedulesUpdatedAt),
   };
+  if (categorySchedules !== undefined) {
+    sanitized.categorySchedules = categorySchedules;
+    sanitized.categorySchedulesUpdatedAt = stamp(o.categorySchedulesUpdatedAt);
+  }
   if (delay) Object.assign(sanitized, delay);
   if (random) Object.assign(sanitized, random);
+  if (partner) Object.assign(sanitized, partner);
   return sanitized;
 }
 
@@ -666,6 +862,29 @@ export function validateScheduleRule(r: ScheduleRule): string | null {
   }
   if (r.tzName !== undefined && (typeof r.tzName !== 'string' || r.tzName.length > 64)) {
     return 'Timezone name must be a short string.';
+  }
+  return null;
+}
+
+/** Category checks run after the exact legacy-window validator. Mirrored by
+ * validate_category_schedule_rule in the companion's lock_math.rs. */
+export function validateCategoryScheduleRule(r: CategoryScheduleRule): string | null {
+  const baseProblem = validateScheduleRule(r);
+  if (baseProblem !== null) return baseProblem;
+  if (!Array.isArray(r.categories) || r.categories.length === 0) {
+    return 'Pick at least one category.';
+  }
+  if (r.categories.length > 64) return 'Choose no more than 64 categories.';
+  for (const category of r.categories) {
+    if (typeof category !== 'string' || category.length === 0 || category.length > 64) {
+      return 'Categories must be nonempty strings of at most 64 characters.';
+    }
+    if (category.trim() !== category) {
+      return 'Categories cannot have leading or trailing whitespace.';
+    }
+  }
+  if (new Set(r.categories).size !== r.categories.length) {
+    return 'Categories must be unique.';
   }
   return null;
 }

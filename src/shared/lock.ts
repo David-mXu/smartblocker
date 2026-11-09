@@ -16,13 +16,20 @@ import {
   armedDelayLock,
   armedRandomTextLength,
   clampDelayLockDuration,
+  currentWindowEnd,
   deriveLockStatus,
   makeBreakOperation,
   mergeLockStates,
   sanitizeLockState,
+  validateCategoryScheduleRule,
   validateScheduleRule,
 } from './lock-math';
-import type { LockState, LockStatus, ScheduleRule } from './lock-math';
+import type {
+  CategoryScheduleRule,
+  LockState,
+  LockStatus,
+  ScheduleRule,
+} from './lock-math';
 
 const STORAGE_KEY = 'lockState';
 
@@ -395,6 +402,39 @@ export async function setSchedules(rules: ScheduleRule[]): Promise<void> {
     ...(await getLockState()),
     schedules: pinned,
     schedulesUpdatedAt: Date.now(),
+  });
+}
+
+/** Replace only category-scoped windows. These never become settings locks or
+ * global force-blocking reasons, but an active scope still cannot be deleted
+ * as a shortcut around its selected-category block. */
+export async function setCategorySchedules(rules: CategoryScheduleRule[]): Promise<void> {
+  const now = Date.now();
+  const state = await getLockState();
+  if (deriveLockStatus(state, now).settingsLocked) {
+    throw new Error('Schedules cannot be changed while SmartBlocker is locked.');
+  }
+  if (currentWindowEnd(state.categorySchedules ?? [], new Date(now)) !== null) {
+    throw new Error('Category schedules cannot be changed while a category window is active.');
+  }
+  const ids = new Set<string>();
+  for (const r of rules) {
+    const problem = validateCategoryScheduleRule(r);
+    if (problem) throw new Error(`Invalid category schedule: ${problem}`);
+    if (ids.has(r.id)) throw new Error('Category schedule IDs must be unique.');
+    ids.add(r.id);
+  }
+  const tzOffsetMinutes = -new Date().getTimezoneOffset();
+  const tzName = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const pinned = rules.map((r) => ({
+    ...r,
+    tzOffsetMinutes: r.tzOffsetMinutes ?? tzOffsetMinutes,
+    tzName: r.tzName ?? (typeof tzName === 'string' ? tzName.slice(0, 64) : undefined),
+  }));
+  await writeLockState({
+    ...state,
+    categorySchedules: pinned,
+    categorySchedulesUpdatedAt: now,
   });
 }
 

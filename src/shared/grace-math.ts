@@ -6,8 +6,8 @@
 // This module therefore never infers a close deadline from outgoing traffic.
 // A grace observation must come from the enforcing peer. `graceRemainingMs`
 // is the authoritative amount left when the extension observed that status;
-// `observedAtMs` is on the extension's display clock. The current v2 protocol
-// does not carry these observations yet (see the 2026-11-08 learning note).
+// `observedAtMs` is on the extension's display clock. Protocol v2 carries an
+// optional additive observation; older peers therefore render `unknown`.
 
 export type ExtensionGraceState = 'connected' | 'grace' | 'expired' | 'unknown';
 
@@ -24,6 +24,11 @@ export interface ExtensionGraceObservation {
    *  ignored for 'connected'. Relative milliseconds avoid subtracting the
    *  daemon's monotonic clock from the extension's wall clock. */
   graceRemainingMs: number | null;
+}
+
+export interface ObservedExtensionGrace extends ExtensionGraceObservation {
+  /** Daemon's actual enforcement duration, not an extension-side setting. */
+  graceSeconds: number;
 }
 
 export interface ExtensionGraceResult {
@@ -48,8 +53,35 @@ const CONNECTED_EXTENSION_GRACE: ExtensionGraceResult = {
 // turning a positive sub-second remainder into zero prematurely.
 export const GRACE_DISPLAY_EPSILON_SECONDS = 1e-9;
 
-function finite(value: number | null): value is number {
+function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
+}
+
+/** Validate untrusted wire data and bind relative daemon time to the local
+ * receipt clock. Nothing here inspects outgoing heartbeat timestamps. */
+export function observeExtensionGrace(
+  raw: unknown,
+  observedAtMs: number,
+): ObservedExtensionGrace | null {
+  if (!finite(observedAtMs) || raw === null || typeof raw !== 'object') return null;
+  const status = raw as {
+    state?: unknown;
+    graceSeconds?: unknown;
+    graceRemainingMs?: unknown;
+  };
+  if (status.state !== 'connected' && status.state !== 'grace') return null;
+  if (!finite(status.graceSeconds) || status.graceSeconds <= 0) return null;
+  const graceMs = status.graceSeconds * 1000;
+  if (!Number.isFinite(graceMs) || graceMs > Number.MAX_SAFE_INTEGER) return null;
+  const graceRemainingMs = status.graceRemainingMs;
+  if (status.state === 'grace' && !finite(graceRemainingMs)) return null;
+  return {
+    state: status.state,
+    observedAtMs,
+    lastHeartbeatAtMs: null,
+    graceRemainingMs: status.state === 'grace' && finite(graceRemainingMs) ? graceRemainingMs : null,
+    graceSeconds: status.graceSeconds,
+  };
 }
 
 /** Derive display state from an authoritative observation at `nowMs`.

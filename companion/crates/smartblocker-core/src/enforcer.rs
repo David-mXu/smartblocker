@@ -86,7 +86,7 @@ pub enum Action {
     },
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SuspectTrack {
     since_mono_ms: u64,
 }
@@ -103,6 +103,35 @@ pub struct EnforcerState {
     /// App names already notified this enforcement session (kills repeat
     /// every tick while the process lives; nagging must not).
     notified_apps: HashSet<String>,
+}
+
+impl EnforcerState {
+    /// Exact time left on the same suspect track used by `tick` for its close
+    /// decision. `None` means this browser is not in extension-loss grace;
+    /// zero means the deadline has arrived but the process may still exist.
+    pub fn grace_remaining_ms(&self, kind: CompanionBrowser, now_mono_ms: u64) -> Option<u64> {
+        self.suspects.get(&kind).map(|track| {
+            WATCHDOG_GRACE_MS.saturating_sub(now_mono_ms.saturating_sub(track.since_mono_ms))
+        })
+    }
+
+    /// Whether every browser's exact grace-start track is unchanged. Passage
+    /// of time does not alter tracks and therefore needs no revision bump.
+    pub(crate) fn same_grace_tracks(&self, other: &Self) -> bool {
+        self.suspects == other.suspects
+    }
+
+    /// Active grace tracks in the protocol's stable browser order.
+    pub fn grace_browsers(&self) -> Vec<CompanionBrowser> {
+        [
+            CompanionBrowser::Chrome,
+            CompanionBrowser::Edge,
+            CompanionBrowser::Firefox,
+        ]
+        .into_iter()
+        .filter(|kind| self.suspects.contains_key(kind))
+        .collect()
+    }
 }
 
 pub struct TickInputs<'a> {
@@ -590,16 +619,36 @@ mod tests {
         let (s1, a1) = tick_at(&EnforcerState::default(), 1_000, &status, &procs, &[], &cfg);
         assert_eq!(notifies(&a1), 1);
         assert!(kills(&a1).is_empty());
+        assert_eq!(s1.grace_browsers(), vec![CompanionBrowser::Chrome]);
+        assert_eq!(
+            s1.grace_remaining_ms(CompanionBrowser::Chrome, 1_000),
+            Some(60_000)
+        );
+        assert_eq!(s1.grace_remaining_ms(CompanionBrowser::Edge, 1_000), None);
 
-        // Mid-grace: silent.
+        // Mid-grace: silent. The public observation is exactly the track used
+        // by the next close decision, not heartbeat-send arithmetic.
         let (s2, a2) = tick_at(&s1, 30_000, &status, &procs, &[], &cfg);
         assert!(a2.is_empty());
+        assert_eq!(
+            s2.grace_remaining_ms(CompanionBrowser::Chrome, 30_000),
+            Some(31_000)
+        );
 
-        // Grace expired: every chrome pid killed.
-        let (_s3, a3) = tick_at(&s2, 61_001, &status, &procs, &[], &cfg);
+        // Grace expired: every chrome pid killed and the observation clamps
+        // at zero until a later tick no longer sees the browser process.
+        let (s3, a3) = tick_at(&s2, 61_001, &status, &procs, &[], &cfg);
         assert_eq!(
             kills(&a3),
             vec![(10, KillReason::Watchdog), (11, KillReason::Watchdog)]
+        );
+        assert_eq!(
+            s3.grace_remaining_ms(CompanionBrowser::Chrome, 61_001),
+            Some(0)
+        );
+        assert_eq!(
+            s3.grace_remaining_ms(CompanionBrowser::Chrome, 120_000),
+            Some(0)
         );
     }
 

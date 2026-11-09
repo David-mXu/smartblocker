@@ -8,11 +8,14 @@ import { NEUTRAL_PREFIX } from '../shared/prototypes';
 import { cleanTitle } from '../shared/titles';
 import { hostnameOf } from '../shared/url-signals';
 import type {
+  AllowanceResponse,
   BreakResponse,
   CompanionStatusResponse,
   CompleteOnboardingResponse,
   DeleteSharedFeedbackResponse,
+  FocusCycleResponse,
   LockTypeResponse,
+  PartnerCommandResponse,
   Request,
   SharedFeedbackInfoResponse,
   SubItemsResponse,
@@ -25,7 +28,7 @@ import { completeOnboarding, verifyProtection } from './protection-verification'
 import { consumeOverrideToken } from './override-tokens';
 import { evaluateSubItems, initBlocker, sweepOpenTabs } from './blocker';
 import { cancelConfiguredBreak, requestBreakChallenge, startConfiguredBreak } from './breaks';
-import { getCompanionSnapshot, initCompanionBridge } from './companion';
+import { getCompanionSnapshot, initCompanionBridge, submitPartnerCommand } from './companion';
 import { deleteSharedFeedback, getExistingInstallId, initFeedbackUploader } from './feedback-uploader';
 import { initLockEnforcer } from './lock-enforcer';
 import {
@@ -36,6 +39,8 @@ import {
   startDelayUnlockRpc,
 } from './lock-types';
 import { initResumeEnforcer } from './resume-enforcer';
+import { getAllowanceResponse, submitAllowanceCommand } from './allowance';
+import { cancelFocusCycle, getFocusCycleResponse, initFocusCycleScheduler, startFocusCycle } from './focus-cycles';
 import { scanHistory } from './history-ingester';
 import { initFocusSessionCommitter } from '../shared/focus-session';
 import { recordTabStatus } from '../shared/tab-status';
@@ -67,6 +72,7 @@ initResumeEnforcer(); // registers runtime.onStartup here (auto-resume, constrai
 initCompanionBridge();
 initFocusSessionCommitter();
 initUsageStats();
+initFocusCycleScheduler();
 
 // First-run onboarding: open the 3-step welcome wizard (options.html#welcome)
 // so the user picks what to block. Plain options.html never forces the
@@ -82,15 +88,18 @@ api.runtime.onMessage.addListener(
     sendResponse: (
       r:
         | TestPairResponse
+        | AllowanceResponse
         | BreakResponse
         | LockTypeResponse
         | CompanionStatusResponse
+        | PartnerCommandResponse
         | SubItemsResponse
         | SharedFeedbackInfoResponse
         | DeleteSharedFeedbackResponse
         | UsageStatsResponse
         | VerifyProtectionResponse
-        | CompleteOnboardingResponse,
+        | CompleteOnboardingResponse
+        | FocusCycleResponse,
     ) => void,
   ) => {
     // Defense-in-depth (red-team #34): only this extension's own contexts
@@ -102,6 +111,46 @@ api.runtime.onMessage.addListener(
       evaluateSubItems(msg.items ?? [], sender.tab?.id)
         .then((results) => sendResponse({ ok: true, results }))
         .catch((e) => sendResponse({ ok: false, error: String(e) }));
+      return true;
+    }
+    if (msg?.type === 'PARTNER_COMMAND') {
+      submitPartnerCommand(msg.command)
+        .then((response) => sendResponse(response))
+        .catch((error) => sendResponse({ ok: false, error: String(error) }));
+      return true;
+    }
+    if (msg?.type === 'GET_ALLOWANCE_AUTHORITY') {
+      getAllowanceResponse()
+        .then((response) => sendResponse(response))
+        .catch((error) => sendResponse({ ok: false, error: String(error) }));
+      return true;
+    }
+    if (msg?.type === 'ALLOWANCE_COMMAND') {
+      submitAllowanceCommand(msg.command)
+        .then((response) => sendResponse(response))
+        .catch((error) => sendResponse({ ok: false, error: String(error) }));
+      return true;
+    }
+    if (msg?.type === 'GET_FOCUS_CYCLE') {
+      getFocusCycleResponse().then((response) => sendResponse(response));
+      return true;
+    }
+    if (msg?.type === 'START_FOCUS_CYCLE') {
+      startFocusCycle({
+        category: msg.category,
+        mode: msg.mode,
+        workMinutes: msg.workMinutes,
+        breakMinutes: msg.breakMinutes,
+        cycles: msg.cycles,
+      })
+        .then((response) => sendResponse(response))
+        .catch((error) => sendResponse({ ok: false, error: String(error) }));
+      return true;
+    }
+    if (msg?.type === 'CANCEL_FOCUS_CYCLE') {
+      cancelFocusCycle()
+        .then((response) => sendResponse(response))
+        .catch((error) => sendResponse({ ok: false, error: String(error) }));
       return true;
     }
     if (msg?.type === 'TEST_PAIR') {

@@ -131,6 +131,7 @@ const LOCK_REASON_NAMES: Record<LockStatus['reasons'][number], string> = {
   delay: 'delay lock',
   'random-text': 'random-text lock',
   schedule: 'focus hours',
+  partner: 'accountability partner',
 };
 
 /** "Locked: focus session — 3h 12m left (until 3:40 PM)". Empty when unlocked. */

@@ -60,6 +60,7 @@ export const REASON_NAMES: Record<LockStatus['reasons'][number], string> = {
   'random-text': 'random-text lock',
   frozen: 'focus session',
   schedule: 'focus hours',
+  partner: 'accountability partner',
 };
 
 /** Header pill: "Locked · 3h 12m". */

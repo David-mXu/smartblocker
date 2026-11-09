@@ -288,10 +288,9 @@ function ConnectionSection() {
     setMsg(null);
     try {
       const result = await invoke('install_integration');
-      setMsg({
-        tone: 'ok',
-        text: status.testMode ? result : 'Browser connection repaired. SmartBlocker will also start with Windows.',
-      });
+      // Preserve the shell's per-browser and autostart outcomes verbatim;
+      // never replace them with an all-browser success claim.
+      setMsg({ tone: 'ok', text: result });
     } catch (e) {
       setMsg({ tone: 'error', text: errorText(e) });
     } finally {
@@ -304,8 +303,8 @@ function ConnectionSection() {
     <SettingsSection title="Browser connection">
       <SettingsGroup>
         <SettingRow
-          label="Repair browser connection"
-          description="Reconnects SmartBlocker in Chrome, Edge and Firefox to this app. Use it if a browser shows as not protected."
+          label="Repair browser connections"
+          description="Repairs and verifies registration only for detected browsers, then enables startup. This does not install an extension or prove that one is connected."
           control={
             <Button id="settings-repair" variant="secondary" size="sm" onClick={repair} disabled={busy}>
               Repair
@@ -316,7 +315,11 @@ function ConnectionSection() {
           label="Start with Windows"
           description={
             <span id="autostart-status">
-              {status.autostart ? 'On — starts when you sign in to Windows' : 'Off — Repair browser connection turns it on'}
+              {status.testMode
+                ? 'Unchanged — test mode does not inspect or modify startup settings'
+                : status.autostart
+                  ? 'On — starts when you sign in to Windows'
+                  : 'Off — repairing a detected browser connection turns it on'}
             </span>
           }
         />

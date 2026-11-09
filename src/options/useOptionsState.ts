@@ -173,6 +173,9 @@ export function useOptionsState(): OptionsState {
       if (changes['lockState']) void refreshLock();
       if (changes['pendingFocusSession']) void refreshPendingFocus();
       if (changes['settings']) void reloadSettings();
+      // The background clears grace on relay loss and publishes recovery.
+      // Mirror those transitions immediately; the 5s poll is only a fallback.
+      if (changes['companionSnapshot']) void refreshCompanion();
     };
     api.storage.onChanged.addListener(onStorageChanged);
 

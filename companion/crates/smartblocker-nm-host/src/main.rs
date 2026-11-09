@@ -41,6 +41,13 @@ fn unavailable_status() -> serde_json::Value {
             },
             // EMPTY merges as a no-op on the extension side.
             lock_state: LockState::default(),
+            // An unreachable daemon has no ordinary-blocking authority either.
+            blocking: None,
+            // A relay that cannot reach the daemon has no grace authority.
+            extension_loss: None,
+            // Nor can an unreachable daemon disclose public partner state.
+            partner: None,
+            allowance: None,
         },
     })
     .expect("protocol types serialize")

@@ -133,10 +133,18 @@ class FrameStream {
 }
 
 const lockStatePath = join(DATA_DIR, 'lock-state.json');
+const blockingStatePath = join(DATA_DIR, 'blocking-state.json');
 const eventsPath = join(DATA_DIR, 'events.log');
 const readLockState = () => {
   try {
     return JSON.parse(readFileSync(lockStatePath, 'utf8'));
+  } catch {
+    return null;
+  }
+};
+const readBlockingState = () => {
+  try {
+    return JSON.parse(readFileSync(blockingStatePath, 'utf8'));
   } catch {
     return null;
   }
@@ -148,6 +156,63 @@ const readEvents = () => {
     return '';
   }
 };
+function daemonCli(...args) {
+  return spawnSync(DAEMON_BIN, [...args, '--socket', SOCKET], {
+    encoding: 'utf8',
+    timeout: 10_000,
+  });
+}
+async function extensionBlockingView() {
+  return sw.evaluate(async () => {
+    const stored = await chrome.storage.local.get(['settings', 'companionSnapshot']);
+    return {
+      enabled: stored.settings?.enabled ?? true,
+      authority: stored.companionSnapshot?.status?.blocking ?? null,
+    };
+  });
+}
+async function waitForBlocking(enabled, minimumRevision) {
+  const observed = await poll(
+    async () => {
+      const durable = readBlockingState();
+      const local = await extensionBlockingView();
+      return (
+        durable?.enabled === enabled &&
+        durable.revision >= minimumRevision &&
+        local.enabled === enabled &&
+        local.authority?.enabled === durable.enabled &&
+        local.authority?.revision === durable.revision
+      );
+    },
+    15_000,
+    `blocking=${enabled}, revision>=${minimumRevision} reaches the extension`,
+  );
+  if (!observed) {
+    console.log('  … blocking mismatch diagnostic:', JSON.stringify({
+      durable: readBlockingState(),
+      local: await extensionBlockingView().catch((error) => ({ error: error.message })),
+    }));
+  }
+  return observed;
+}
+async function setExtensionEnabled(enabled) {
+  await sw.evaluate(async (value) => {
+    const stored = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({
+      settings: { ...(stored.settings ?? {}), enabled: value },
+    });
+  }, enabled);
+}
+async function rapidExtensionEnabledSequence(...enabledValues) {
+  await sw.evaluate(async (sequence) => {
+    const stored = await chrome.storage.local.get('settings');
+    let settings = stored.settings ?? {};
+    for (const enabled of sequence) {
+      settings = { ...settings, enabled };
+      await chrome.storage.local.set({ settings });
+    }
+  }, enabledValues);
+}
 
 // 4. Chromium with the extension; SMARTBLOCKER_SOCKET reaches nm-host via env.
 async function launchWithServiceWorker() {
@@ -201,6 +266,31 @@ try {
   check(connectedOk, 'options page shows "Connected — hardcore mode active"');
   check(/hello.*chrome/i.test(readEvents()), 'daemon logged the extension hello (registry live)');
 
+  // Item 8 full-loop authority check: this is the REAL daemon's post-hello
+  // enforcer observation passing through nm-host → onPortMessage → the
+  // extension cache, not a heartbeat-send timestamp or a test injection.
+  let genuineSnapshot = null;
+  check(
+    await poll(
+      async () => {
+        const stored = await sw.evaluate(() => chrome.storage.local.get('companionSnapshot'));
+        genuineSnapshot = stored.companionSnapshot ?? null;
+        const observed = genuineSnapshot?.extensionLoss;
+        return (
+          genuineSnapshot?.status?.extensionLoss?.state === 'connected' &&
+          observed?.state === 'connected' &&
+          observed?.graceSeconds === 60 &&
+          observed?.graceRemainingMs === null &&
+          Number.isFinite(observed?.observedAtMs) &&
+          Math.abs(observed.observedAtMs - Date.now()) < 60_000
+        );
+      },
+      15_000,
+      'healthy daemon observation reaches the real extension cache',
+    ),
+    'real authenticated daemon observation is receipt-stamped in the extension cache',
+  );
+
   // (a1) Watchdog liveness probe (#7 residual): protocol PING is answered
   // with a PONG carrying the daemon instance identity (pid + mono-ms), and
   // probe-only connections must not produce relay-disconnect log noise.
@@ -233,6 +323,386 @@ try {
   await sleep(300); // let any disconnect logging flush
   const disconnectsAfter = (readEvents().match(/relay-disconnect/g) ?? []).length;
   check(disconnectsAfter === disconnectsBefore, 'probe-only connections never log relay-disconnect');
+
+  // (a0) Item 13: REAL daemon CLI + REAL Chromium storage/native-messaging
+  // loop. Start with no active lock so both directions of ordinary blocking
+  // are legal; every revision below comes from the daemon, never test code.
+  check(
+    await waitForBlocking(true, 1),
+    'fresh daemon initializes from authenticated Chromium hello without a CLI write',
+  );
+  let cliResult = daemonCli('block', 'start');
+  check(cliResult.status === 0, `block start acknowledged (${cliResult.stdout.trim()}${cliResult.stderr.trim()})`);
+  check(await waitForBlocking(true, 1), 'block start persists and enables ordinary blocking in Chromium');
+  const beforeStopRevision = readBlockingState()?.revision ?? 0;
+
+  cliResult = daemonCli('block', 'stop');
+  check(cliResult.status === 0, 'block stop acknowledged outside a lock');
+  check(
+    await waitForBlocking(false, beforeStopRevision + 1),
+    'block stop propagates daemon authority into the real extension',
+  );
+  const stoppedRevision = readBlockingState()?.revision ?? beforeStopRevision + 1;
+
+  // A genuine settings storage change must travel extension -> nm-host ->
+  // daemon and increment the durable revision. The daemon-applied return
+  // write is then recognized as an echo rather than another user intent.
+  await setExtensionEnabled(true);
+  check(
+    await waitForBlocking(true, stoppedRevision + 1),
+    'Chromium settings intent persists back through native messaging to the daemon',
+  );
+  const convergedRevision = readBlockingState()?.revision ?? stoppedRevision + 1;
+  await sleep(800);
+  check(
+    readBlockingState()?.revision === convergedRevision,
+    'daemon-applied settings echo terminates without revision churn',
+  );
+
+  const beforeRapidOn = readBlockingState()?.revision ?? convergedRevision;
+  await rapidExtensionEnabledSequence(false, true);
+  check(
+    await waitForBlocking(true, beforeRapidOn + 2),
+    'rapid real-storage off→on rebases the newest intent after the older acknowledgement',
+  );
+  await sleep(300);
+  check(
+    readBlockingState()?.revision === beforeRapidOn + 2,
+    'rapid off→on settles after exactly one intent per daemon revision',
+  );
+
+  const beforeToggleOff = readBlockingState()?.revision ?? convergedRevision;
+  cliResult = daemonCli('block', 'toggle');
+  check(cliResult.status === 0, 'block toggle-off acknowledged outside a lock');
+  check(
+    await waitForBlocking(false, beforeToggleOff + 1),
+    'block toggle-off reaches the real extension',
+  );
+  const beforeRapidOff = readBlockingState()?.revision ?? beforeToggleOff + 1;
+  await rapidExtensionEnabledSequence(true, false);
+  check(
+    await waitForBlocking(false, beforeRapidOff + 2),
+    'rapid real-storage on→off cannot be overwritten by the older on acknowledgement',
+  );
+  await sleep(300);
+  check(
+    readBlockingState()?.revision === beforeRapidOff + 2,
+    'rapid on→off also settles without revision churn',
+  );
+  const beforeToggleOn = readBlockingState()?.revision ?? beforeToggleOff + 1;
+  cliResult = daemonCli('block', 'toggle');
+  check(cliResult.status === 0, 'block toggle-on acknowledged outside a lock');
+  check(
+    await waitForBlocking(true, beforeToggleOn + 1),
+    'block toggle-on reaches the real extension',
+  );
+
+  // Item 14: a REAL classifier + cached-policy + boundary-sweep loop. The
+  // active scope blocks despite the category being absent from blockedLabels;
+  // an inactive scope then rescues a REAL model verdict, but never a rule hit.
+  const beforeScopedPolicy = await sw.evaluate(() =>
+    chrome.storage.local.get(['settings', 'lockState']),
+  );
+  const setScopedPolicy = async ({ active, blockGames, deterministic }) => {
+    await sw.evaluate(
+      async ({ active, blockGames, deterministic }) => {
+        const stored = await chrome.storage.local.get(['settings', 'lockState']);
+        const now = new Date();
+        const minute = now.getHours() * 60 + now.getMinutes();
+        const categories = ['video games'];
+        const scoped = {
+          id: 'e2e-category-window',
+          days: active
+            ? [...new Set([now.getDay(), (now.getDay() + 6) % 7])]
+            : [(now.getDay() + 1) % 7],
+          startMinutes: active ? (minute + 1438) % 1440 : 0,
+          endMinutes: active ? (minute + 120) % 1440 : 1439,
+          tzOffsetMinutes: -now.getTimezoneOffset(),
+          categories,
+        };
+        await chrome.storage.local.set({
+          settings: {
+            ...stored.settings,
+            enabled: true,
+            blockThreshold: 0.5,
+            blockedLabels: blockGames
+              ? [...new Set([...(stored.settings?.blockedLabels ?? []), 'video games'])]
+              : (stored.settings?.blockedLabels ?? []).filter((label) => label !== 'video games'),
+            blocklist: deterministic
+              ? [...new Set([...(stored.settings?.blocklist ?? []), 'dark souls'])]
+              : (stored.settings?.blocklist ?? []).filter((rule) => rule !== 'dark souls'),
+          },
+          lockState: {
+            ...stored.lockState,
+            categorySchedules: [scoped],
+            categorySchedulesUpdatedAt: Date.now(),
+          },
+        });
+      },
+      { active, blockGames, deterministic },
+    );
+  };
+  const scopedWatch = (title) =>
+    `<!doctype html><html><head><title>${title} - YouTube</title></head><body><h1>${title}</h1></body></html>`;
+  await context.route('**://www.youtube.com/**', (route) => {
+    const u = new URL(route.request().url());
+    route.fulfill({
+      contentType: 'text/html',
+      body: scopedWatch(decodeURIComponent(u.searchParams.get('t') ?? 'YouTube')),
+    });
+  });
+  const scopedTab = await context.newPage();
+  const scopedUrl = 'https://www.youtube.com/watch?v=x&t=' + encodeURIComponent('speedrunning Dark Souls');
+  const hasScopedBlockScreen = async () => {
+    if (await scopedTab.locator('#smartblocker-overlay').count().catch(() => 0)) return true;
+    const u = new URL(scopedTab.url());
+    return u.protocol === 'chrome-extension:' && u.pathname.endsWith('/blocked.html');
+  };
+  await setScopedPolicy({ active: true, blockGames: false, deterministic: false });
+  await scopedTab.goto(scopedUrl);
+  check(
+    await poll(hasScopedBlockScreen, MODEL_TIMEOUT_MS, 'active category schedule blocks the game page'),
+    'active per-category schedule blocks without the ordinary blocked label',
+  );
+
+  await setScopedPolicy({ active: false, blockGames: true, deterministic: false });
+  const sampleCountBeforeRescue = await sw.evaluate(async () => {
+    const stored = await chrome.storage.local.get('latencySamples');
+    return (stored.latencySamples ?? []).length;
+  });
+  await scopedTab.goto(scopedUrl);
+  check(
+    await poll(
+      async () => {
+        const stored = await sw.evaluate(() => chrome.storage.local.get('latencySamples'));
+        return (stored.latencySamples ?? [])
+          .slice(sampleCountBeforeRescue)
+          .some((sample) => sample.url === scopedUrl && sample.blocked === false);
+      },
+      MODEL_TIMEOUT_MS,
+      'inactive schedule rescues a completed classifier verdict',
+    ),
+    'inactive per-category schedule rescues a real classifier block',
+  );
+
+  await setScopedPolicy({ active: false, blockGames: true, deterministic: true });
+  await scopedTab.goto(`${scopedUrl}&case=deterministic`);
+  check(
+    await poll(hasScopedBlockScreen, 30_000, 'deterministic rule remains blocked outside category hours'),
+    'inactive per-category schedule cannot rescue a deterministic rule',
+  );
+  await sw.evaluate(async (original) => {
+    const current = await chrome.storage.local.get('lockState');
+    const restored = { ...current.lockState };
+    delete restored.categorySchedules;
+    delete restored.categorySchedulesUpdatedAt;
+    if (original.lockState?.categorySchedules !== undefined) {
+      restored.categorySchedules = original.lockState.categorySchedules;
+    }
+    if (original.lockState?.categorySchedulesUpdatedAt !== undefined) {
+      restored.categorySchedulesUpdatedAt = original.lockState.categorySchedulesUpdatedAt;
+    }
+    await chrome.storage.local.set({ settings: original.settings, lockState: restored });
+  }, beforeScopedPolicy);
+  await scopedTab.close();
+
+  // Already-classified SUBITEMS: no navigation between these assertions. The
+  // scoped epoch invalidates allowed states and classifier masks, while a
+  // deterministic sentinel must survive every transition.
+  await context.route('**://www.youtube.com/results*', (route) =>
+    route.fulfill({
+      contentType: 'text/html',
+      body: `<!doctype html><html><head><title>Search - YouTube</title></head><body>
+        <ytd-video-renderer class="e2e-game-card"><a id="video-title" href="/watch?v=gamevideo01" title="speedrunning Dark Souls">speedrunning Dark Souls</a></ytd-video-renderer>
+        <ytd-video-renderer class="e2e-rule-card"><a id="video-title" href="/watch?v=rulevideo01" title="deterministic sentinel">deterministic sentinel</a></ytd-video-renderer>
+      </body></html>`,
+    }),
+  );
+  await context.route('**://example.com/scoped-subitems', (route) =>
+    route.fulfill({
+      contentType: 'text/html',
+      body: `<!doctype html><html><head><title>Study notes</title></head><body>
+        <lite-youtube class="e2e-facade" videoid="gamevideo01" title="speedrunning Dark Souls"></lite-youtube>
+      </body></html>`,
+    }),
+  );
+  await setScopedPolicy({ active: false, blockGames: true, deterministic: false });
+  const searchTab = await context.newPage();
+  await searchTab.goto('https://www.youtube.com/results?search_query=games');
+  const embedTab = await context.newPage();
+  await embedTab.goto('https://example.com/scoped-subitems');
+  const attributes = (tab, selector) =>
+    tab.locator(selector).evaluate((el) => ({
+      state: el.getAttribute('data-smartblocker-state'),
+      masked: el.getAttribute('data-smartblocker-masked'),
+      classifier: el.getAttribute('data-smartblocker-classifier'),
+      bars: el.querySelectorAll(':scope > .smartblocker-mask-bar').length,
+    }));
+  const expectAllowed = async (tab, selector) =>
+    poll(
+      async () => {
+        const current = await attributes(tab, selector);
+        return current.state === 'allowed' && current.masked === null && current.bars === 0;
+      },
+      MODEL_TIMEOUT_MS,
+      `${selector} becomes allowed through the current scoped policy`,
+    );
+  const expectClassifierMask = async (tab, selector) =>
+    poll(
+      async () => {
+        const current = await attributes(tab, selector);
+        return current.masked !== null && current.classifier === '1' && current.bars === 1;
+      },
+      MODEL_TIMEOUT_MS,
+      `${selector} becomes classifier-masked by the active scoped policy`,
+    );
+  check(
+    (await expectAllowed(searchTab, '.e2e-game-card')) &&
+      (await expectAllowed(embedTab, '.e2e-facade')),
+    'existing search card and embed initially receive inactive classifier rescue',
+  );
+  await setScopedPolicy({ active: true, blockGames: false, deterministic: false });
+  check(
+    (await expectClassifierMask(searchTab, '.e2e-game-card')) &&
+      (await expectClassifierMask(embedTab, '.e2e-facade')),
+    'active scope re-gates existing allowed search card and embed without navigation',
+  );
+  await setScopedPolicy({ active: false, blockGames: true, deterministic: false });
+  check(
+    (await expectAllowed(searchTab, '.e2e-game-card')) &&
+      (await expectAllowed(embedTab, '.e2e-facade')),
+    'inactive scope clears existing classifier masks without navigation',
+  );
+
+  await sw.evaluate(async () => {
+    const stored = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({
+      settings: {
+        ...stored.settings,
+        blocklist: [...new Set([...(stored.settings?.blocklist ?? []), 'deterministic sentinel'])],
+      },
+    });
+  });
+  check(
+    await poll(
+      async () => (await attributes(searchTab, '.e2e-rule-card')).masked === 'serp-card',
+      30_000,
+      'deterministic sentinel becomes masked',
+    ),
+    'deterministic sentinel installs a rule-owned mask',
+  );
+  await setScopedPolicy({ active: true, blockGames: false, deterministic: false });
+  check(
+    await expectClassifierMask(searchTab, '.e2e-game-card'),
+    'next active epoch re-masks the classifier card beside the rule sentinel',
+  );
+  // At this point the page has lived through multiple policy epochs. A single
+  // persistent MutationObserver must dispatch with this CURRENT epoch rather
+  // than the first sanitizer invocation's stale epoch.
+  await searchTab.evaluate(() => {
+    const card = document.createElement('ytd-video-renderer');
+    card.className = 'e2e-lazy-card';
+    const link = document.createElement('a');
+    link.id = 'video-title';
+    link.href = '/watch?v=lazyvideo01';
+    link.title = 'speedrunning Dark Souls';
+    link.textContent = link.title;
+    card.appendChild(link);
+    document.body.appendChild(card);
+  });
+  check(
+    await expectClassifierMask(searchTab, '.e2e-lazy-card'),
+    'lazy card inserted after repeated epoch changes still accepts fresh verdicts',
+  );
+  const sentinelAfterActivation = await attributes(searchTab, '.e2e-rule-card');
+  await setScopedPolicy({ active: false, blockGames: true, deterministic: false });
+  check(
+    (await expectAllowed(searchTab, '.e2e-game-card')) &&
+      (await attributes(searchTab, '.e2e-rule-card')).masked === 'serp-card' &&
+      sentinelAfterActivation.classifier === null,
+    'scoped policy resets never clear deterministic masks',
+  );
+  await sw.evaluate(async (original) => {
+    const current = await chrome.storage.local.get('lockState');
+    const restored = { ...current.lockState };
+    delete restored.categorySchedules;
+    delete restored.categorySchedulesUpdatedAt;
+    if (original.lockState?.categorySchedules !== undefined) {
+      restored.categorySchedules = original.lockState.categorySchedules;
+    }
+    if (original.lockState?.categorySchedulesUpdatedAt !== undefined) {
+      restored.categorySchedulesUpdatedAt = original.lockState.categorySchedulesUpdatedAt;
+    }
+    await chrome.storage.local.set({ settings: original.settings, lockState: restored });
+  }, beforeScopedPolicy);
+  await searchTab.close();
+  await embedTab.close();
+
+  cliResult = daemonCli('lock', '1');
+  check(cliResult.status === 0, `lock 1 acknowledged (${cliResult.stdout.trim()}${cliResult.stderr.trim()})`);
+  const firstCliLock = readLockState();
+  const firstLockUntil = firstCliLock?.timerUntil ?? 0;
+  check(
+    firstLockUntil > Date.now() + 45_000 && readBlockingState()?.enabled === true,
+    'lock acknowledgement follows durable timer + enabled-state writes',
+  );
+  check(
+    await poll(
+      async () => {
+        const stored = await sw.evaluate(() => chrome.storage.local.get('lockState'));
+        return stored.lockState?.timerUntil === firstLockUntil;
+      },
+      15_000,
+      'CLI timer lock reaches Chromium',
+    ),
+    'CLI timer lock synchronizes into the real extension',
+  );
+
+  cliResult = daemonCli('lock', '2');
+  const secondLockUntil = readLockState()?.timerUntil ?? 0;
+  check(
+    cliResult.status === 0 && secondLockUntil > firstLockUntil,
+    'a later lock command extends the persisted monotonic deadline',
+  );
+  const lockedBlocking = readBlockingState();
+  cliResult = daemonCli('block', 'stop');
+  check(
+    cliResult.status !== 0 && /lock is active/.test(cliResult.stderr),
+    'block stop is truthfully refused during the CLI timer lock',
+  );
+  cliResult = daemonCli('block', 'toggle');
+  check(
+    cliResult.status !== 0 && /lock is active/.test(cliResult.stderr),
+    'block toggle-off is truthfully refused during the CLI timer lock',
+  );
+  check(
+    JSON.stringify(readBlockingState()) === JSON.stringify(lockedBlocking) &&
+      readLockState()?.timerUntil === secondLockUntil,
+    'locked disable refusals preserve both durable authority and timer deadline',
+  );
+
+  const beforeLockedStart = readBlockingState()?.revision ?? 0;
+  cliResult = daemonCli('block', 'start');
+  check(
+    cliResult.status === 0 && readBlockingState()?.revision === beforeLockedStart,
+    'block start remains legal and idempotent during a lock',
+  );
+
+  // Bypass the TypeScript setSettings guard deliberately. The daemon is the
+  // authority of last resort: reject the disable and return enabled=true;
+  // the extension's enable-only exception must be able to apply that healing.
+  await setExtensionEnabled(false);
+  check(
+    await waitForBlocking(true, beforeLockedStart),
+    'raw Chromium disable during a lock is refused and healed back to enabled',
+  );
+  cliResult = daemonCli('status', '--data-dir', DATA_DIR);
+  check(
+    cliResult.status === 0 &&
+      /blockingEnabled: on/.test(cliResult.stdout) &&
+      /settingsLocked: true/.test(cliResult.stdout),
+    'CLI status reports the persisted ordinary and timer-lock state truthfully',
+  );
 
   // (a+) Armed-phase kill (red-team #25): a timer-only countdown is NOT
   // force_blocking, yet the app blocklist must already be enforced the
@@ -288,6 +758,105 @@ try {
   }
   check(synced, `extension frozen turkey persisted by daemon within 15s (${frozenUntil})`);
 
+  // Item 8 RENDER FIXTURE ONLY: inject the already-validated cache response at
+  // the page's GET_COMPANION_STATUS boundary. This does NOT simulate a stale
+  // heartbeat or test the enforcer; the real daemon loop is checked above and
+  // below. Disabling only the 5s interval makes the storage-listener assertion
+  // deterministic instead of accidentally passing through the fallback poll.
+  async function openGraceFixture(path) {
+    const page = await context.newPage();
+    const fixture = {
+      state: 'connected',
+      status: {
+        companionVersion: 'ui-fixture',
+        pro: true,
+        enforcement: { appBlocking: true, watchdog: true, policyProtected: false },
+        lockState: genuineSnapshot?.status?.lockState ?? {},
+        extensionLoss: { state: 'grace', graceSeconds: 60, graceRemainingMs: 42_000 },
+      },
+      extensionLoss: {
+        state: 'grace',
+        observedAtMs: Date.now(),
+        lastHeartbeatAtMs: null,
+        graceRemainingMs: 42_000,
+        graceSeconds: 60,
+      },
+      lastConnectedAt: Date.now(),
+    };
+    await page.addInitScript((initial) => {
+      window.__graceFixture = initial;
+      window.__graceStatusReads = 0;
+      const sendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
+      const setInterval = window.setInterval.bind(window);
+      window.setInterval = (handler, delay, ...args) =>
+        delay === 5000 ? 0 : setInterval(handler, delay, ...args);
+      chrome.runtime.sendMessage = (...args) => {
+        if (args[0]?.type === 'GET_COMPANION_STATUS') {
+          window.__graceStatusReads++;
+          return Promise.resolve({
+            ok: true,
+            snapshot: structuredClone(window.__graceFixture),
+            incognitoAllowed: true,
+          });
+        }
+        return sendMessage(...args);
+      };
+    }, fixture);
+    await page.goto(`chrome-extension://${EXTENSION_ID}/${path}`);
+    return page;
+  }
+
+  const fixtureOpts = await openGraceFixture('options.html#companion');
+  check(
+    await poll(
+      async () => {
+        const text = (await fixtureOpts.locator('#companion-grace').textContent().catch(() => '')) ?? '';
+        const seconds = Number(text.match(/in (\d+)s/)?.[1] ?? 0);
+        return seconds > 0 && seconds <= 42;
+      },
+      10_000,
+      'injected grace fixture renders on options',
+    ),
+    'INJECTED UI FIXTURE: options renders the daemon-observation countdown wording',
+  );
+  const fixturePopup = await openGraceFixture('popup.html');
+  check(
+    await poll(
+      async () => {
+        const text = (await fixturePopup.locator('#extension-grace').textContent().catch(() => '')) ?? '';
+        const seconds = Number(text.match(/in (\d+)s/)?.[1] ?? 0);
+        return seconds > 0 && seconds <= 42;
+      },
+      10_000,
+      'injected grace fixture renders on popup',
+    ),
+    'INJECTED UI FIXTURE: popup renders the daemon-observation countdown wording',
+  );
+  await fixturePopup.close();
+
+  const fixtureReads = await fixtureOpts.evaluate(() => window.__graceStatusReads);
+  const disconnectedFixture = await fixtureOpts.evaluate(() => {
+    window.__graceFixture = { ...window.__graceFixture, state: 'disconnected', extensionLoss: null };
+    return window.__graceFixture;
+  });
+  await sw.evaluate((value) => chrome.storage.local.set({ companionSnapshot: value }), disconnectedFixture);
+  check(
+    await poll(
+      async () => {
+        const reads = await fixtureOpts.evaluate(() => window.__graceStatusReads);
+        const text = (await fixtureOpts.locator('#companion-grace').textContent().catch(() => '')) ?? '';
+        return reads > fixtureReads && /remaining time is unavailable/.test(text) && !/\d+s/.test(text);
+      },
+      2_000,
+      'options companion storage event refreshes immediately',
+    ),
+    'INJECTED UI FIXTURE: options storage event clears the number without the 5s fallback poll',
+  );
+  await fixtureOpts.close();
+  if (genuineSnapshot) {
+    await sw.evaluate((value) => chrome.storage.local.set({ companionSnapshot: value }), genuineSnapshot);
+  }
+
   // (d) Blocklisted app: killed by the enforcement loop within ~2 ticks.
   copyFileSync('/bin/sleep', join(DATA_DIR, 'fakegame'));
   const fakegame = spawn(join(DATA_DIR, 'fakegame'), ['300'], { stdio: 'ignore' });
@@ -324,7 +893,24 @@ try {
 
   // (c) Daemon restart with a longer seeded lock: state flows BACK into the
   // extension via the reconnect push (no re-hello happens on daemon bounce).
+  const blockingBeforeRestart = readBlockingState();
   daemon.kill('SIGKILL');
+  check(
+    await poll(
+      async () => {
+        const stored = await sw.evaluate(() => chrome.storage.local.get('companionSnapshot'));
+        const optionText = (await opts.locator('#companion-status').textContent().catch(() => '')) ?? '';
+        return (
+          stored.companionSnapshot?.state === 'disconnected' &&
+          stored.companionSnapshot?.extensionLoss === null &&
+          /installed but not running/i.test(optionText)
+        );
+      },
+      15_000,
+      'real daemon loss clears the live observation and options state',
+    ),
+    'real daemon loss clears the cached observation and updates the open options page',
+  );
   await sleep(300);
   // Relative to NOW, not the earlier arm's frozenUntil: the (d)/(e) kill
   // sections run long enough that `frozenUntil + 60s` can land at/past expiry
@@ -344,6 +930,30 @@ try {
     'seeded daemon lock merges into the extension',
   );
   check(mergedBack, 'daemon-seeded lock (survives extension wipe) merged back into the extension');
+  check(
+    await poll(
+      async () => {
+        const stored = await sw.evaluate(() => chrome.storage.local.get('companionSnapshot'));
+        return (
+          stored.companionSnapshot?.state === 'connected' &&
+          stored.companionSnapshot?.extensionLoss?.state === 'connected' &&
+          Number.isFinite(stored.companionSnapshot?.extensionLoss?.observedAtMs)
+        );
+      },
+      30_000,
+      'daemon recovery restores a fresh real observation',
+    ),
+    'daemon recovery publishes a fresh authenticated observation to the extension',
+  );
+  const blockingRestored = await waitForBlocking(
+    blockingBeforeRestart?.enabled ?? true,
+    blockingBeforeRestart?.revision ?? 1,
+  );
+  check(
+    blockingRestored &&
+      JSON.stringify(readBlockingState()) === JSON.stringify(blockingBeforeRestart),
+    'daemon restart reloads the exact durable blocking value + revision into Chromium',
+  );
 
   // …and the merged forced block actually blocks a page.
   const fakeWatch = (title) =>

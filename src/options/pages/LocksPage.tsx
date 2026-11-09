@@ -27,6 +27,7 @@ import {
 import type { OptionsState } from '../useOptionsState';
 import { formatClock, formatRemaining } from '../format';
 import { LockedNote, Page } from './Page';
+import { PartnerSection } from './PartnerSection';
 
 async function sendLockTypeMessage(message: Request): Promise<LockTypeResponse> {
   const response = (await api.runtime.sendMessage(message)) as LockTypeResponse | undefined;
@@ -697,6 +698,8 @@ export function LocksPage({ state }: { state: OptionsState }) {
           </SettingsGroup>
         </SettingsSection>
       )}
+
+      <PartnerSection state={state} />
 
       {incognitoAllowed === false && (
         <Callout id="incognito-warning" tone="warning">

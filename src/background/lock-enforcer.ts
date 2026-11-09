@@ -15,7 +15,7 @@
 import { api, IS_FIREFOX } from '../shared/api';
 import { getLockState, getLockStatus, mergeRemoteLockState } from '../shared/lock';
 import { nextBoundary } from '../shared/lock-math';
-import { sweepOpenTabs } from './blocker';
+import { advanceCategoryPolicyEpoch, sweepOpenTabs } from './blocker';
 import { completeReadyDelayUnlock } from './lock-types';
 
 const ALARM_NAME = 'lock-boundary';
@@ -197,7 +197,9 @@ async function onBoundary(): Promise<void> {
   await checkClockSkew();
   await completeReadyDelayUnlock();
   // A break start/end is a classifier-verdict boundary even when forceBlocking
-  // is false. Re-evaluate on every boundary; wall time remains authoritative.
+  // is false. Scoped category windows also re-gate existing subitems here,
+  // not only top-level tabs, so advance their invalidation epoch before work.
+  advanceCategoryPolicyEpoch();
   await sweepOpenTabs();
   await syncAlarm();
 }

@@ -8,6 +8,7 @@
 //! (`scripts/lock-math-test.mjs`) consumes too.
 
 pub mod activity;
+pub mod allowance;
 pub mod apps;
 pub mod browsers;
 pub mod daemon;
@@ -18,6 +19,8 @@ pub mod ipc;
 pub mod license;
 pub mod lock_math;
 pub mod merge;
+pub mod onboarding;
+pub mod partner;
 pub mod policy;
 pub mod procwatch;
 pub mod protocol;

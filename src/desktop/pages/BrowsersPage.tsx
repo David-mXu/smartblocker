@@ -2,15 +2,17 @@ import React, { useState } from 'react';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Callout, SettingRow, SettingsGroup, SettingsSection } from '../../components/ui/settings';
-import { errorText, invoke } from '../api';
-import { SUPPORTED_BROWSERS, connectedBrowser, joinNames, seenText } from '../format';
+import { errorText, invoke, type BrowserIntegration } from '../api';
+import { extensionGraceText } from '../../shared/grace-math';
+import { SUPPORTED_BROWSERS, browserGrace, connectedBrowser, seenText } from '../format';
 import { FormMessage, Page, type Message } from '../components/Page';
 import { useStatus } from '../useDesktop';
 
+type SupportedBrowser = (typeof SUPPORTED_BROWSERS)[number];
+
 export function BrowsersPage() {
-  const { status, now } = useStatus();
+  const { status } = useStatus();
   const running = status.daemon.running;
-  const missing = SUPPORTED_BROWSERS.filter((b) => !connectedBrowser(status, b.kind));
 
   return (
     <Page
@@ -19,7 +21,7 @@ export function BrowsersPage() {
     >
       {!running && (
         <Callout tone="warning" id="browsers-daemon-down">
-          The companion isn’t running, so SmartBlocker can’t check your browsers. You can start it from{' '}
+          The companion isn’t running, so authenticated extension connections are unknown. Installation and registration evidence is still shown. You can start it from{' '}
           <a href="#home" className="underline underline-offset-2">
             Home
           </a>
@@ -27,45 +29,20 @@ export function BrowsersPage() {
         </Callout>
       )}
 
+      {status.browserIntegrations.length === 0 && (
+        <Callout tone="warning" id="browser-integration-unavailable">
+          Browser installation and registration checks are unavailable. Any authenticated connection evidence is shown
+          separately; missing inspection data is not being treated as an uninstalled browser.
+        </Callout>
+      )}
+
       <SettingsSection title="Supported browsers">
         <SettingsGroup id="browser-list">
-          {SUPPORTED_BROWSERS.map((b) => {
-            const info = connectedBrowser(status, b.kind);
-            let description: string;
-            let badge: React.ReactNode;
-            if (!running) {
-              description = 'Can’t check while the companion isn’t running';
-              badge = <Badge dot>Unknown</Badge>;
-            } else if (info) {
-              description = `SmartBlocker connected (v${info.extVersion}, ${seenText(info.lastSeenMs, now)})`;
-              badge = (
-                <Badge variant="success" dot>
-                  Protected
-                </Badge>
-              );
-            } else {
-              description = 'SmartBlocker isn’t connected';
-              badge = (
-                <Badge variant="warning" dot>
-                  Not protected
-                </Badge>
-              );
-            }
-            return (
-              <SettingRow
-                key={b.kind}
-                data-browser={b.kind}
-                className="browser-row"
-                label={b.name}
-                description={<span className="tabular-nums">{description}</span>}
-                control={badge}
-              />
-            );
-          })}
+          {SUPPORTED_BROWSERS.map((browser) => (
+            <BrowserRow key={browser.kind} browser={browser} />
+          ))}
         </SettingsGroup>
       </SettingsSection>
-
-      {running && missing.length > 0 && <FixSteps missingNames={missing.map((b) => b.name)} />}
 
       <SettingsSection title="What gets closed during a lock">
         <SettingsGroup>
@@ -87,21 +64,25 @@ export function BrowsersPage() {
   );
 }
 
-function FixSteps({ missingNames }: { missingNames: string[] }) {
-  const { status, refresh } = useStatus();
+function BrowserRow({ browser }: { browser: SupportedBrowser }) {
+  const { status, now, refresh } = useStatus();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<Message>(null);
-  const who = joinNames(missingNames);
+  const { kind, name } = browser;
+  const running = status.daemon.running;
+  const info = connectedBrowser(status, kind);
+  const integration = status.browserIntegrations.find((entry) => entry.browser === kind);
+  const grace = running ? browserGrace(status, kind, now) : null;
+  const inGrace = grace?.state === 'grace' || grace?.state === 'expired';
 
   const repair = async () => {
     setBusy(true);
     setMsg(null);
     try {
-      const result = await invoke('install_integration');
-      setMsg({
-        tone: 'ok',
-        text: status.testMode ? result : 'Browser connection repaired. Restart the browser if it still isn’t connected.',
-      });
+      // The backend message is authoritative: repaired, already healthy,
+      // undetected, or explicitly skipped in test mode.
+      const result = await invoke('repair_browser', { browser: kind });
+      setMsg({ tone: 'ok', text: result.message });
     } catch (e) {
       setMsg({ tone: 'error', text: errorText(e) });
     } finally {
@@ -110,26 +91,104 @@ function FixSteps({ missingNames }: { missingNames: string[] }) {
     }
   };
 
+  let description: string;
+  let badge: React.ReactNode;
+  const evidence = integrationEvidence(integration);
+  if (!running) {
+    description = `${evidence} · authenticated extension connection unknown while the companion is stopped`;
+    badge = <Badge dot>Unknown</Badge>;
+  } else if (inGrace) {
+    description = `${extensionGraceText(grace)} · ${evidence}`;
+    badge = (
+      <Badge variant="warning" dot>
+        {grace.state === 'grace' ? 'Grace active' : 'Closing now'}
+      </Badge>
+    );
+  } else if (info) {
+    description = `${evidence} · extension connected (v${info.extVersion}, ${seenText(info.lastSeenMs, now)})`;
+    badge = (
+      <Badge variant="success" dot>
+        Protected
+      </Badge>
+    );
+  } else {
+    description = `${evidence} · extension not connected`;
+    badge = integration?.installation === 'notDetected' ? (
+      <Badge dot>Not detected</Badge>
+    ) : (
+      <Badge variant="warning" dot>
+        Not protected
+      </Badge>
+    );
+  }
+
+  const canRepair =
+    integration?.installation === 'installed' && (!info || integration.registration !== 'healthy');
+  const showSteps = running && !info && !inGrace;
+
   return (
-    <SettingsSection title="Fix a browser that isn’t protected" description="Only needed for browsers you actually use.">
-      <SettingsGroup>
-        <ol className="m-0 flex list-none flex-col gap-3 p-4 text-[13px] text-muted-foreground">
-          <Step n={1}>
-            Install the SmartBlocker extension in {who}, and make sure it’s turned on.
-          </Step>
-          <Step n={2}>
-            <span className="flex flex-col items-start gap-2.5">
-              Repair the browser connection so the extension can reach this app.
-              <Button id="repair-connection" onClick={repair} disabled={busy}>
-                Repair browser connection
-              </Button>
-            </span>
-          </Step>
-          <Step n={3}>Restart the browser. It shows up as protected within a few seconds.</Step>
-        </ol>
-      </SettingsGroup>
-      <FormMessage message={msg} className="px-1" />
-    </SettingsSection>
+    <SettingRow
+      data-browser={kind}
+      className="browser-row"
+      stacked={showSteps || msg !== null}
+      label={name}
+      description={<span className="tabular-nums">{description}</span>}
+      control={
+        <>
+          {badge}
+          {canRepair && (
+            <Button
+              id={`repair-connection-${kind}`}
+              variant="secondary"
+              size="xs"
+              onClick={repair}
+              disabled={busy}
+            >
+              {busy ? 'Repairing…' : 'Repair connection'}
+            </Button>
+          )}
+        </>
+      }
+    >
+      {showSteps && <FixSteps name={name} integration={integration} />}
+      <FormMessage id={`repair-${kind}-msg`} message={msg} />
+    </SettingRow>
+  );
+}
+
+function integrationEvidence(integration: BrowserIntegration | undefined): string {
+  if (!integration) return 'Installation and registration checks unavailable';
+  const installation = integration.installation === 'installed' ? 'Browser detected' : 'Browser not detected';
+  const registration = {
+    healthy: 'registration healthy',
+    missing: 'registration missing',
+    invalid: 'registration needs repair',
+    unreadable: 'registration unreadable',
+  }[integration.registration];
+  return `${installation} · ${registration}`;
+}
+
+function FixSteps({
+  name,
+  integration,
+}: {
+  name: string;
+  integration: BrowserIntegration | undefined;
+}) {
+  return (
+    <ol className="m-0 flex list-none flex-col gap-3 text-[13px] text-muted-foreground">
+      <Step n={1}>
+        Install or enable the SmartBlocker extension in {name}. Repairing its connection never installs the extension.
+      </Step>
+      <Step n={2}>
+        {!integration
+          ? 'Browser inspection is unavailable, so no repair action is offered from missing evidence.'
+          : integration.installation === 'notDetected'
+            ? `${name} wasn’t detected. Repair is unavailable, so no registration is written for an undetected browser.`
+            : `Use Repair connection above to repair only ${name}’s Native Messaging registration and verify the saved files afterward.`}
+      </Step>
+      <Step n={3}>Restart {name}. Only an authenticated extension connection shows Protected.</Step>
+    </ol>
   );
 }
 

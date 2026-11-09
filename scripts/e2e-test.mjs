@@ -467,12 +467,33 @@ try {
     </div>
   </body></html>`;
 
+  // Mirrors Google's live Images tab: one MjjYud holds the whole grid and an
+  // interleaved "Related searches" module, and some tiles link to YouTube.
+  const imagesTabHtml = (q) => `<!doctype html><html><head><meta charset="utf-8"><title>${q} - Google Search</title></head><body>
+    <div id="rcnt"><div id="center_col"><div id="search"><div id="rso"><div class="MjjYud" id="image-grid">
+      <div id="tile-docs" data-attrid="images universal" data-lpage="https://pytorch.org/docs/autograd" data-hveid="a"><a href="https://pytorch.org/docs/autograd"><img alt="Autograd mechanics"></a></div>
+      <div id="tile-yt" data-attrid="images universal" data-lpage="https://www.youtube.com/watch?v=aaaaaaaaaaa" data-hveid="b"><a href="https://www.youtube.com/watch?v=aaaaaaaaaaa"><img alt="Autograd explained"></a></div>
+      <div id="tile-ruled" data-attrid="images universal" data-lpage="https://blocked-by-rule.example/x" data-hveid="c"><a href="https://blocked-by-rule.example/x"><img alt="Rule target"></a></div>
+      <div><h2>Related searches</h2><a href="/search?q=more">more</a></div>
+    </div></div></div></div></div></body></html>`;
+  const imageRowSerpHtml = `<!doctype html><html><head><meta charset="utf-8"><title>backprop diagram - Google Search</title></head><body>
+    <div id="rcnt"><div id="center_col"><div id="search"><div id="rso">
+      <div class="MjjYud" id="image-row"><h2>Images</h2><a href="https://www.youtube.com/watch?v=bbbbbbbbbbb"><img alt="Backprop"></a></div>
+      <div class="MjjYud" id="related-row"><h2>Related searches</h2><a href="/search?q=more">more</a></div>
+    </div></div></div></div></body></html>`;
+
   await context.route('**://www.google.com/search**', (route) => {
     const u = new URL(route.request().url());
     const q = u.searchParams.get('q') ?? '';
     route.fulfill({
       contentType: 'text/html',
-      body: q.includes('minesweeper') ? minesweeperSerpHtml : mixedSerpHtml,
+      body: u.searchParams.get('udm') === '2'
+        ? imagesTabHtml(q)
+        : q.includes('backprop')
+          ? imageRowSerpHtml
+          : q.includes('minesweeper')
+            ? minesweeperSerpHtml
+            : mixedSerpHtml,
     });
   });
 
@@ -526,6 +547,55 @@ try {
   );
   if (!serpMaskOk) process.exitCode = 1;
 
+  // Google Images: the page-level query verdict decides, never a heading or
+  // thumbnail host inside it, and the user's own rules still reach each tile.
+  await sw.evaluate(async () => {
+    const { settings = {} } = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({
+      settings: { ...settings, blocklist: [...(settings.blocklist ?? []), 'blocked-by-rule.example'] },
+    });
+  });
+  await tab.goto('https://www.google.com/search?q=pytorch+autograd&udm=2');
+  await tab.waitForTimeout(3_000);
+  const productiveImages = await tab.evaluate(() => {
+    const m = (id) => document.getElementById(id)?.getAttribute('data-smartblocker-masked') ?? null;
+    return { rso: m('rso'), grid: m('image-grid'), docs: m('tile-docs'), yt: m('tile-yt'), ruled: m('tile-ruled') };
+  });
+  await tab.goto('https://www.google.com/search?q=funny+cat+memes&udm=2');
+  await tab.waitForTimeout(3_000);
+  const memeImagesFullPageBlocks = await tab.locator('#smartblocker-overlay').count();
+  await tab.goto('https://www.google.com/search?q=backprop+diagram');
+  await tab.waitForTimeout(3_000);
+  const imageRow = await tab.evaluate(() => ({
+    row: document.getElementById('image-row')?.getAttribute('data-smartblocker-masked') ?? null,
+    related: document.getElementById('related-row')?.getAttribute('data-smartblocker-masked') ?? null,
+  }));
+  const imagesOk =
+    productiveImages.rso === null &&
+    productiveImages.grid === null &&
+    productiveImages.docs === null &&
+    productiveImages.yt === null &&
+    productiveImages.ruled === 'serp-card' &&
+    memeImagesFullPageBlocks === 1 &&
+    imageRow.row === null &&
+    imageRow.related === null;
+  console.log(
+    `${imagesOk ? 'PASS' : 'FAIL'} Google Images grid and image rows follow the search query, with block rules per tile:`,
+    { productiveImages, memeImagesFullPageBlocks, imageRow },
+  );
+  if (!imagesOk) process.exitCode = 1;
+  await sw.evaluate(async () => {
+    const { settings = {} } = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({
+      settings: {
+        ...settings,
+        blocklist: (settings.blocklist ?? []).filter((b) => b !== 'blocked-by-rule.example'),
+      },
+    });
+  });
+  await tab.goto('https://www.google.com/search?q=nvidia+rtx+5090');
+  await tab.waitForTimeout(3_000);
+
   // Toggle maskSearchElements: false -> open search page unmasks and sweeps open tabs
   await sw.evaluate(async () => {
     const { settings = {} } = await chrome.storage.local.get('settings');
@@ -560,6 +630,86 @@ try {
     `${minesweeperBlocked ? 'PASS' : 'FAIL'} unambiguous gaming SERP ("play minesweeper") gets full-page block`,
   );
   if (!minesweeperBlocked) process.exitCode = 1;
+
+  // 8c. YouTube Search itself stays open, but each video gets its own verdict.
+  // A broad "tech" query must not blanket-block or blanket-allow the results.
+  const youTubeSearchHtml = `<!doctype html><html><head><title>tech - YouTube</title></head><body>
+    <ytd-video-renderer id="yt-game">
+      <a id="video-title" href="/watch?v=minecraft01" title="I spent 100 days in Hardcore Minecraft">I spent 100 days in Hardcore Minecraft</a>
+      <ytd-channel-name><div id="text"><a>Gaming Archive</a></div></ytd-channel-name>
+      <div class="metadata-snippet-text">Surviving hardcore mode and building a base.</div>
+    </ytd-video-renderer>
+    <ytd-video-renderer id="yt-react">
+      <a id="video-title" href="/watch?v=reacttut001" title="React Router Tutorial">React Router Tutorial</a>
+      <ytd-channel-name><div id="text"><a>React Training</a></div></ytd-channel-name>
+      <div class="metadata-snippet-text">Learn routing in a React application.</div>
+    </ytd-video-renderer>
+  </body></html>`;
+  await context.route('**://www.youtube.com/results**', (route) => {
+    route.fulfill({ contentType: 'text/html', body: youTubeSearchHtml });
+  });
+  await tab.goto('https://www.youtube.com/results?search_query=tech');
+  await tab.waitForFunction(
+    () =>
+      document.getElementById('yt-game')?.getAttribute('data-smartblocker-masked') ===
+        'serp-card' &&
+      document.getElementById('yt-react')?.getAttribute('data-smartblocker-state') === 'allowed',
+    undefined,
+    { timeout: 45_000 },
+  );
+  const youTubeMixedState = await tab.evaluate(() => ({
+    gameMasked:
+      document.getElementById('yt-game')?.getAttribute('data-smartblocker-masked') === 'serp-card',
+    reactVisible:
+      !document.getElementById('yt-react')?.getAttribute('data-smartblocker-masked') &&
+      document.getElementById('yt-react')?.getAttribute('data-smartblocker-state') === 'allowed',
+    pageVisible: document.querySelectorAll('#smartblocker-overlay').length === 0,
+  }));
+  const youTubeMixedOk =
+    youTubeMixedState.gameMasked && youTubeMixedState.reactVisible && youTubeMixedState.pageVisible;
+  console.log(
+    `${youTubeMixedOk ? 'PASS' : 'FAIL'} YouTube tech search masks gaming but keeps a programming result + the page visible:`,
+    youTubeMixedState,
+  );
+  if (!youTubeMixedOk) process.exitCode = 1;
+
+  // YouTube Polymer inserts Shorts after the initial result scan. The shared
+  // MutationObserver must classify these lazily-added cards too.
+  await tab.evaluate(() => {
+    const shorts = document.createElement('ytd-reel-item-renderer');
+    shorts.id = 'yt-shorts';
+    shorts.innerHTML =
+      '<a href="/shorts/shortsmc001"><h3>I spent 100 days in Hardcore Minecraft</h3></a>';
+    document.body.appendChild(shorts);
+  });
+  await tab.waitForFunction(
+    () =>
+      document.getElementById('yt-shorts')?.getAttribute('data-smartblocker-masked') ===
+      'serp-card',
+    { timeout: 30_000 },
+  );
+  console.log('PASS lazily-inserted YouTube Short is classified and masked');
+
+  await sw.evaluate(async () => {
+    const { settings = {} } = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({ settings: { ...settings, maskSearchElements: false } });
+  });
+  await tab.waitForTimeout(1_500);
+  const youTubeUnmaskState = await tab.evaluate(() => ({
+    game: document.getElementById('yt-game')?.getAttribute('data-smartblocker-masked'),
+    shorts: document.getElementById('yt-shorts')?.getAttribute('data-smartblocker-masked'),
+  }));
+  const youTubeUnmaskOk =
+    youTubeUnmaskState.game !== 'serp-card' && youTubeUnmaskState.shorts !== 'serp-card';
+  console.log(
+    `${youTubeUnmaskOk ? 'PASS' : 'FAIL'} search masking toggle also reveals YouTube result cards:`,
+    youTubeUnmaskState,
+  );
+  if (!youTubeUnmaskOk) process.exitCode = 1;
+  await sw.evaluate(async () => {
+    const { settings = {} } = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({ settings: { ...settings, maskSearchElements: true } });
+  });
 
   // 9. Embedded YouTube Videos inside Whitelisted Google AI Studio / Chatbots:
   // Even though aistudio.google.com is whitelisted at the page level, a distracting

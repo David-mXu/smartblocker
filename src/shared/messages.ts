@@ -1,9 +1,11 @@
 // popup/options/offscreen <-> background message contract.
-import type { CompanionSnapshot } from './companion-protocol';
+import type { CompanionSnapshot, CompanionStatus } from './companion-protocol';
 import type { UsageStatsExport } from './usage-stats';
 import type { BreakMode } from './breaks';
 import type { LockStatus } from './lock-math';
 import type { SubItemEvalRequest, SubItemEvalResult } from '../content/sanitize-page';
+import type { AllowanceAuthorityState, AllowanceCommand } from './allowance-state';
+import type { FocusCycleMode, FocusCycleProgram } from './focus-cycle-types';
 
 /** Classifier input. Phase 2 widens it from a bare title to richer page
  *  signals (channel, description/post-body snippet) — see build-input.ts. */
@@ -66,6 +68,23 @@ export type Request =
   | { type: 'REQUEST_BREAK_CHALLENGE' }
   | { type: 'START_BREAK'; mode: BreakMode; text?: string }
   | { type: 'CANCEL_BREAK' }
+  // Accountability-partner public setup/redeem. Offline Ed25519 secrets never
+  // enter this channel; only public keys, arm operations, and signed codes.
+  | { type: 'PARTNER_COMMAND'; command:
+      | { action: 'add-key'; publicKey: string }
+      | { action: 'arm' }
+      | { action: 'begin-operation' }
+      | { action: 'redeem'; token: string }
+  }
+  // Item 10: valid commands only; the background/daemon owns every resulting
+  // balance and revision. The options page never uploads a replacement ledger.
+  | { type: 'GET_ALLOWANCE_AUTHORITY' }
+  | { type: 'ALLOWANCE_COMMAND'; command: AllowanceCommand }
+  // Immediate focus timer or a timed Pomodoro program. These never create
+  // Frozen locks; only completed work earns reward and fixed breaks.
+  | { type: 'GET_FOCUS_CYCLE' }
+  | { type: 'START_FOCUS_CYCLE'; category: string; mode: FocusCycleMode; workMinutes: number; breakMinutes: number; cycles: number }
+  | { type: 'CANCEL_FOCUS_CYCLE' }
   // Content sanitizer: batch-classify embedded videos & SERP result cards.
   | { type: 'EVAL_SUBITEMS'; items: SubItemEvalRequest[] };
 
@@ -104,6 +123,28 @@ export interface DeleteSharedFeedbackResponse {
 export interface UsageStatsResponse {
   ok: boolean;
   stats?: UsageStatsExport;
+  error?: string;
+}
+
+export interface AllowanceResponse {
+  ok: boolean;
+  source?: 'daemon' | 'fallback' | 'pending';
+  state?: AllowanceAuthorityState;
+  reason?: string;
+  duplicate?: boolean;
+  error?: string;
+}
+
+export interface PartnerCommandResponse {
+  ok: boolean;
+  message?: string;
+  status?: CompanionStatus;
+  error?: string;
+}
+
+export interface FocusCycleResponse {
+  ok: boolean;
+  program?: FocusCycleProgram | null;
   error?: string;
 }
 

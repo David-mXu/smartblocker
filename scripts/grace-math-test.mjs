@@ -7,6 +7,7 @@ import {
   deriveExtensionGrace,
   extensionGraceDisplaySeconds,
   extensionGraceText,
+  observeExtensionGrace,
 } from '../src/shared/grace-math.ts';
 
 let passed = 0;
@@ -190,6 +191,62 @@ test('requested grace wording contains the truthful remaining seconds', () => {
 
 test('unknown wording explicitly declines an authoritative countdown', () => {
   assert.match(extensionGraceText({ state: 'unknown', remainingMs: null }), /remaining time is unavailable/);
+});
+
+test('wire observation is validated and stamped on the extension receipt clock', () => {
+  const observed = observeExtensionGrace(
+    { state: 'grace', graceSeconds: 60, graceRemainingMs: 42_000 },
+    T0 + 5_000,
+  );
+  assert.deepEqual(observed, {
+    state: 'grace',
+    observedAtMs: T0 + 5_000,
+    lastHeartbeatAtMs: null,
+    graceRemainingMs: 42_000,
+    graceSeconds: 60,
+  });
+  assert.deepEqual(deriveExtensionGrace(T0 + 7_000, observed, observed.graceSeconds), {
+    state: 'grace',
+    remainingMs: 40_000,
+  });
+});
+
+test('connected wire observations need no heartbeat timestamp and clear old remaining time', () => {
+  const observed = observeExtensionGrace(
+    {
+      state: 'connected',
+      graceSeconds: 60,
+      graceRemainingMs: 12_000,
+      lastHeartbeatAtMs: T0 - 20_000,
+    },
+    T0,
+  );
+  assert.deepEqual(observed, {
+    state: 'connected',
+    observedAtMs: T0,
+    lastHeartbeatAtMs: null,
+    graceRemainingMs: null,
+    graceSeconds: 60,
+  });
+  assert.equal(deriveExtensionGrace(T0 + 60_000, observed, 60).state, 'connected');
+});
+
+test('missing or malformed wire observations remain honestly unknown', () => {
+  const invalid = [
+    undefined,
+    null,
+    {},
+    { state: 'lost', graceSeconds: 60, graceRemainingMs: 1_000 },
+    { state: 'grace', graceSeconds: 60 },
+    { state: 'grace', graceSeconds: 60, graceRemainingMs: '1000' },
+    { state: 'grace', graceSeconds: 0, graceRemainingMs: 1_000 },
+    { state: 'connected', graceSeconds: Infinity },
+  ];
+  for (const raw of invalid) assert.equal(observeExtensionGrace(raw, T0), null);
+  assert.equal(
+    observeExtensionGrace({ state: 'connected', graceSeconds: 60 }, NaN),
+    null,
+  );
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

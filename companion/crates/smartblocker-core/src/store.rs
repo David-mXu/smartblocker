@@ -4,7 +4,10 @@
 //! files load as defaults, never a crash — losing a lock file must fail
 //! toward the EMPTY (unlocked) state rather than take the daemon down.
 
+use crate::allowance::{normalize_allowance_authority_state, AllowanceAuthorityState};
 use crate::lock_math::LockState;
+use crate::partner::PartnerState;
+use crate::protocol::{BlockingState, MAX_JS_SAFE_INTEGER};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
@@ -52,6 +55,9 @@ pub const MAX_PAIRING_TOKENS: usize = 32;
 
 const LOCK_STATE_FILE: &str = "lock-state.json";
 const CONFIG_FILE: &str = "config.json";
+const BLOCKING_STATE_FILE: &str = "blocking-state.json";
+const PARTNER_STATE_FILE: &str = "partner-state.json";
+const ALLOWANCE_STATE_FILE: &str = "allowance-state.json";
 
 pub struct Store {
     dir: PathBuf,
@@ -104,6 +110,80 @@ impl Store {
 
     pub fn save_config(&self, config: &CompanionConfig) -> io::Result<()> {
         self.save(CONFIG_FILE, config)
+    }
+
+    /// Ordinary blocking lives outside `config.json`: mid-lock config healing
+    /// and pairing-token writes must never accidentally roll it back. A
+    /// missing/corrupt file means uninitialized, which is not a disable vote.
+    pub fn load_blocking_state(&self) -> Option<BlockingState> {
+        self.read_json(BLOCKING_STATE_FILE)
+            .filter(|state: &BlockingState| state.revision <= MAX_JS_SAFE_INTEGER)
+    }
+
+    pub fn save_blocking_state(&self, state: &BlockingState) -> io::Result<()> {
+        self.save(BLOCKING_STATE_FILE, state)
+    }
+
+    /** Missing/corrupt state cannot fabricate an active partner key. Only the
+     * daemon startup migration uses the unchecked loader below; every command
+     * sees a fully rehydrated state validated by this method's invariant. */
+    pub fn load_partner_state(&self) -> Option<PartnerState> {
+        self.read_json(PARTNER_STATE_FILE)
+            .filter(|state: &PartnerState| state.validate())
+    }
+
+    /// Deserialize legacy optional clock fields without accepting them as
+    /// command authority. A present but unparsable file remains corruption.
+    pub(crate) fn load_partner_state_for_migration(&self) -> Option<PartnerState> {
+        self.read_json(PARTNER_STATE_FILE)
+    }
+
+    /// Distinguishes a genuinely uninitialized installation from a present but
+    /// corrupt file. Startup initializes only the former, fail-closed on the
+    /// latter rather than manufacturing a fresh trust root over existing data.
+    pub fn partner_state_file_exists(&self) -> io::Result<bool> {
+        match fs::metadata(self.dir.join(PARTNER_STATE_FILE)) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn save_partner_state(&self, state: &PartnerState) -> io::Result<()> {
+        if !state.validate() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid partner state",
+            ));
+        }
+        self.save(PARTNER_STATE_FILE, state)
+    }
+
+    /** Missing and malformed observations stay `None`, preserving the crucial
+     * difference between "not initialized" and a valid empty revision-0 pool. */
+    pub fn load_allowance_state(&self) -> Option<AllowanceAuthorityState> {
+        self.read_json(ALLOWANCE_STATE_FILE)
+            .and_then(|raw| normalize_allowance_authority_state(&raw))
+    }
+
+    pub fn allowance_state_file_exists(&self) -> io::Result<bool> {
+        match fs::metadata(self.dir.join(ALLOWANCE_STATE_FILE)) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn save_allowance_state(&self, state: &AllowanceAuthorityState) -> io::Result<()> {
+        let raw = serde_json::to_value(state)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if normalize_allowance_authority_state(&raw).is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid allowance state",
+            ));
+        }
+        self.save(ALLOWANCE_STATE_FILE, state)
     }
 
     fn load_or_default<T: DeserializeOwned + Default>(&self, file: &str) -> T {
@@ -208,6 +288,80 @@ mod tests {
         assert_eq!(loaded.app_blocklist, vec!["x".to_string()]);
         assert!(!loaded.policy_enforce);
         assert!(loaded.extra_incompatible_browsers.is_empty());
+    }
+
+    #[test]
+    fn blocking_state_is_optional_durable_and_distinct_from_config() {
+        let (dir, store) = temp_store();
+        assert_eq!(store.load_blocking_state(), None);
+        let state = BlockingState {
+            enabled: false,
+            revision: 17,
+        };
+        store.save_blocking_state(&state).unwrap();
+        assert_eq!(store.load_blocking_state(), Some(state));
+        assert_eq!(store.load_config(), CompanionConfig::default());
+
+        let reopened = Store::new(dir.path());
+        assert_eq!(reopened.load_blocking_state(), Some(state));
+        fs::write(dir.path().join(BLOCKING_STATE_FILE), b"{ not json").unwrap();
+        assert_eq!(reopened.load_blocking_state(), None);
+    }
+
+    #[test]
+    fn blocking_state_load_enforces_the_js_safe_revision_boundary() {
+        let (dir, store) = temp_store();
+        let at_max = BlockingState {
+            enabled: true,
+            revision: MAX_JS_SAFE_INTEGER,
+        };
+        store.save_blocking_state(&at_max).unwrap();
+        assert_eq!(store.load_blocking_state(), Some(at_max));
+        assert_eq!(Store::new(dir.path()).load_blocking_state(), Some(at_max));
+
+        let beyond_max = BlockingState {
+            enabled: true,
+            revision: MAX_JS_SAFE_INTEGER + 1,
+        };
+        store.save_blocking_state(&beyond_max).unwrap();
+        assert_eq!(store.load_blocking_state(), None);
+        assert_eq!(Store::new(dir.path()).load_blocking_state(), None);
+    }
+
+    #[test]
+    fn partner_state_roundtrips_and_corruption_has_no_active_key_fallback() {
+        let (dir, store) = temp_store();
+        assert_eq!(store.load_partner_state(), None);
+        let state = crate::partner::rehydrate(
+            &PartnerState::new(&"01".repeat(32)).unwrap(),
+            0,
+            0,
+        )
+        .unwrap();
+        let public = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32])
+            .verifying_key()
+            .to_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let state = crate::partner::add_public_key_at(&state, &public, 100, 100).unwrap();
+        store.save_partner_state(&state).unwrap();
+        assert_eq!(store.load_partner_state(), Some(state));
+        fs::write(dir.path().join(PARTNER_STATE_FILE), b"{ not json").unwrap();
+        assert_eq!(store.load_partner_state(), None);
+        fs::write(dir.path().join(PARTNER_STATE_FILE), br#"{"version":999}"#).unwrap();
+        assert_eq!(store.load_partner_state(), None);
+    }
+
+    #[test]
+    fn allowance_state_roundtrips_and_corruption_is_not_a_fresh_pool() {
+        let (dir, store) = temp_store();
+        assert_eq!(store.load_allowance_state(), None);
+        let state = crate::allowance::empty_allowance_authority_state();
+        store.save_allowance_state(&state).unwrap();
+        assert_eq!(Store::new(dir.path()).load_allowance_state(), Some(state));
+        fs::write(dir.path().join(ALLOWANCE_STATE_FILE), b"{ not json").unwrap();
+        assert_eq!(store.load_allowance_state(), None);
     }
 
     #[test]
