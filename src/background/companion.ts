@@ -6,10 +6,10 @@
 // `lockState` is enough, lock-enforcer.ts reacts to the storage change.
 //
 // Most users won't have the companion installed (it ships with Pro), so the
-// host-not-found path must stay silent and cheap: one console.info, no retry
-// spam — re-attempt only on the next SW start and via a daily alarm. A real
-// disconnect (companion crashed/restarting) reconnects with exponential
-// backoff instead.
+// host-not-found path must stay silent and cheap: one console.info, then no
+// fresh native-port attempt on each event-page restart (its onDisconnect would
+// itself reawaken Firefox forever). A scheduled daily alarm still re-checks;
+// a real disconnect (companion crashed/restarting) uses exponential backoff.
 import { api, IS_FIREFOX } from '../shared/api';
 import {
   HEARTBEAT_INTERVAL_MS,
@@ -76,7 +76,12 @@ export async function getCompanionSnapshot(): Promise<CompanionSnapshot> {
 }
 
 function patchSnapshot(patch: Partial<CompanionSnapshot>): void {
+  const previous = snapshot;
   snapshot = { ...(snapshot ?? EMPTY_SNAPSHOT), ...patch };
+  // Firefox emits storage.onChanged even for an identical storage.local.set.
+  // Repeated no-op snapshot writes can therefore wake the event page again on
+  // every idle shutdown, preventing a quiet event-page lifecycle entirely.
+  if (previous && JSON.stringify(previous) === JSON.stringify(snapshot)) return;
   void api.storage.local.set({ [SNAPSHOT_KEY]: snapshot });
 }
 
@@ -179,7 +184,11 @@ async function pairingToken(): Promise<string> {
 
 function connect(): void {
   if (port) return;
-  patchSnapshot({ state: 'connecting' });
+  if (snapshot?.state !== 'not-installed') {
+    // Keep the established missing-host verdict quiet while still performing
+    // intentional retries, avoiding a doomed-port/storage wake cycle.
+    patchSnapshot({ state: 'connecting' });
+  }
   let p: chrome.runtime.Port;
   try {
     p = api.runtime.connectNative(NM_HOST_NAME);
@@ -240,6 +249,10 @@ export function initCompanionBridge(): void {
     // verdict doesn't wipe the last-known companion status from storage.
     await getCompanionSnapshot();
     await api.alarms.create(RETRY_ALARM, { periodInMinutes: 24 * 60 });
-    connect();
+    // A known missing host must not create another doomed native port on each
+    // event-page restart; its disconnect event is itself a primed wake source.
+    // Scheduled retries still call connect(); connected/disconnected recovery
+    // is unchanged.
+    if (snapshot?.state !== 'not-installed') connect();
   })().catch((e) => console.warn('[SmartBlocker] companion bridge init failed:', e));
 }

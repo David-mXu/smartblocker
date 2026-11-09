@@ -1,5 +1,5 @@
 import { env, pipeline } from '@huggingface/transformers';
-import { api } from '../shared/api';
+import { api, IS_FIREFOX } from '../shared/api';
 import { buildClassifierText, inputCacheKey } from '../shared/build-input';
 import {
   CLASSIFIER_BACKEND,
@@ -23,15 +23,25 @@ import type { ClassifyInput, ClassifyOutcome, InferResult } from '../shared/mess
 import { classifyViaOffscreen, embedViaOffscreen, supportsOffscreen } from './classify-client';
 
 // ---- MV3 environment config (load-bearing) ----
-// Model weights come from the HF Hub (data, not code — Web Store legal); the
-// ORT wasm runtime is statically inlined into this bundle by Vite, with the
-// .wasm binary emitted as an extension asset.
+// Model weights come from the HF Hub (data, not code — Web Store legal). Vite
+// statically inlines ORT's wasm glue for Chrome's service worker; Firefox loads
+// the module from packaged extension assets instead, as described below. Both
+// targets include the .wasm binary as an extension asset.
 //
-// Do NOT set env.backends.onnx.wasm.wasmPaths: any override forces ORT down
-// its dynamic-import() code path to load the glue module, which service
-// workers reject. Left unset, ORT uses the bundler-inlined glue.
+// Chrome's service worker must leave wasmPaths unset so ORT uses the
+// bundler-inlined glue; an override would select dynamic import(), which a
+// service worker rejects. Firefox's generated event page is a real document,
+// not a ServiceWorkerGlobalScope, so Transformers.js otherwise defaults that
+// path to its CSP-blocked jsDelivr CDN. Select the packaged local glue only on
+// Firefox; dynamic import() of a same-origin module is valid in that document.
 env.allowLocalModels = false;
 const ortWasm = env.backends.onnx.wasm!;
+if (IS_FIREFOX) {
+  ortWasm.wasmPaths = {
+    mjs: api.runtime.getURL('ort-wasm-simd-threaded.jsep.mjs'),
+    wasm: api.runtime.getURL('ort-wasm-simd-threaded.jsep.wasm'),
+  };
+}
 ortWasm.numThreads = 1; // workers can't spawn nested Workers
 ortWasm.proxy = false;
 

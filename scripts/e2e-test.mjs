@@ -2,12 +2,13 @@
 // service worker boots, model downloads/loads, popup Test Pair classifies.
 // Usage: node scripts/e2e-test.mjs
 // Profile (and the cached model) persists in .e2e-profile/ across runs.
+// SB_E2E_PROFILE can select an isolated profile without deleting the usual one.
 import { chromium } from 'playwright';
 import { readFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const EXT_PATH = resolve('dist/chrome');
-const PROFILE = resolve('.e2e-profile');
+const PROFILE = resolve(process.env.SB_E2E_PROFILE ?? '.e2e-profile');
 const MODEL_TIMEOUT_MS = 5 * 60_000; // first run downloads the model (~35MB)
 
 // Chromium caches the MV3 service-worker SCRIPT in the profile and can keep

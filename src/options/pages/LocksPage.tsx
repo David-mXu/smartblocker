@@ -8,7 +8,7 @@ import {
   MIN_PASSWORD_LENGTH,
   startTimerLock,
 } from '../../shared/lock';
-import { api } from '../../shared/api';
+import { api, IS_FIREFOX } from '../../shared/api';
 import type { LockTypeResponse, Request } from '../../shared/messages';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -706,9 +706,18 @@ export function LocksPage({ state }: { state: OptionsState }) {
           </div>
           <p className="m-0 text-warning-soft/80">
             SmartBlocker can't see private (incognito) windows, so they get around your locks. Open{' '}
-            <code className="font-mono text-xs text-warning-soft">chrome://extensions</code>, choose
-            Details on SmartBlocker, and turn on{' '}
-            <span className="font-medium text-warning-soft">Allow in Incognito</span>.
+            {IS_FIREFOX ? (
+              <>
+                <span className="font-medium text-warning-soft">Add-ons and themes</span> → SmartBlocker,
+                then set <span className="font-medium text-warning-soft">Run in Private Windows</span> to Allow.
+              </>
+            ) : (
+              <>
+                <code className="font-mono text-xs text-warning-soft">chrome://extensions</code>, choose
+                Details on SmartBlocker, and turn on{' '}
+                <span className="font-medium text-warning-soft">Allow in Incognito</span>.
+              </>
+            )}
           </p>
         </Callout>
       )}

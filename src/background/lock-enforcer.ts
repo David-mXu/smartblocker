@@ -227,9 +227,16 @@ export function initLockEnforcer(): void {
     // which would evict the in-process embedding model mid-session and drop
     // enforcement during an active lock. A sub-minute recurring alarm plus a
     // lightweight runtime ping keep the background context resident.
-    void api.alarms
-      .create(FF_KEEPALIVE_ALARM, { periodInMinutes: 0.4 })
-      .catch((e) => console.warn('[SmartBlocker] keepalive alarm error:', e));
+    try {
+      // Firefox 121 implements alarms.create with the older void return value;
+      // newer Firefox/Chrome return a Promise. Promise.resolve supports both
+      // without a `.catch` property access aborting background initialization.
+      void Promise.resolve(api.alarms.create(FF_KEEPALIVE_ALARM, { periodInMinutes: 0.4 })).catch(
+        (e) => console.warn('[SmartBlocker] keepalive alarm error:', e),
+      );
+    } catch (e) {
+      console.warn('[SmartBlocker] keepalive alarm error:', e);
+    }
     setInterval(() => {
       void api.runtime.getPlatformInfo().catch(() => {});
     }, 20_000);

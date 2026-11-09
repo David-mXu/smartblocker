@@ -28,14 +28,16 @@ console.log(`[copy-assets] ${target}: icons -> ${join(dist, 'icons')}`);
 if (target === 'chrome') {
   copyFileSync(join('src', 'background', 'offscreen', 'offscreen.html'), join(dist, 'offscreen.html'));
   console.log(`[copy-assets] ${target}: offscreen.html -> ${dist}`);
+}
 
-  // ORT wasm glue + binary, under their UNHASHED names, for the offscreen
-  // document. Outside a service worker, transformers.js defaults
-  // env.backends.onnx.wasm.wasmPaths to its CDN (CSP-blocked in extensions),
-  // so offscreen.ts overrides wasmPaths to these extension-local copies.
-  const ortDist = join('node_modules', '@huggingface', 'transformers', 'dist');
-  for (const f of ['ort-wasm-simd-threaded.jsep.mjs', 'ort-wasm-simd-threaded.jsep.wasm']) {
-    copyFileSync(join(ortDist, f), join(dist, f));
-    console.log(`[copy-assets] ${target}: ${f} -> ${dist}`);
-  }
+// ORT wasm glue + binary, under their UNHASHED names, for Chromium's
+// offscreen document and Firefox's generated background document. Outside a
+// service worker, transformers.js defaults env.backends.onnx.wasm.wasmPaths
+// to its CDN (CSP-blocked in extensions), so both document hosts override
+// wasmPaths to these extension-local copies. Chrome's service worker keeps
+// using its bundler-inlined glue and does not read these files directly.
+const ortDist = join('node_modules', '@huggingface', 'transformers', 'dist');
+for (const f of ['ort-wasm-simd-threaded.jsep.mjs', 'ort-wasm-simd-threaded.jsep.wasm']) {
+  copyFileSync(join(ortDist, f), join(dist, f));
+  console.log(`[copy-assets] ${target}: ${f} -> ${dist}`);
 }

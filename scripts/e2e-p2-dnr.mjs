@@ -27,7 +27,7 @@ import { rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const EXT_PATH = resolve('dist/chrome');
-const PROFILE = resolve('.e2e-profile');
+const PROFILE = resolve(process.env.SB_E2E_PROFILE ?? '.e2e-profile');
 const RUN = Date.now().toString(36); // keeps titles/keywords out of caches
 const KW = `sb-p2-kw-${RUN}`; // deterministic blocklist trigger (no classifier)
 
