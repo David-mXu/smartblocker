@@ -29,6 +29,9 @@ export function showBlockScreen(
   threshold?: number,
   /** Opt-in friction for non-locked overrides; serialized as a plain value. */
   surrenderMode?: 'off' | 'phrase',
+  /** Optional user-authored plain-text note (already sanitized by settings).
+   *  Rendered through a text node only, never HTML. */
+  blockMessage?: string,
 ): void {
   // Re-injection on the same document (SPA nav, sub-frame re-ensure): retire
   // the previous instance's observer + listeners through the isolated-world
@@ -210,6 +213,18 @@ export function showBlockScreen(
   const titleText = document.createTextNode(title);
   const titleEnd = document.createTextNode('”');
   pageTitle.append(titleLabel, titleText, titleEnd);
+
+  // --- Optional user note (plain text only) ---
+  const noteText =
+    typeof blockMessage === 'string' ? blockMessage.replace(/\s+/g, ' ').trim().slice(0, 160) : '';
+  const customNote = noteText ? document.createElement('div') : null;
+  if (customNote) {
+    customNote.id = 'smartblocker-block-message';
+    customNote.style.cssText =
+      (isCompact ? 'font-size:12px;margin-bottom:10px;' : 'font-size:14px;margin-bottom:28px;') +
+      'font-weight:500;line-height:1.5;color:#e8d9b8;max-width:440px;word-break:break-word';
+    customNote.textContent = noteText;
+  }
 
   // --- Threshold Meter (signature): score fill + amber tick at threshold ---
   const scorePct = Math.max(0, Math.min(100, Math.round(score * 100)));
@@ -541,7 +556,9 @@ export function showBlockScreen(
     btnRow.append(btnStay, btnOverride, btnDismiss);
   }
   if (!isSubFrame) card.appendChild(createMark());
-  card.append(pill, headline, pageTitle, meter, btnRow);
+  card.append(pill, headline, pageTitle);
+  if (customNote) card.appendChild(customNote);
+  card.append(meter, btnRow);
   if (ms > 0) card.appendChild(meta);
   shadow.appendChild(card);
   document.documentElement.appendChild(host);

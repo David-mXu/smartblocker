@@ -13,6 +13,11 @@ import {
 import { getLockStatus } from './lock';
 import { clampResumeAt } from './resume';
 import {
+  normalizeFirstDayOfWeek,
+  normalizeHour24,
+  sanitizeBlockMessage,
+} from './display-prefs';
+import {
   clampBreakDelayMinutes,
   clampBreakDurationMinutes,
   clampBreakTextLength,
@@ -153,6 +158,12 @@ export interface Settings {
    * this browser profile: no per-category or per-schedule notification scope.
    */
   notificationPrefs: NotificationPrefs;
+  /** Display only: 0 = Sunday, 1 = Monday. Never changes evaluation. */
+  firstDayOfWeek: 0 | 1;
+  /** Display only: format times as 24-hour instead of 12-hour. */
+  hour24: boolean;
+  /** Optional plain-text note shown on block screens. Empty = hidden. */
+  blockMessage: string;
 }
 
 /** v1: original list (search engines whitelisted). v2 (2026-11-07): search
@@ -186,6 +197,9 @@ export const DEFAULTS: Settings = {
   surrenderMode: 'off',
   maskSearchElements: true,
   notificationPrefs: DEFAULT_NOTIFICATION_PREFS,
+  firstDayOfWeek: 0,
+  hour24: false,
+  blockMessage: '',
 };
 
 const STORAGE_KEY = 'settings';
@@ -274,6 +288,19 @@ function normalizeBreakSettings(
   };
 }
 
+/** Display preferences and the custom block-screen message are presentation
+ *  only. Sanitizing on READ (and again on write) keeps devtools-tampered
+ *  values from reaching every renderer. */
+function normalizeDisplaySettings(
+  stored: Partial<Settings> | undefined,
+): Pick<Settings, 'firstDayOfWeek' | 'hour24' | 'blockMessage'> {
+  return {
+    firstDayOfWeek: normalizeFirstDayOfWeek(stored?.firstDayOfWeek),
+    hour24: normalizeHour24(stored?.hour24),
+    blockMessage: sanitizeBlockMessage(stored?.blockMessage),
+  };
+}
+
 /** Read settings (cached), falling back to DEFAULTS for any missing field. */
 export async function getSettings(): Promise<Settings> {
   if (cache) return cache;
@@ -283,6 +310,7 @@ export async function getSettings(): Promise<Settings> {
     ...DEFAULTS,
     ...storedSettings,
     ...normalizeBreakSettings(storedSettings),
+    ...normalizeDisplaySettings(storedSettings),
     ...migrateLabels(storedSettings),
     ...migrateWhitelist(storedSettings),
     notificationPrefs: normalizeNotificationPrefs(storedSettings?.notificationPrefs),
@@ -317,6 +345,7 @@ async function writeSettings(patch: Partial<Settings>, echoId?: string): Promise
   }
   Object.assign(next, normalizeBreakSettings(next));
   next.notificationPrefs = normalizeNotificationPrefs(next.notificationPrefs);
+  Object.assign(next, normalizeDisplaySettings(next));
   cache = next;
   await api.storage.local.set({
     [STORAGE_KEY]: next,

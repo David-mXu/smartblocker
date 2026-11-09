@@ -837,6 +837,7 @@ async function onSubFrame(
             overrideToken,
             settings.blockThreshold,
             settings.surrenderMode,
+            settings.blockMessage,
           ],
         })
         .catch(() => {});
@@ -1113,6 +1114,7 @@ async function onSubFrame(
               overrideToken,
               settings.blockThreshold,
               settings.surrenderMode,
+              settings.blockMessage,
             ],
           });
         }
@@ -1262,6 +1264,7 @@ async function onTitle(
       score: number;
       ms: number;
       reason: 'dnf-redirect' | 'classifier-unavailable';
+      blockMessage?: string;
     };
     let forceRedirectParams: ForceRedirectParams | null = null;
     let forceRedirectCommitted = false;
@@ -1489,6 +1492,7 @@ async function onTitle(
                   score: 1,
                   ms: 0,
                   reason: 'classifier-unavailable',
+                  blockMessage: settings.blockMessage,
                 }).catch(() => false);
               } else {
                 void api.scripting
@@ -1629,6 +1633,7 @@ async function onTitle(
           score: result.score,
           ms: Date.now() - tTitle,
           reason: classifyFailedClosed ? 'classifier-unavailable' : 'dnf-redirect',
+          blockMessage: settings.blockMessage,
         });
       }
       if (!stillCurrentTitle()) return;
@@ -1679,6 +1684,7 @@ async function onTitle(
                 overrideToken,
                 settings.blockThreshold,
                 settings.surrenderMode,
+                settings.blockMessage,
               ],
             });
           }

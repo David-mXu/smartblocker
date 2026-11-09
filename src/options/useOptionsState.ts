@@ -215,9 +215,9 @@ export function useOptionsState(): OptionsState {
     status: lockStatus,
     locked,
     passwordArmed,
-    banner: locked ? lockBannerText(lockStatus) : '',
+    banner: locked ? lockBannerText(lockStatus, settings?.hour24) : '',
     short: locked ? lockShortText(lockStatus) : '',
-    reason: locked ? lockReasonText(lockStatus) : '',
+    reason: locked ? lockReasonText(lockStatus, settings?.hour24) : '',
   };
 
   return {

@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Target,
+  TextAa,
   Timer,
   type Icon,
 } from '@phosphor-icons/react';
@@ -26,6 +27,7 @@ import { LocksPage } from './pages/LocksPage';
 import { AllowancePage } from './pages/AllowancePage';
 import { SchedulePage } from './pages/SchedulePage';
 import { NotificationsPage } from './pages/NotificationsPage';
+import { PreferencesPage } from './pages/PreferencesPage';
 import { CompanionPage } from './pages/CompanionPage';
 import { PrivacyPage } from './pages/PrivacyPage';
 import { AdvancedPage } from './pages/AdvancedPage';
@@ -52,6 +54,7 @@ const PAGES: PageDef[] = [
   { id: 'allowance', label: 'Breaks', icon: Timer, Component: AllowancePage },
   { id: 'schedule', label: 'Focus hours', icon: CalendarBlank, Component: SchedulePage },
   { id: 'notifications', label: 'Notifications', icon: Bell, Component: NotificationsPage },
+  { id: 'preferences', label: 'Preferences', icon: TextAa, Component: PreferencesPage },
   { id: 'usage', label: 'Usage', icon: ChartLineUp, Component: UsagePage },
   { id: 'companion', label: 'Desktop app', icon: Desktop, Component: CompanionPage },
   { id: 'privacy', label: 'Privacy & data', icon: ShieldCheck, Component: PrivacyPage },

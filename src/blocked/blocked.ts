@@ -25,6 +25,7 @@ import { renderBlockedPage, type BlockedPageReason } from '../background/blocksc
 const REASONS: ReadonlySet<string> = new Set(['dnf-redirect', 'classifier-unavailable']);
 const MAX_TITLE_LENGTH = 300;
 const MAX_LABEL_LENGTH = 120;
+const MAX_MESSAGE_LENGTH = 160;
 
 function readSpec(): {
   reason: BlockedPageReason;
@@ -32,6 +33,7 @@ function readSpec(): {
   label: string;
   score: number;
   ms: number;
+  blockMessage: string;
 } {
   const p = new URLSearchParams(window.location.search);
 
@@ -42,6 +44,13 @@ function readSpec(): {
 
   const title = (p.get('title') ?? '').slice(0, MAX_TITLE_LENGTH);
   const label = (p.get('label') ?? '').slice(0, MAX_LABEL_LENGTH);
+  // Plain text only; the renderer uses textContent. Newline/control collapse
+  // matches the options-page sanitizer.
+  const blockMessage = (p.get('msg') ?? '')
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_MESSAGE_LENGTH);
 
   const rawScore = Number(p.get('score'));
   const score = Number.isFinite(rawScore) ? Math.min(1, Math.max(0, rawScore)) : 0;
@@ -49,7 +58,7 @@ function readSpec(): {
   const rawMs = Number(p.get('ms'));
   const ms = Number.isFinite(rawMs) ? Math.min(600_000, Math.max(0, Math.round(rawMs))) : 0;
 
-  return { reason, title, label, score, ms };
+  return { reason, title, label, score, ms, blockMessage };
 }
 
 const spec = readSpec();

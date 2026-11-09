@@ -25,7 +25,7 @@ import {
   BREAK_TEXT_LENGTH_MIN,
 } from '../../shared/breaks';
 import type { OptionsState } from '../useOptionsState';
-import { formatClock, formatRemaining } from '../format';
+import { formatClock as formatClockRaw, formatRemaining } from '../format';
 import { LockedNote, Page } from './Page';
 import { PartnerSection } from './PartnerSection';
 
@@ -39,6 +39,8 @@ async function sendLockTypeMessage(message: Request): Promise<LockTypeResponse> 
 
 export function LocksPage({ state }: { state: OptionsState }) {
   const { settings, lock, refreshLock, incognitoAllowed, now, flash, save } = state;
+  const hour24 = settings?.hour24 ?? false;
+  const formatClock = (ts: number) => formatClockRaw(ts, Date.now(), hour24);
 
   const [lockDuration, setLockDuration] = useState('1');
   const [lockUnit, setLockUnit] = useState<'h' | 'd'>('h');
@@ -90,6 +92,9 @@ export function LocksPage({ state }: { state: OptionsState }) {
   const randomActive = lock.status.reasons.includes('random-text');
 
   const timerActive = lock.status.reasons.includes('timer');
+  const partnerActive = lock.status.reasons.includes('partner');
+  const noLocksConfigured =
+    !timerActive && !lock.passwordArmed && !delayActive && !randomActive && !partnerActive;
 
   const resetConfirm = () => {
     if (confirmTimer.current) clearTimeout(confirmTimer.current);
@@ -238,6 +243,11 @@ export function LocksPage({ state }: { state: OptionsState }) {
       title="Locks"
       description="A lock stops future-you from switching blocking off or loosening settings. Timers cannot be shortened; gated locks release only through their own unlock flow. Every lock survives restarts."
     >
+      {noLocksConfigured && (
+        <p id="locks-empty-hint" className="m-0 px-1 text-[13px] text-faint">
+          No locks configured. Pick one below when you want extra commitment.
+        </p>
+      )}
       <SettingsSection
         title="Timer lock"
         description="Locks settings for a set time. Block screens hide their “let me through” buttons until it ends."

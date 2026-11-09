@@ -34,6 +34,8 @@ export function FocusPage({ state }: { state: OptionsState }) {
 
   if (!settings) return null;
 
+  const clock = (ts: number) => formatClock(ts, Date.now(), settings.hour24);
+
   const saveGoal = () => {
     const next = goal.trim();
     if (next === settings.focusGoal) return;
@@ -51,7 +53,7 @@ export function FocusPage({ state }: { state: OptionsState }) {
     try {
       const p = await startFocusSession(sessionMins * 60_000);
       await refreshPendingFocus();
-      setSessionMsg(`Focus session starts in 1 minute and locks until ${formatClock(p.until)}.`);
+      setSessionMsg(`Focus session starts in 1 minute and locks until ${clock(p.until)}.`);
     } catch (e) {
       setSessionMsg(e instanceof Error ? e.message : String(e));
     }
@@ -138,7 +140,7 @@ export function FocusPage({ state }: { state: OptionsState }) {
                 <span className="text-sm font-medium text-accent-soft">Focus session in progress</span>
                 <span className="text-[13px] text-muted-foreground tabular-nums">
                   {sessionEndKnown
-                    ? `${formatRemaining(lock.status.until! - now)} left — ends at ${formatClock(lock.status.until!)}.`
+                    ? `${formatRemaining(lock.status.until! - now)} left — ends at ${clock(lock.status.until!)}.`
                     : 'Blocking stays on until it ends.'}
                 </span>
               </div>
@@ -148,7 +150,7 @@ export function FocusPage({ state }: { state: OptionsState }) {
               <Callout tone="commit" role="status" aria-live="polite">
                 <span className="tabular-nums">
                   Focus session starts in {formatCountdown(pendingFocus.commitAt - now)} and locks until{' '}
-                  {formatClock(pendingFocus.until)}.
+                  {clock(pendingFocus.until)}.
                 </span>
               </Callout>
               <div>
@@ -202,7 +204,7 @@ export function FocusPage({ state }: { state: OptionsState }) {
                   Start focus session
                 </Button>
                 <span className="text-[13px] text-muted-foreground tabular-nums">
-                  Locks until {formatClock(plannedEnd)}.
+                  Locks until {clock(plannedEnd)}.
                 </span>
               </div>
             </div>

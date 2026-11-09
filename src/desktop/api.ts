@@ -11,7 +11,7 @@
 
 import { mockInvoke } from './mock';
 
-export type LockReason = 'timer' | 'password' | 'frozen' | 'schedule';
+export type LockReason = 'timer' | 'password' | 'frozen' | 'schedule' | 'schedule-lead';
 
 export interface PendingSession {
   untilMs: number;

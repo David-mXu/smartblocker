@@ -3185,6 +3185,7 @@ mod tests {
                 days: vec![1, 2, 3, 4, 5],
                 start_minutes: 540,
                 end_minutes: 1020,
+                lead_minutes: None,
                 tz_offset_minutes: None,
                 tz_name: None,
             }],
@@ -4375,6 +4376,7 @@ mod tests {
             days: vec![1],
             start_minutes: 540,
             end_minutes: 1020,
+            lead_minutes: None,
             tz_offset_minutes: Some(0),
             tz_name: Some("UTC".into()),
         };

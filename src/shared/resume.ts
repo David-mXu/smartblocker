@@ -13,7 +13,7 @@
 // `allowImportingTsExtensions` for exactly this; Vite resolves both forms).
 // Only PUBLIC lock-math exports are consumed — the schedule evaluation
 // (overnight windows, timezone pins) stays single-sourced in lock-math.ts.
-import { currentWindowEnd, EMPTY_LOCK_STATE, nextBoundary } from './lock-math.ts';
+import { nextWindowStart } from './lock-math.ts';
 import type { ScheduleRule } from './lock-math.ts';
 
 /** How an armed resume fires when the master toggle is off. */
@@ -53,27 +53,12 @@ export function clampResumeAt(value: unknown, now: number): number | null {
  *  the rules never start one (empty list / no future windows — the "no
  *  schedule" case, where a schedule-mode plan is inert by construction).
  *
- *  Derivation rides entirely on lock-math's public builders: while `t` sits
- *  inside a window (or a stack of overlapping ones) nextBoundary would yield
- *  that window's END, so we hop `t` to the end and re-ask. Once nothing
- *  contains `t`, nextBoundary's earliest candidate MUST be a START — an end
- *  is only ever pushed alongside its own strictly smaller start candidate.
- *  The hop cap is unreachable in practice (each hop advances `t` strictly);
- *  it exists so a pathological ruleset degrades to "inert" instead of a
- *  loop. */
+ *  Deliberately ignores a rule's settings-lock lead time: "resume when
+ *  focus hours begin" means the real window start, not the earlier lead
+ *  freeze (which does not force blocking). `nextWindowStart` shares the
+ *  exact overnight/timezone-pin evaluation with lock-math. */
 export function nextScheduleStart(rules: ScheduleRule[], now: number): number | null {
-  const state = { ...EMPTY_LOCK_STATE, schedules: rules };
-  const maxHops = 16 + 8 * rules.length;
-  let t = now;
-  for (let i = 0; i < maxHops; i++) {
-    const end = currentWindowEnd(rules, new Date(t));
-    if (end !== null) {
-      t = end;
-      continue;
-    }
-    return nextBoundary(state, t);
-  }
-  return null;
+  return nextWindowStart(rules, now);
 }
 
 /** The epoch ms at which an armed resume plan should fire, or null when the

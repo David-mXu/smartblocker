@@ -101,6 +101,7 @@ const REASON_NAMES: Record<LockReason, string> = {
   timer: 'settings lock',
   password: 'password lock',
   schedule: 'focus hours',
+  'schedule-lead': 'focus hours lead-in',
 };
 
 export function reasonsText(reasons: LockReason[]): string {

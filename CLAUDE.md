@@ -341,8 +341,10 @@ Commit and push when appropriate.
   routes: `#dashboard` (read-only Now / Next / Relief plus today's focus-hours
   and category timeline), `#blocking` (switch, strictness presets, categories,
   history review), `#sites` (`ListEditor` Always allow / Always block), `#focus`,
-  `#locks` (+ incognito-access warning), `#schedule` (focus hours),
-  `#notifications` (silent reminder toggles + minute leads), `#usage`
+  `#locks` (+ incognito-access warning), `#schedule` (focus hours with an
+  optional per-rule settings-lock lead), `#notifications` (silent reminder
+  toggles + minute leads), `#preferences` (display-only first day of week +
+  24-hour time), `#usage`
   (idle-aware local-day host/category dashboard + JSON export/clear),
   `#companion`, `#privacy`, `#advanced` (exact threshold slider +
   diagnostics: Test classifier / Scan history / Latency log → `#out`), and
@@ -399,12 +401,17 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   erasable-syntax-only, Node-tested by `scripts/rules-test.mjs` +
   `scripts/rta-test.mjs`), `resume.ts` (pure auto-resume derivations —
   mode normalization, the 24h `resumeAt` clamp, and `nextScheduleStart`
-  built ONLY on lock-math's public builders; erasable-syntax-only, tested
-  by `scripts/resume-test.mjs`), `notifications.ts` (pure reminder
-  preferences/ledger sanitization + `planNotifications` derivation from lock
-  state, category schedules, and allowance authority; erasable-syntax-only,
-  tested by `scripts/notifications-test.mjs`), `lock-math.ts` (pure
-  lock/schedule time math — no browser APIs, Node-testable; also
+  built on lock-math's `nextWindowStart` so a settings-lock lead does not
+  move the resume instant; erasable-syntax-only, tested by
+  `scripts/resume-test.mjs`), `notifications.ts` (pure reminder preferences/
+  ledger sanitization + `planNotifications` derivation from lock state,
+  category schedules, and allowance authority; erasable-syntax-only, tested
+  by `scripts/notifications-test.mjs`), `display-prefs.ts` (pure
+  first-day/weekday ordering, 12/24-hour formatting, and block-message
+  sanitization; tested by `scripts/preferences-test.mjs`), `lock-math.ts`
+  (pure lock/schedule time math — no browser APIs, Node-testable; per-rule
+  `leadMinutes` freezes settings before a window without forcing blocking;
+  also
   `mergeLockStates` + `sanitizeLockState`, MIRRORED in the companion's
   `merge.rs`/`lock_math.rs` — change both together, parity enforced by
   `companion/crates/smartblocker-core/tests/fixtures/lock-cases.json` which both

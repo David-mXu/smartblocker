@@ -61,6 +61,8 @@ export interface ForceRedirectInfo {
   score: number;
   ms: number;
   reason: ForceRedirectReason;
+  /** Optional user note; bounded again when the extension page parses it. */
+  blockMessage?: string;
 }
 
 /** Add ownership is explicit: an idempotent hit on an already-enforced rule is
@@ -152,6 +154,7 @@ function buildExtensionPath(info: ForceRedirectInfo): string {
   const score = Number.isFinite(info.score) ? Math.min(1, Math.max(0, info.score)) : 0;
   p.set('score', score.toFixed(3));
   p.set('ms', String(Math.max(0, Math.round(info.ms))));
+  if (info.blockMessage) p.set('msg', info.blockMessage.slice(0, 160));
   return `/blocked.html?${p.toString()}`;
 }
 

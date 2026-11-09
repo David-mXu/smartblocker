@@ -6,6 +6,7 @@ import {
   validateCategoryScheduleRule,
   type CategoryScheduleRule,
 } from '../../shared/lock-math';
+import { sortDaysForDisplay } from '../../shared/display-prefs';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { SettingsGroup, SettingsSection } from '../../components/ui/settings';
@@ -35,15 +36,20 @@ function sameRules(a: CategoryScheduleRule[], b: CategoryScheduleRule[]): boolea
   return key(a) === key(b);
 }
 
-function ruleSummary(rule: CategoryScheduleRule): string {
+function ruleSummary(rule: CategoryScheduleRule, firstDay: 0 | 1, hour24: boolean): string {
   const days = [...rule.days].sort((a, b) => a - b);
   const dayText =
     days.join(',') === '0,1,2,3,4,5,6'
       ? 'Every day'
       : days.join(',') === '1,2,3,4,5'
         ? 'Weekdays'
-        : days.map((day) => DAY_SHORT[day]).join(', ') || 'No days picked';
-  return `${dayText} · ${minutesToClock(rule.startMinutes)} – ${minutesToClock(rule.endMinutes)}`;
+        : sortDaysForDisplay(days, firstDay)
+            .map((day) => DAY_SHORT[day])
+            .join(', ') || 'No days picked';
+  return `${dayText} · ${minutesToClock(rule.startMinutes, hour24)} – ${minutesToClock(
+    rule.endMinutes,
+    hour24,
+  )}`;
 }
 
 interface Props {
@@ -52,12 +58,22 @@ interface Props {
   lockReason: string;
   now: number;
   refreshLock: () => Promise<void>;
+  firstDay: 0 | 1;
+  hour24: boolean;
 }
 
 /** Editor for additive categorySchedules only. Legacy global focus hours stay
  * in SchedulePage; combining the two would make mixed-version semantics and
  * the very different lock behavior needlessly ambiguous. */
-export function CategoryScheduleSection({ labels, locked, lockReason, now, refreshLock }: Props) {
+export function CategoryScheduleSection({
+  labels,
+  locked,
+  lockReason,
+  now,
+  refreshLock,
+  firstDay,
+  hour24,
+}: Props) {
   const [saved, setSaved] = useState<CategoryScheduleRule[]>([]);
   const [rules, setRules] = useState<CategoryScheduleRule[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -153,7 +169,7 @@ export function CategoryScheduleSection({ labels, locked, lockReason, now, refre
             <SettingsGroup key={rule.id} className="category-schedule-row">
               <div className="flex items-start justify-between gap-3 px-4 py-3">
                 <div className="min-w-0">
-                  <p className="m-0 text-sm font-medium text-foreground">{ruleSummary(rule)}</p>
+                  <p className="m-0 text-sm font-medium text-foreground">{ruleSummary(rule, firstDay, hour24)}</p>
                   <div className="mt-1.5 flex flex-wrap gap-1">
                     {rule.categories.map((category) => (
                       <Badge key={category} variant="outline">
@@ -173,7 +189,7 @@ export function CategoryScheduleSection({ labels, locked, lockReason, now, refre
                     size="icon"
                     disabled={readOnly}
                     title={readOnly ? disabledReason : 'Remove this category schedule'}
-                    aria-label={`Remove category schedule: ${ruleSummary(rule)}`}
+                    aria-label={`Remove category schedule: ${ruleSummary(rule, firstDay, hour24)}`}
                     className="category-schedule-remove hover:text-destructive-soft"
                     onClick={() => {
                       if (!readOnly) setRules((current) => current.filter((item) => item.id !== rule.id));
@@ -186,7 +202,7 @@ export function CategoryScheduleSection({ labels, locked, lockReason, now, refre
 
               <div className="flex flex-col gap-3 px-4 py-3.5">
                 <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Days">
-                  {DAY_LETTERS.map((letter, day) => {
+                  {sortDaysForDisplay([0, 1, 2, 3, 4, 5, 6], firstDay).map((day) => {
                     const on = rule.days.includes(day);
                     return (
                       <label
@@ -215,7 +231,7 @@ export function CategoryScheduleSection({ labels, locked, lockReason, now, refre
                             }))
                           }
                         />
-                        <span aria-hidden>{letter}</span>
+                        <span aria-hidden>{DAY_LETTERS[day]}</span>
                       </label>
                     );
                   })}
@@ -298,7 +314,7 @@ export function CategoryScheduleSection({ labels, locked, lockReason, now, refre
                 ) : overnight ? (
                   <p className="m-0 flex items-center gap-1.5 text-xs text-muted-foreground">
                     <MoonStars aria-hidden className="size-3.5 shrink-0" />
-                    Runs overnight — ends at {minutesToClock(rule.endMinutes)} the next day.
+                    Runs overnight — ends at {minutesToClock(rule.endMinutes, hour24)} the next day.
                   </p>
                 ) : null}
               </div>

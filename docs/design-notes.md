@@ -219,11 +219,14 @@ Tint recipe for callouts: `bg-<hue>/10 border-<hue>/30 text-<hue>-soft`.
   and YouTube channels — always block / never block for their topic) · Focus `#focus` (goal, open-tab
   context, start a focus session) · Locks `#locks` (timer, password, optional delay/random-text break
   gates, incognito warning; break settings disable while locked) · Focus hours `#schedule` (summary cards, S–M–T–W–T–F–S
-  day chips, overnight note, presets "Weekdays 9–5" / "Every evening 7–10 PM")
+  day chips in the preferred order, optional per-rule settings-lock lead with
+  a badge + "settings lock at … / blocking still starts at …" explanation,
+  overnight note, presets "Weekdays 9–5" / "Every evening 7–10 PM")
   · Notifications `#notifications` (three independent, silent, off-by-default
   reminders — focus hours starting soon, break ending soon, allowance nearly
   used up — each with a 1–60 minute lead; controls disable while locked)
-  · Usage `#usage` (rolling seven-day silenced pages + override rate, local-day
+  · Preferences `#preferences` (first day of week, 24-hour time, live preview;
+  display-only) · Usage `#usage` (rolling seven-day silenced pages + override rate, local-day
   site/category tables, JSON export, two-step clear) · Desktop app `#companion`
   · Privacy & data `#privacy` (danger zone last) · Advanced `#advanced` (exact sensitivity slider; Diagnostics: Test
   classifier, Scan history, Latency log, `#out`).
@@ -304,7 +307,9 @@ the lock is deferred — copy says "Locks in 0:42", never "Starts in".
 ### Block screen (`blockscreen.ts` injected + `blockscreen-ui.ts` → `blocked.html`)
 Full-bleed obsidian, **no card**, centered column ≤ 520px:
 wordmark (faint) → eyebrow `Blocked · <category>` → headline **"This one can
-wait."** (34/600) → quoted page title (muted) → **Threshold Meter**
+wait."** (34/600) → quoted page title (muted) → optional user note
+(`#smartblocker-block-message`, plain text, ≤160 chars, configured on
+Blocking) → **Threshold Meter**
 ("87% confidence", tick at threshold) → buttons: **Stay focused (close tab)**
 primary ivory, *This is actually productive — let me through* outline,
 Dismiss text → meta "Checked on-device in 12ms" (faint).

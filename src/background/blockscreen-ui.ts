@@ -29,6 +29,8 @@ export interface BlockedPageSpec {
   /** 0..1 — shown as the confidence pill on the normal variant only. */
   score: number;
   ms: number;
+  /** Optional user note; already bounded/sanitized by the caller. */
+  blockMessage?: string;
 }
 
 export interface BlockedPageHandlers {
@@ -169,6 +171,18 @@ export function renderBlockedPage(
     );
   }
   parts.push(pageTitle);
+
+  // --- Optional user note (attacker-influenced query param: text node only) ---
+  const message = (spec.blockMessage ?? '').replace(/\s+/g, ' ').trim().slice(0, 160);
+  if (message) {
+    const note = document.createElement('div');
+    note.id = 'smartblocker-block-message';
+    note.style.cssText =
+      (isCompact ? 'font-size:12px;margin-bottom:10px;' : 'font-size:14px;margin-bottom:28px;') +
+      'font-weight:500;line-height:1.5;color:#e8d9b8;max-width:440px;word-break:break-word';
+    note.textContent = message;
+    parts.push(note);
+  }
 
   // --- Threshold Meter (normal variant only — fail-closed shows no fake
   // confidence). The redirect URL carries no threshold, so no tick here.

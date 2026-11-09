@@ -8,7 +8,7 @@
 //! Contract invariants shared with the TS side:
 //! - expiry is strict `>` (a lock ending exactly `now` is inactive);
 //! - `reasons` order is fixed: timer, password, delay, random-text, frozen,
-//!   schedule, partner;
+//!   schedule, schedule-lead, partner;
 //! - overnight windows are expressed as `endMinutes < startMinutes`;
 //! - armed password/delay/random-text/partner gates make `until` indefinite.
 
@@ -24,6 +24,8 @@ pub const MIN_DELAY_LOCK_MS: i64 = 60_000;
 pub const MAX_DELAY_LOCK_MS: i64 = 40 * 24 * 3_600_000;
 pub const MIN_RANDOM_TEXT_LOCK_LENGTH: u16 = 1;
 pub const MAX_RANDOM_TEXT_LOCK_LENGTH: u16 = 5_000;
+pub const MIN_SCHEDULE_LEAD_MINUTES: u16 = 1;
+pub const MAX_SCHEDULE_LEAD_MINUTES: u16 = 1_440;
 const MAX_SAFE_TIMESTAMP_MS: u64 = 9_007_199_254_740_991;
 
 fn is_zero(value: &u64) -> bool {
@@ -40,6 +42,13 @@ pub struct ScheduleRule {
     pub start_minutes: u16,
     /// 0..=1439. `end < start` = overnight window into the next day.
     pub end_minutes: u16,
+    /// Optional "lock settings before this schedule starts" lead time, in
+    /// whole minutes (1–1440). Absent or 0 = OFF. During the lead interval
+    /// `[start - lead, start)` settings are frozen but blocking is NOT
+    /// forced; at the real start the ordinary schedule window takes over.
+    /// Category schedules accept the field but category policy ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead_minutes: Option<u16>,
     /// Timezone the window times are pinned to: minutes EAST of UTC (e.g.
     /// 330 = UTC+05:30), captured when the rule was written (the extension's
     /// `lock.ts` setSchedules — the only legal schedule write path). `Some`:
@@ -187,6 +196,8 @@ pub enum LockReason {
     RandomText,
     Frozen,
     Schedule,
+    #[serde(rename = "schedule-lead")]
+    ScheduleLead,
     Partner,
 }
 
@@ -399,6 +410,149 @@ pub fn current_category_window_end(rules: &[CategoryScheduleRule], now_ms: i64) 
     current_category_window_end_in(rules, now_ms, &chrono::Local)
 }
 
+/// Valid lead in whole minutes, or 0 when OFF. Out-of-range values are
+/// treated as OFF here; `validate_schedule_rule` rejects them on write.
+fn rule_lead_minutes(r: &ScheduleRule) -> u16 {
+    r.lead_minutes
+        .filter(|m| (MIN_SCHEDULE_LEAD_MINUTES..=MAX_SCHEDULE_LEAD_MINUTES).contains(m))
+        .unwrap_or(0)
+}
+
+/// End of the lead interval under `r` containing `now_ms`, or None. Mirrors
+/// `ruleLeadEnd` in lock-math.ts: the returned instant is the underlying
+/// window's END so a lead lock flows continuously through the real window.
+fn rule_lead_end<Tz: TimeZone>(r: &ScheduleRule, now_ms: i64, tz: &Tz) -> Option<i64> {
+    match pinned_offset(r) {
+        Some(off) => rule_lead_end_tz(r, now_ms, &off),
+        None => rule_lead_end_tz(r, now_ms, tz),
+    }
+}
+
+fn rule_lead_end_tz<Tz: TimeZone>(r: &ScheduleRule, now_ms: i64, tz: &Tz) -> Option<i64> {
+    let dur = window_duration_ms(r);
+    let lead = rule_lead_minutes(r);
+    if dur <= 0 || lead == 0 {
+        return None;
+    }
+    let lead_ms = i64::from(lead) * 60_000;
+    for offset in [0, 1] {
+        let Some(day_start) = local_midnight(tz, now_ms, offset) else {
+            continue;
+        };
+        if !r
+            .days
+            .contains(&(day_start.weekday().num_days_from_sunday() as u8))
+        {
+            continue;
+        }
+        let start = day_start.timestamp_millis() + i64::from(r.start_minutes) * 60_000;
+        if now_ms >= start - lead_ms && now_ms < start {
+            return Some(start + dur);
+        }
+    }
+    None
+}
+
+/// End of the latest-ending lead interval containing `now_ms`, or None.
+pub fn current_schedule_lead_end_in<Tz: TimeZone>(
+    rules: &[ScheduleRule],
+    now_ms: i64,
+    tz: &Tz,
+) -> Option<i64> {
+    rules
+        .iter()
+        .filter_map(|r| rule_lead_end(r, now_ms, tz))
+        .max()
+}
+
+/// Next instant strictly after `now` at which the settings lock turns on:
+/// a lead start when configured, otherwise the window start.
+pub fn next_schedule_lock_at_in<Tz: TimeZone>(
+    rules: &[ScheduleRule],
+    now: i64,
+    tz: &Tz,
+) -> Option<i64> {
+    let mut min: Option<i64> = None;
+    for r in rules {
+        if window_duration_ms(r) <= 0 {
+            continue;
+        }
+        match pinned_offset(r) {
+            Some(off) => rule_lock_onsets_tz(r, now, &off, &mut min),
+            None => rule_lock_onsets_tz(r, now, tz, &mut min),
+        }
+    }
+    min
+}
+
+fn rule_lock_onsets_tz<Tz: TimeZone>(
+    r: &ScheduleRule,
+    now: i64,
+    tz: &Tz,
+    min: &mut Option<i64>,
+) {
+    let lead_ms = i64::from(rule_lead_minutes(r)) * 60_000;
+    for offset in -1..=7 {
+        let Some(day_start) = local_midnight(tz, now, offset) else {
+            continue;
+        };
+        if !r
+            .days
+            .contains(&(day_start.weekday().num_days_from_sunday() as u8))
+        {
+            continue;
+        }
+        let onset = day_start.timestamp_millis() + i64::from(r.start_minutes) * 60_000 - lead_ms;
+        if onset > now && min.is_none_or(|m| onset < m) {
+            *min = Some(onset);
+        }
+    }
+}
+
+/// Next actual window START strictly after `now`, ignoring lead intervals.
+/// Auto-resume uses this so "resume when focus hours begin" means the real
+/// window, not the earlier settings freeze.
+pub fn next_window_start_in<Tz: TimeZone>(
+    rules: &[ScheduleRule],
+    now: i64,
+    tz: &Tz,
+) -> Option<i64> {
+    let mut min: Option<i64> = None;
+    for r in rules {
+        if window_duration_ms(r) <= 0 {
+            continue;
+        }
+        match pinned_offset(r) {
+            Some(off) => rule_window_starts_tz(r, now, &off, &mut min),
+            None => rule_window_starts_tz(r, now, tz, &mut min),
+        }
+    }
+    min
+}
+
+fn rule_window_starts_tz<Tz: TimeZone>(
+    r: &ScheduleRule,
+    now: i64,
+    tz: &Tz,
+    min: &mut Option<i64>,
+) {
+    for offset in -1..=7 {
+        let Some(day_start) = local_midnight(tz, now, offset) else {
+            continue;
+        };
+        if !r
+            .days
+            .contains(&(day_start.weekday().num_days_from_sunday() as u8))
+        {
+            continue;
+        }
+        let start = day_start.timestamp_millis() + i64::from(r.start_minutes) * 60_000;
+        if start > now && min.is_none_or(|m| start < m) {
+            *min = Some(start);
+        }
+    }
+}
+
 /// Next start-or-end instant strictly after `now` across all sources, or
 /// None when nothing is pending. Drives the promptness-only boundary alarm.
 pub fn next_boundary_in<Tz: TimeZone>(state: &LockState, now: i64, tz: &Tz) -> Option<i64> {
@@ -453,6 +607,10 @@ fn rule_boundaries_tz<Tz: TimeZone>(r: &ScheduleRule, now: i64, tz: &Tz, out: &m
             continue;
         }
         let start = day_start.timestamp_millis() + i64::from(r.start_minutes) * 60_000;
+        let lead_ms = i64::from(rule_lead_minutes(r)) * 60_000;
+        if lead_ms > 0 && start - lead_ms > now {
+            out.push(start - lead_ms);
+        }
         if start > now {
             out.push(start);
         }
@@ -487,6 +645,11 @@ pub fn derive_lock_status_in<Tz: TimeZone>(state: &LockState, now: i64, tz: &Tz)
     let window_end = current_window_end_in(&state.schedules, now, tz);
     if let Some(e) = window_end {
         reasons.push(LockReason::Schedule);
+        ends.push(e);
+    }
+    let lead_end = current_schedule_lead_end_in(&state.schedules, now, tz);
+    if let Some(e) = lead_end {
+        reasons.push(LockReason::ScheduleLead);
         ends.push(e);
     }
     let partner_arm = armed_partner_generation(state);
@@ -526,6 +689,14 @@ pub fn derive_lock_status(state: &LockState, now: i64) -> LockStatus {
 
 pub fn next_boundary(state: &LockState, now: i64) -> Option<i64> {
     next_boundary_in(state, now, &chrono::Local)
+}
+
+pub fn next_schedule_lock_at(rules: &[ScheduleRule], now: i64) -> Option<i64> {
+    next_schedule_lock_at_in(rules, now, &chrono::Local)
+}
+
+pub fn next_window_start(rules: &[ScheduleRule], now: i64) -> Option<i64> {
+    next_window_start_in(rules, now, &chrono::Local)
 }
 
 pub fn current_window_end(rules: &[ScheduleRule], now_ms: i64) -> Option<i64> {
@@ -655,6 +826,11 @@ pub fn validate_schedule_rule(r: &ScheduleRule) -> Option<&'static str> {
     }
     if r.start_minutes == r.end_minutes {
         return Some("Start and end times must differ.");
+    }
+    if r.lead_minutes
+        .is_some_and(|m| m > MAX_SCHEDULE_LEAD_MINUTES)
+    {
+        return Some("Lead time must be between 0 and 1440 minutes.");
     }
     if let Some(m) = r.tz_offset_minutes {
         if !(-720..=840).contains(&m) {
@@ -912,6 +1088,7 @@ mod tests {
             days: days.to_vec(),
             start_minutes: start,
             end_minutes: end,
+            lead_minutes: None,
             tz_offset_minutes: None,
             tz_name: None,
         }
@@ -1043,6 +1220,65 @@ mod tests {
                 ..LockState::default()
             };
             assert_eq!(next_boundary_in(&state, now, tz), Some(now + 60_000));
+        }
+    }
+
+    #[test]
+    fn schedule_lead_locks_settings_only_and_hands_over_at_the_exact_start() {
+        for tz in &zones() {
+            let mut lead_workdays = workdays();
+            lead_workdays.lead_minutes = Some(30);
+            let rules = [lead_workdays];
+            let state = schedules_state(rules.to_vec());
+            let pre = derive_lock_status_in(&state, at(tz, 8, 8, 30), tz);
+            assert_eq!(pre.reasons, vec![LockReason::ScheduleLead]);
+            assert!(pre.settings_locked);
+            assert!(!pre.force_blocking);
+            // The lead lock runs through the real window's end.
+            assert_eq!(pre.until, Some(at(tz, 8, 17, 0)));
+
+            let start = derive_lock_status_in(&state, at(tz, 8, 9, 0), tz);
+            assert_eq!(start.reasons, vec![LockReason::Schedule]);
+            assert!(start.force_blocking);
+        }
+    }
+
+    #[test]
+    fn schedule_lead_crosses_midnight_for_an_overnight_window() {
+        for tz in &zones() {
+            let mut overnight = mon_overnight();
+            overnight.lead_minutes = Some(60);
+            let rules = [overnight];
+            let pre = derive_lock_status_in(
+                &schedules_state(rules.to_vec()),
+                at(tz, 6, 21, 30),
+                tz,
+            );
+            assert_eq!(pre.reasons, vec![LockReason::ScheduleLead]);
+            assert_eq!(pre.until, Some(at(tz, 7, 6, 0)));
+        }
+    }
+
+    #[test]
+    fn next_schedule_lock_at_uses_the_lead_but_next_window_start_does_not() {
+        for tz in &zones() {
+            let mut lead_workdays = workdays();
+            lead_workdays.lead_minutes = Some(30);
+            let rules = [lead_workdays];
+            let now = at(tz, 8, 8, 0);
+            assert_eq!(
+                next_schedule_lock_at_in(&rules, now, tz),
+                Some(at(tz, 8, 8, 30))
+            );
+            assert_eq!(
+                next_window_start_in(&rules, now, tz),
+                Some(at(tz, 8, 9, 0))
+            );
+            let state = schedules_state(rules.to_vec());
+            assert_eq!(
+                next_boundary_in(&state, now, tz),
+                Some(at(tz, 8, 8, 30))
+            );
         }
     }
 

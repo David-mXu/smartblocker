@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Plus, X, MoonStars } from '@phosphor-icons/react';
 import { getLockState, setSchedules } from '../../shared/lock';
 import { isInScheduleWindow, validateScheduleRule, type ScheduleRule } from '../../shared/lock-math';
+import { sortDaysForDisplay } from '../../shared/display-prefs';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
 import { SettingsGroup, SettingsSection } from '../../components/ui/settings';
@@ -20,21 +21,29 @@ const PRESETS: { name: string; days: number[]; start: number; end: number }[] = 
   { name: 'Every evening 7–10 PM', days: [0, 1, 2, 3, 4, 5, 6], start: 19 * 60, end: 22 * 60 },
 ];
 
-function daysSummary(days: number[]): string {
+function daysSummary(days: number[], firstDay: 0 | 1): string {
   const set = [...days].sort((a, b) => a - b).join(',');
   if (set === '') return 'No days picked';
   if (set === '0,1,2,3,4,5,6') return 'Every day';
   if (set === '1,2,3,4,5') return 'Weekdays';
   if (set === '0,6') return 'Weekends';
-  // Mon-first reading order.
-  return [...days]
-    .sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7))
+  return sortDaysForDisplay(days, firstDay)
     .map((d) => DAY_SHORT[d])
     .join(', ');
 }
 
-function ruleSummary(r: ScheduleRule): string {
-  return `${daysSummary(r.days)} · ${minutesToClock(r.startMinutes)} – ${minutesToClock(r.endMinutes)}`;
+function leadBadgeText(leadMinutes: number | null | undefined): string {
+  const lead = typeof leadMinutes === 'number' ? leadMinutes : 0;
+  if (lead <= 0) return '';
+  return lead % 60 === 0 ? `Lead ${lead / 60}h` : `Lead ${lead}m`;
+}
+
+function ruleSummary(r: ScheduleRule, firstDay: 0 | 1, hour24: boolean): string {
+  const lead = leadBadgeText(r.leadMinutes);
+  return `${daysSummary(r.days, firstDay)} · ${minutesToClock(r.startMinutes, hour24)} – ${minutesToClock(
+    r.endMinutes,
+    hour24,
+  )}${lead ? ` · ${lead}` : ''}`;
 }
 
 function cloneRules(rules: ScheduleRule[]): ScheduleRule[] {
@@ -43,13 +52,23 @@ function cloneRules(rules: ScheduleRule[]): ScheduleRule[] {
 
 function sameRules(a: ScheduleRule[], b: ScheduleRule[]): boolean {
   const key = (rs: ScheduleRule[]) =>
-    JSON.stringify(rs.map((r) => [r.id, [...r.days].sort(), r.startMinutes, r.endMinutes]));
+    JSON.stringify(
+      rs.map((r) => [
+        r.id,
+        [...r.days].sort(),
+        r.startMinutes,
+        r.endMinutes,
+        r.leadMinutes ?? 0,
+      ]),
+    );
   return key(a) === key(b);
 }
 
 export function SchedulePage({ state }: { state: OptionsState }) {
   const { lock, refreshLock, now } = state;
   const locked = lock.locked;
+  const firstDay = state.settings?.firstDayOfWeek ?? 0;
+  const hour24 = state.settings?.hour24 ?? false;
 
   const [saved, setSaved] = useState<ScheduleRule[]>([]);
   const [rules, setRules] = useState<ScheduleRule[]>([]);
@@ -125,11 +144,20 @@ export function SchedulePage({ state }: { state: OptionsState }) {
             const overnight = rule.endMinutes < rule.startMinutes;
             const problem = validateScheduleRule(rule);
             const active = !problem && isInScheduleWindow([rule], new Date(now));
+            const lead = rule.leadMinutes ?? 0;
+            const leadLabel = leadBadgeText(lead);
             return (
               <SettingsGroup key={rule.id} className="schedule-row">
                 <div className="flex items-center justify-between gap-3 px-4 py-3">
-                  <span className="min-w-0 text-sm font-medium text-foreground">{ruleSummary(rule)}</span>
+                  <span className="min-w-0 text-sm font-medium text-foreground">
+                    {ruleSummary(rule, firstDay, hour24)}
+                  </span>
                   <div className="flex shrink-0 items-center gap-2">
+                    {leadLabel && (
+                      <Badge variant="outline" className="schedule-lead-badge">
+                        {leadLabel}
+                      </Badge>
+                    )}
                     {active && (
                       <Badge variant="commit" dot>
                         On now
@@ -141,7 +169,7 @@ export function SchedulePage({ state }: { state: OptionsState }) {
                       disabled={locked}
                       onClick={() => removeRule(rule.id)}
                       title={locked ? lock.reason : 'Remove these focus hours'}
-                      aria-label={`Remove focus hours: ${ruleSummary(rule)}`}
+                      aria-label={`Remove focus hours: ${ruleSummary(rule, firstDay, hour24)}`}
                       className="schedule-remove hover:text-destructive-soft"
                     >
                       <X className="size-3.5" />
@@ -150,7 +178,7 @@ export function SchedulePage({ state }: { state: OptionsState }) {
                 </div>
                 <div className="flex flex-col gap-3 px-4 py-3.5">
                   <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Days">
-                    {DAY_LETTERS.map((letter, d) => {
+                    {sortDaysForDisplay([0, 1, 2, 3, 4, 5, 6], firstDay).map((d) => {
                       const on = rule.days.includes(d);
                       return (
                         <label
@@ -179,7 +207,7 @@ export function SchedulePage({ state }: { state: OptionsState }) {
                               }))
                             }
                           />
-                          <span aria-hidden>{letter}</span>
+                          <span aria-hidden>{DAY_LETTERS[d]}</span>
                         </label>
                       );
                     })}
@@ -212,12 +240,59 @@ export function SchedulePage({ state }: { state: OptionsState }) {
                       />
                     </label>
                   </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label
+                      htmlFor={`schedule-lead-${rule.id}`}
+                      className="flex items-center gap-2 text-[13px] text-muted-foreground"
+                    >
+                      Lock settings early
+                      <input
+                        id={`schedule-lead-${rule.id}`}
+                        type="number"
+                        min="0"
+                        max="1440"
+                        step="1"
+                        inputMode="numeric"
+                        aria-label="Minutes to lock settings before this window"
+                        value={lead}
+                        disabled={locked}
+                        onChange={(e) => {
+                          const raw = Number(e.target.value);
+                          const minutes = Number.isFinite(raw)
+                            ? Math.max(0, Math.min(1440, Math.floor(raw)))
+                            : 0;
+                          update(rule.id, (r) => ({
+                            ...r,
+                            leadMinutes: minutes === 0 ? undefined : minutes,
+                          }));
+                        }}
+                        className={cn(timeInputClass, 'w-20 text-right')}
+                      />
+                      minutes before
+                    </label>
+                    {lead === 0 ? (
+                      <span className="text-xs text-faint">
+                        0 = off. A lead freezes settings early; blocking still starts with the window.
+                      </span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">
+                        Settings lock at{' '}
+                        <span className="font-medium text-foreground">
+                          {minutesToClock(
+                            (rule.startMinutes - lead + 1440) % 1440,
+                            hour24,
+                          )}
+                        </span>
+                        ; blocking still starts at {minutesToClock(rule.startMinutes, hour24)}.
+                      </span>
+                    )}
+                  </div>
                   {problem ? (
                     <p className="m-0 text-xs text-destructive-soft">{problem}</p>
                   ) : overnight ? (
                     <p className="m-0 flex items-center gap-1.5 text-xs text-muted-foreground">
                       <MoonStars aria-hidden className="size-3.5 shrink-0" />
-                      Runs overnight — ends at {minutesToClock(rule.endMinutes)} the next day.
+                      Runs overnight — ends at {minutesToClock(rule.endMinutes, hour24)} the next day.
                     </p>
                   ) : null}
                 </div>
@@ -275,6 +350,8 @@ export function SchedulePage({ state }: { state: OptionsState }) {
         lockReason={lock.reason}
         now={now}
         refreshLock={refreshLock}
+        firstDay={firstDay}
+        hour24={hour24}
       />
     </Page>
   );

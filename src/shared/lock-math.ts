@@ -13,6 +13,13 @@ export interface ScheduleRule {
   startMinutes: number;
   /** 0..1439. endMinutes < startMinutes = overnight window into the next day. */
   endMinutes: number;
+  /** Optional "lock settings before this schedule starts" lead time, in whole
+   *  minutes (1–1440). Absent or 0 = OFF. During the lead interval
+   *  `[start - lead, start)` settings are frozen but blocking is NOT forced;
+   *  at the real start the ordinary schedule window takes over and forces
+   *  blocking. Category schedules accept the field (flattened shape) but it is
+   *  deliberately ignored by category policy — they never lock settings. */
+  leadMinutes?: number | null;
   /** Timezone the window times are pinned to: minutes EAST of UTC (e.g. 330
    *  = UTC+05:30), captured when the rule was written (lock.ts setSchedules).
    *  Present: the rule evaluates against this FIXED offset, so changing the
@@ -46,6 +53,9 @@ export const MIN_DELAY_LOCK_MS = 60_000;
 export const MAX_DELAY_LOCK_MS = 40 * 24 * 3_600_000;
 export const MIN_RANDOM_TEXT_LOCK_LENGTH = 1;
 export const MAX_RANDOM_TEXT_LOCK_LENGTH = 5_000;
+/** Per-schedule settings-lock lead time. 0/absent means OFF. */
+export const MIN_SCHEDULE_LEAD_MINUTES = 1;
+export const MAX_SCHEDULE_LEAD_MINUTES = 1_440;
 
 export interface LockState {
   /** When this break operation was requested. All three nullable break
@@ -118,7 +128,16 @@ export interface LockStatus {
   /** Frozen Turkey or an in-window schedule: blocking runs even if the
    *  master toggle is off, and stored overrides are ignored. */
   forceBlocking: boolean;
-  reasons: ('timer' | 'password' | 'delay' | 'random-text' | 'frozen' | 'schedule' | 'partner')[];
+  reasons: (
+    | 'timer'
+    | 'password'
+    | 'delay'
+    | 'random-text'
+    | 'frozen'
+    | 'schedule'
+    | 'schedule-lead'
+    | 'partner'
+  )[];
   /** When the current lock fully ends; null = indefinite (password, partner,
    *  or an explicit-release delay/random-text gate armed) or nothing active. */
   until: number | null;
@@ -309,8 +328,92 @@ export function isInScheduleWindow(rules: ScheduleRule[], date: Date): boolean {
   return currentWindowEnd(rules, date) !== null;
 }
 
+/** Valid settings-lock lead in whole minutes, or 0 when OFF. Out-of-range
+ *  values are treated as OFF here; `validateScheduleRule` rejects them at
+ *  write/sanitize time. */
+function ruleLeadMinutes(r: ScheduleRule): number {
+  const lead = r.leadMinutes;
+  return typeof lead === 'number' &&
+    Number.isInteger(lead) &&
+    lead >= MIN_SCHEDULE_LEAD_MINUTES &&
+    lead <= MAX_SCHEDULE_LEAD_MINUTES
+    ? lead
+    : 0;
+}
+
+/** End of the lead interval under rule `r` containing `nowMs`, or null.
+ *  The returned instant is the underlying window's END, not its start: a
+ *  lead lock runs continuously into (and through) the real window, so
+ *  `until` never jumps backwards when the window begins. The interval is
+ *  half-open `[start - lead, start)`; at the exact start the ordinary
+ *  schedule reason takes over. Lead may cross midnight, so starts today and
+ *  tomorrow are both considered (max lead is 24h). */
+function ruleLeadEnd(r: ScheduleRule, nowMs: number): number | null {
+  const dur = windowDurationMs(r);
+  const lead = ruleLeadMinutes(r);
+  if (dur <= 0 || lead === 0) return null;
+  const leadMs = lead * 60_000;
+  for (const offset of [0, 1]) {
+    const day = ruleDayStart(r, nowMs, offset);
+    if (!r.days.includes(day.weekday)) continue;
+    const start = day.start + r.startMinutes * 60_000;
+    if (nowMs >= start - leadMs && nowMs < start) return start + dur;
+  }
+  return null;
+}
+
+/** End of the latest-ending lead interval containing `now`, or null. Used
+ *  only for the settings-lock side: leads never force blocking. */
+function currentScheduleLeadEnd(rules: ScheduleRule[], now: number): number | null {
+  let max: number | null = null;
+  for (const r of rules) {
+    const end = ruleLeadEnd(r, now);
+    if (end !== null && (max === null || end > max)) max = end;
+  }
+  return max;
+}
+
+/** Next instant strictly after `now` at which the settings lock turns on: a
+ *  lead start when the rule has one, otherwise the window start. Null when
+ *  no configured rule has a future onset. */
+export function nextScheduleLockAt(rules: ScheduleRule[], now: number): number | null {
+  let min: number | null = null;
+  for (const r of rules) {
+    const dur = windowDurationMs(r);
+    if (dur <= 0) continue;
+    const leadMs = ruleLeadMinutes(r) * 60_000;
+    for (let offset = -1; offset <= 7; offset++) {
+      const day = ruleDayStart(r, now, offset);
+      if (!r.days.includes(day.weekday)) continue;
+      const onset = day.start + r.startMinutes * 60_000 - leadMs;
+      if (onset > now && (min === null || onset < min)) min = onset;
+    }
+  }
+  return min;
+}
+
+/** Next actual window START strictly after `now`, ignoring lead intervals.
+ *  Auto-resume uses this so "resume when focus hours begin" still means the
+ *  real window, not the earlier settings freeze. */
+export function nextWindowStart(rules: ScheduleRule[], now: number): number | null {
+  let min: number | null = null;
+  for (const r of rules) {
+    const dur = windowDurationMs(r);
+    if (dur <= 0) continue;
+    for (let offset = -1; offset <= 7; offset++) {
+      const day = ruleDayStart(r, now, offset);
+      if (!r.days.includes(day.weekday)) continue;
+      const start = day.start + r.startMinutes * 60_000;
+      if (start > now && (min === null || start < min)) min = start;
+    }
+  }
+  return min;
+}
+
 /** Next start-or-end instant strictly after `now` across all sources, or
- *  null when nothing is pending. Drives the promptness-only boundary alarm. */
+ *  null when nothing is pending. Drives the promptness-only boundary alarm.
+ *  Lead starts are included so the settings freeze begins on time even when
+ *  no alarm would otherwise fire between now and the real window. */
 export function nextBoundary(state: LockState, now: number): number | null {
   const candidates: number[] = [];
   const breakWindow = breakInterval(state);
@@ -327,6 +430,7 @@ export function nextBoundary(state: LockState, now: number): number | null {
   for (const r of [...state.schedules, ...(state.categorySchedules ?? [])]) {
     const dur = windowDurationMs(r);
     if (dur <= 0) continue;
+    const leadMs = ruleLeadMinutes(r) * 60_000;
     // From yesterday (an in-progress overnight window still has its end
     // ahead) through a full week ahead — covers week wraparound. Days are
     // counted in the rule's own tz frame (pinned offset or device zone).
@@ -334,6 +438,7 @@ export function nextBoundary(state: LockState, now: number): number | null {
       const day = ruleDayStart(r, now, offset);
       if (!r.days.includes(day.weekday)) continue;
       const start = day.start + r.startMinutes * 60_000;
+      if (leadMs > 0 && start - leadMs > now) candidates.push(start - leadMs);
       if (start > now) candidates.push(start);
       if (start + dur > now) candidates.push(start + dur);
     }
@@ -361,6 +466,11 @@ export function deriveLockStatus(state: LockState, now: number): LockStatus {
   if (windowEnd !== null) {
     reasons.push('schedule');
     ends.push(windowEnd);
+  }
+  const leadEnd = currentScheduleLeadEnd(state.schedules, now);
+  if (leadEnd !== null) {
+    reasons.push('schedule-lead');
+    ends.push(leadEnd);
   }
   const partnerArm = armedPartnerGeneration(state);
   if (partnerArm !== null) reasons.push('partner');
@@ -405,7 +515,7 @@ function compareUtf8(a: string, b: string): number {
 function scheduleCanon(r: ScheduleRule): string {
   return (
     `${r.startMinutes}|${r.endMinutes}|${[...r.days].sort((x, y) => x - y).join(',')}|` +
-    `${r.tzOffsetMinutes ?? ''}|${utf8Hex(r.tzName ?? '')}`
+    `${r.tzOffsetMinutes ?? ''}|${utf8Hex(r.tzName ?? '')}|${ruleLeadMinutes(r) || ''}`
   );
 }
 
@@ -853,6 +963,15 @@ export function validateScheduleRule(r: ScheduleRule): string | null {
     return 'Times must fall within one day.';
   }
   if (r.startMinutes === r.endMinutes) return 'Start and end times must differ.';
+  if (
+    r.leadMinutes !== undefined &&
+    r.leadMinutes !== null &&
+    (!Number.isInteger(r.leadMinutes) ||
+      r.leadMinutes < 0 ||
+      r.leadMinutes > MAX_SCHEDULE_LEAD_MINUTES)
+  ) {
+    return 'Lead time must be between 0 and 1440 minutes.';
+  }
   if (
     r.tzOffsetMinutes !== undefined &&
     r.tzOffsetMinutes !== null &&

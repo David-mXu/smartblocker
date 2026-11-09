@@ -116,6 +116,11 @@ test('schedule: Sat evening → next Monday 09:00 (week wraparound)', () => {
 test('schedule: right before the window → that window’s start', () => {
   assert.equal(nextScheduleStart([workdays], at(2026, 7, 8, 8, 59).getTime()), at(2026, 7, 8, 9, 0).getTime());
 });
+test('schedule: a settings-lock lead does not move the resume instant', () => {
+  const lead = { ...workdays, leadMinutes: 30 };
+  // 08:45 is inside the pre-lock, but resume waits for real blocking at 09:00.
+  assert.equal(nextScheduleStart([lead], at(2026, 7, 8, 8, 45).getTime()), at(2026, 7, 8, 9, 0).getTime());
+});
 test('schedule: mid-window skips to the NEXT start (end is not a start)', () => {
   // Wed noon inside 9–17 → next start is Thu 09:00, not today's 17:00 end.
   assert.equal(nextScheduleStart([workdays], at(2026, 7, 8, 12, 0).getTime()), at(2026, 7, 9, 9, 0).getTime());

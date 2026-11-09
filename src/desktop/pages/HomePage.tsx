@@ -56,12 +56,15 @@ type HeroTone = 'ok' | 'commit' | 'warning';
 const LOCK_HEADLINE: Record<LockReason, string> = {
   frozen: 'Focus session',
   schedule: 'Focus hours',
+  'schedule-lead': 'Focus hours are about to begin',
   timer: 'Settings locked',
   password: 'Locked with a password',
 };
 
 function primaryReason(reasons: LockReason[]): LockReason {
-  for (const r of ['frozen', 'schedule', 'timer', 'password'] as LockReason[]) if (reasons.includes(r)) return r;
+  for (const r of ['frozen', 'schedule', 'schedule-lead', 'timer', 'password'] as LockReason[]) {
+    if (reasons.includes(r)) return r;
+  }
   return reasons[0];
 }
 

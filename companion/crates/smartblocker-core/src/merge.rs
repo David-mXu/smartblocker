@@ -46,8 +46,13 @@ fn canon(r: &ScheduleRule) -> String {
         .map(|m| m.to_string())
         .unwrap_or_default();
     let tz_name = utf8_hex(r.tz_name.as_deref().unwrap_or_default());
+    let lead = r
+        .lead_minutes
+        .filter(|m| (1..=1_440).contains(m))
+        .map(|m| m.to_string())
+        .unwrap_or_default();
     format!(
-        "{}|{}|{days}|{tz_off}|{tz_name}",
+        "{}|{}|{days}|{tz_off}|{tz_name}|{lead}",
         r.start_minutes, r.end_minutes
     )
 }

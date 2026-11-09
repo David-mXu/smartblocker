@@ -1,14 +1,16 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Plus, X } from '@phosphor-icons/react';
 import { api } from '../../shared/api';
 import { LABELS } from '../../shared/config';
 import type { HistoryScanState } from '../../shared/messages';
 import { MAX_RESUME_AHEAD_MS } from '../../shared/resume';
+import { MAX_BLOCK_MESSAGE_LENGTH, sanitizeBlockMessage } from '../../shared/display-prefs';
 import type { Settings } from '../../shared/settings';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Select } from '../../components/ui/select';
 import { Switch } from '../../components/ui/switch';
+import { Textarea } from '../../components/ui/textarea';
 import { Checkbox } from '../../components/ui/checkbox';
 import { Badge } from '../../components/ui/badge';
 import { SettingRow, SettingsGroup, SettingsSection } from '../../components/ui/settings';
@@ -60,6 +62,15 @@ export function BlockingPage({ state }: { state: OptionsState }) {
 
   const [customCategory, setCustomCategory] = useState('');
   const [categoryHint, setCategoryHint] = useState('');
+
+  // Block-screen message draft — synced from settings unless the user is typing.
+  const [blockMessage, setBlockMessage] = useState('');
+  const blockMessageRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (settings && document.activeElement !== blockMessageRef.current) {
+      setBlockMessage(settings.blockMessage);
+    }
+  }, [settings?.blockMessage]);
 
   // History review
   const [scan, setScan] = useState<HistoryScanState | null>(null);
@@ -154,6 +165,13 @@ export function BlockingPage({ state }: { state: OptionsState }) {
     const next = new Set(blocked);
     for (const l of topDistractions) next.add(l);
     void save({ blockedLabels: [...next] });
+  };
+
+  const saveBlockMessage = () => {
+    const next = sanitizeBlockMessage(blockMessage);
+    setBlockMessage(next);
+    if (next === settings.blockMessage) return;
+    void save({ blockMessage: next });
   };
 
   return (
@@ -456,6 +474,44 @@ export function BlockingPage({ state }: { state: OptionsState }) {
                 : categoryHint || 'A few words work best — “cooking and recipes” beats “cooking”.'}
             </p>
           </div>
+        </SettingsGroup>
+      </SettingsSection>
+
+      <SettingsSection
+        title="Block screen message"
+        description="An optional note shown under the headline when a page is blocked. Plain text only; it never forces blocking on its own."
+      >
+        <SettingsGroup>
+          <SettingRow
+            stacked
+            htmlFor="block-message-input"
+            label="Custom message"
+            description={
+              locked ? (
+                <LockedNote reason={lock.reason} className="mt-0.5" />
+              ) : (
+                'Saved when you leave the field. Leave empty to hide the note. Up to 160 characters.'
+              )
+            }
+          >
+            <Textarea
+              id="block-message-input"
+              ref={blockMessageRef}
+              rows={3}
+              maxLength={MAX_BLOCK_MESSAGE_LENGTH}
+              value={blockMessage}
+              disabled={locked}
+              placeholder="e.g. Finish the problem set, then come back."
+              onChange={(e) => setBlockMessage(e.target.value)}
+              onBlur={saveBlockMessage}
+            />
+            <div className="flex items-center justify-between gap-3">
+              <p className="m-0 text-xs text-faint">Rendered as plain text, so HTML stays visible.</p>
+              <span className="shrink-0 font-mono text-xs tabular-nums text-faint">
+                {blockMessage.length}/{MAX_BLOCK_MESSAGE_LENGTH}
+              </span>
+            </div>
+          </SettingRow>
         </SettingsGroup>
       </SettingsSection>
 

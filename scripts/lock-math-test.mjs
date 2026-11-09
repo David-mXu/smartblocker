@@ -13,6 +13,8 @@ import {
   makeBreakOperation,
   mergeLockStates,
   nextBoundary,
+  nextScheduleLockAt,
+  nextWindowStart,
   sanitizeLockState,
   validateScheduleRule,
 } from '../src/shared/lock-math.ts';
@@ -223,6 +225,101 @@ test('start == end (empty window) is rejected', () => {
 });
 test('out-of-range minutes are rejected', () => {
   assert.notEqual(validateScheduleRule({ ...workdays, endMinutes: 1440 }), null);
+});
+test('schedule lead: 0 and 1440 are accepted, out-of-range and fractional are rejected', () => {
+  assert.equal(validateScheduleRule({ ...workdays, leadMinutes: 0 }), null);
+  assert.equal(validateScheduleRule({ ...workdays, leadMinutes: 1 }), null);
+  assert.equal(validateScheduleRule({ ...workdays, leadMinutes: 1440 }), null);
+  assert.notEqual(validateScheduleRule({ ...workdays, leadMinutes: -1 }), null);
+  assert.notEqual(validateScheduleRule({ ...workdays, leadMinutes: 1441 }), null);
+  assert.notEqual(validateScheduleRule({ ...workdays, leadMinutes: 30.5 }), null);
+});
+
+// --- settings-lock lead time ---
+const leadWorkdays = { ...workdays, leadMinutes: 30 };
+
+test('lead: 08:30 is inside the pre-lock and freezes settings only', () => {
+  const s = deriveLockStatus(
+    { ...EMPTY_LOCK_STATE, schedules: [leadWorkdays] },
+    at(2026, 7, 8, 8, 30).getTime(),
+  );
+  assert.equal(s.settingsLocked, true);
+  assert.equal(s.forceBlocking, false);
+  assert.deepEqual(s.reasons, ['schedule-lead']);
+  assert.equal(s.until, at(2026, 7, 8, 17, 0).getTime());
+});
+test('lead: exact window start switches to the ordinary schedule reason', () => {
+  const s = deriveLockStatus(
+    { ...EMPTY_LOCK_STATE, schedules: [leadWorkdays] },
+    at(2026, 7, 8, 9, 0).getTime(),
+  );
+  assert.deepEqual(s.reasons, ['schedule']);
+  assert.equal(s.forceBlocking, true);
+});
+test('lead: one minute before the window start is still pre-lock', () => {
+  const s = deriveLockStatus(
+    { ...EMPTY_LOCK_STATE, schedules: [leadWorkdays] },
+    at(2026, 7, 8, 8, 59).getTime(),
+  );
+  assert.deepEqual(s.reasons, ['schedule-lead']);
+});
+test('lead: overlapping windows keep schedule then schedule-lead order', () => {
+  const other = { id: 'other', days: [3], startMinutes: 10 * 60, endMinutes: 11 * 60, leadMinutes: 60 };
+  const s = deriveLockStatus(
+    { ...EMPTY_LOCK_STATE, schedules: [workdays, other] },
+    at(2026, 7, 8, 9, 30).getTime(),
+  );
+  assert.deepEqual(s.reasons, ['schedule', 'schedule-lead']);
+  assert.equal(s.until, at(2026, 7, 8, 17, 0).getTime());
+});
+test('lead: overnight window lead begins the previous evening', () => {
+  const overnight = { ...monOvernight, leadMinutes: 60 };
+  const before = deriveLockStatus(
+    { ...EMPTY_LOCK_STATE, schedules: [overnight] },
+    at(2026, 7, 6, 21, 30).getTime(),
+  );
+  assert.deepEqual(before.reasons, ['schedule-lead']);
+  assert.equal(before.forceBlocking, false);
+  assert.equal(before.until, at(2026, 7, 7, 6, 0).getTime());
+});
+test('lead: category schedule lead never locks settings', () => {
+  const category = {
+    ...leadWorkdays,
+    id: 'cat',
+    categories: ['video games'],
+  };
+  const s = deriveLockStatus(
+    { ...EMPTY_LOCK_STATE, categorySchedules: [category] },
+    at(2026, 7, 8, 8, 30).getTime(),
+  );
+  assert.equal(s.settingsLocked, false);
+  assert.equal(s.forceBlocking, false);
+  assert.deepEqual(s.reasons, []);
+});
+test('nextScheduleLockAt: lead start, not the window start', () => {
+  assert.equal(
+    nextScheduleLockAt([leadWorkdays], at(2026, 7, 8, 8, 0).getTime()),
+    at(2026, 7, 8, 8, 30).getTime(),
+  );
+});
+test('nextScheduleLockAt: without a lead it is the window start', () => {
+  assert.equal(
+    nextScheduleLockAt([workdays], at(2026, 7, 8, 8, 0).getTime()),
+    at(2026, 7, 8, 9, 0).getTime(),
+  );
+});
+test('nextWindowStart: ignores the lead and resumes at the real window', () => {
+  assert.equal(
+    nextWindowStart([leadWorkdays], at(2026, 7, 8, 8, 0).getTime()),
+    at(2026, 7, 8, 9, 0).getTime(),
+  );
+});
+test('nextBoundary: lead start fires before the window start', () => {
+  const state = { ...EMPTY_LOCK_STATE, schedules: [leadWorkdays] };
+  assert.equal(
+    nextBoundary(state, at(2026, 7, 8, 8, 0).getTime()),
+    at(2026, 7, 8, 8, 30).getTime(),
+  );
 });
 
 // --- break operation construction ---

@@ -131,6 +131,7 @@ const LOCK_REASON_NAMES: Record<LockStatus['reasons'][number], string> = {
   delay: 'delay lock',
   'random-text': 'random-text lock',
   schedule: 'focus hours',
+  'schedule-lead': 'focus hours lead-in',
   partner: 'accountability partner',
 };
 

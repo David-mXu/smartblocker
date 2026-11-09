@@ -1,4 +1,5 @@
 import type { LockStatus } from '../shared/lock-math';
+import { formatMinutesClock } from '../shared/display-prefs';
 
 // Pure display helpers shared by the options pages.
 
@@ -18,9 +19,9 @@ export function formatRemaining(ms: number): string {
 }
 
 /** "3:40 PM" today, "Tue 3:40 PM" within a week, else "Nov 14, 3:40 PM". */
-export function formatClock(ts: number, now = Date.now()): string {
+export function formatClock(ts: number, now = Date.now(), hour24 = false): string {
   const d = new Date(ts);
-  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const time = formatMinutesClock(d.getHours() * 60 + d.getMinutes(), hour24);
   const today = new Date(now);
   if (d.toDateString() === today.toDateString()) return time;
   if (ts - now < 6 * 86_400_000) {
@@ -44,10 +45,9 @@ export function hhmmToMinutes(v: string): number {
   return h * 60 + m;
 }
 
-/** 540 → "9:00 AM" in the user's locale. */
-export function minutesToClock(mins: number): string {
-  const d = new Date(2000, 0, 1, Math.floor(mins / 60), mins % 60);
-  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+/** 540 → "9:00 AM" (or "09:00" with the 24-hour preference). */
+export function minutesToClock(mins: number, hour24 = false): string {
+  return formatMinutesClock(mins, hour24);
 }
 
 /** Sentence-case a stored lowercase label, acronyms fixed ("movies and tv shows" → "Movies and TV shows"). */
@@ -60,6 +60,7 @@ export const REASON_NAMES: Record<LockStatus['reasons'][number], string> = {
   'random-text': 'random-text lock',
   frozen: 'focus session',
   schedule: 'focus hours',
+  'schedule-lead': 'focus hours lead-in',
   partner: 'accountability partner',
 };
 
@@ -69,11 +70,11 @@ export function lockShortText(status: LockStatus): string {
 }
 
 /** Seal line: "Locked: focus session — unlocks in 3h 12m (3:40 PM)". */
-export function lockBannerText(status: LockStatus): string {
+export function lockBannerText(status: LockStatus, hour24 = false): string {
   const reasons = status.reasons.map((r) => REASON_NAMES[r]).join(', ');
   const explicitReasons = status.reasons.filter((r) => ['password', 'delay', 'random-text'].includes(r));
   const tail = status.until
-    ? ` — unlocks in ${formatRemaining(status.until - Date.now())} (${formatClock(status.until)})`
+    ? ` — unlocks in ${formatRemaining(status.until - Date.now())} (${formatClock(status.until, Date.now(), hour24)})`
     : status.delayReady
       ? ' — the unlock delay elapsed; the background will complete it'
       : explicitReasons.length > 1
@@ -81,7 +82,7 @@ export function lockBannerText(status: LockStatus): string {
         : status.delayUntil !== undefined
           ? status.delayUntil === 0
             ? ' — start the unlock countdown on the Locks page'
-            : ` — the unlock countdown ends at ${formatClock(status.delayUntil ?? Date.now())}`
+            : ` — the unlock countdown ends at ${formatClock(status.delayUntil ?? Date.now(), Date.now(), hour24)}`
           : status.randomTextLen !== undefined
             ? ' — type a fresh random-text challenge on the Locks page'
             : ' — unlocks when you enter your password on the Locks page';
@@ -89,11 +90,11 @@ export function lockBannerText(status: LockStatus): string {
 }
 
 /** Inline reason next to disabled controls: "Locked until 3:40 PM". */
-export function lockReasonText(status: LockStatus): string {
-  if (status.until) return `Locked until ${formatClock(status.until)}`;
+export function lockReasonText(status: LockStatus, hour24 = false): string {
+  if (status.until) return `Locked until ${formatClock(status.until, Date.now(), hour24)}`;
   if (status.delayReady) return 'Locked while the background completes the elapsed delay';
   if (typeof status.delayUntil === 'number' && status.delayUntil > 0) {
-    return `Locked — unlock countdown ends ${formatClock(status.delayUntil)}`;
+    return `Locked — unlock countdown ends ${formatClock(status.delayUntil, Date.now(), hour24)}`;
   }
   if (status.reasons.length === 1 && status.reasons[0] === 'password') {
     return 'Locked until you enter your password';
