@@ -208,16 +208,24 @@ export function allowanceStateIdentity(raw: unknown): string | null {
   return state ? canonicalJson(state) : null;
 }
 
-/** True when this snapshot contains an acknowledged operation absent from the
+/** True when this snapshot contains an acknowledged transition absent from the
  * other snapshot. At an equal revision that means this side holds a local
  * transition the other side never saw; replacing it would silently discard
- * offline allowance consumption. */
+ * offline allowance consumption. A reused operation ID with a different
+ * fingerprint or revision is a divergence too, not an identical receipt. */
 export function allowanceStateHasLocalOnlyReceipts(rawLocal: unknown, rawOther: unknown): boolean {
   const local = normalizeAllowanceAuthorityState(rawLocal);
   const other = normalizeAllowanceAuthorityState(rawOther);
   if (!local || !other) return false;
-  const known = new Set(other.receipts.map((receipt) => receipt.operationId));
-  return local.receipts.some((receipt) => !known.has(receipt.operationId));
+  const known = new Map(
+    other.receipts.map((receipt) => [
+      receipt.operationId,
+      `${receipt.revision}:${receipt.fingerprint}`,
+    ]),
+  );
+  return local.receipts.some(
+    (receipt) => known.get(receipt.operationId) !== `${receipt.revision}:${receipt.fingerprint}`,
+  );
 }
 
 /** A persisted, acknowledged command-id prefix per category/day lets fallback
