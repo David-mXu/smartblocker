@@ -4,32 +4,41 @@
 import {
   buildUsageStatsExport,
   emptyUsageStatsState,
+  migrateUsageStatsState,
+  pruneUsageStats,
   recordUsageOverride,
   recordUsagePageSilenced,
   resetUsageCheckpoint,
-  sanitizeUsageStatsState,
   transitionUsageCheckpoint,
   usageHostnameFromUrl,
+  USAGE_STATS_LEGACY_STORAGE_KEY,
   USAGE_STATS_STORAGE_KEY,
   USAGE_STATS_WRITE_BATCH_MS,
+  type UsageBlockReason,
+  type UsageContext,
   type UsageStatsExport,
   type UsageStatsState,
   type UsageTarget,
 } from '../shared/usage-stats';
 
 export interface UsageStatsStorage {
-  get(key: string): Promise<Record<string, unknown>>;
+  /** Chrome accepts a key or an array of keys; array reads keep migration atomic. */
+  get(key: string | string[]): Promise<Record<string, unknown>>;
   set(items: Record<string, unknown>): Promise<void>;
-  remove(key: string): Promise<void>;
+  remove(key: string | string[]): Promise<void>;
 }
 
 export interface UsageTargetResolution {
   target: UsageTarget | null;
+  /** Protection/lock/break context for the interval that starts now. */
+  context: UsageContext | null;
   /** True for idle/API loss: do not charge the uncertain preceding interval. */
   discardPrevious: boolean;
 }
 
-export type ResolveUsageTarget = () =>
+export type ResolveUsageTarget = (
+  at: number,
+) =>
   | UsageTargetResolution
   | Promise<UsageTargetResolution>;
 
@@ -45,6 +54,7 @@ interface UsageEventInput {
 
 interface SilencedEventInput extends UsageEventInput {
   decisionId: string;
+  reason: UsageBlockReason;
 }
 
 export class UsageStatsTracker {
@@ -54,6 +64,8 @@ export class UsageStatsTracker {
   state: UsageStatsState | null = null;
   hasLiveCheckpoint = false;
   dirty = false;
+  /** Set when a v1 value was read; removed only after a successful v2 write. */
+  legacyRemovalPending = false;
   writeTimer: ReturnType<typeof setTimeout> | undefined;
   queue: Promise<void> = Promise.resolve();
 
@@ -76,8 +88,30 @@ export class UsageStatsTracker {
     if (this.state) return this.state;
     // A read failure is allowed to reject the operation: starting empty and
     // writing later would silently overwrite previously persisted aggregates.
-    const stored = await this.storage.get(USAGE_STATS_STORAGE_KEY);
-    this.state = sanitizeUsageStatsState(stored[USAGE_STATS_STORAGE_KEY]);
+    // Read both keys together so a legacy value cannot be lost between reads.
+    const stored = await this.storage.get([
+      USAGE_STATS_STORAGE_KEY,
+      USAGE_STATS_LEGACY_STORAGE_KEY,
+    ]);
+    const current = stored[USAGE_STATS_STORAGE_KEY];
+    if (current !== undefined) {
+      this.state = migrateUsageStatsState(current);
+      if (stored[USAGE_STATS_LEGACY_STORAGE_KEY] !== undefined) {
+        // A previous migration wrote v2 but died before cleanup. Keep v2 and
+        // remove the stale copy after the next successful flush.
+        this.legacyRemovalPending = true;
+        this.dirty = true;
+        this.markDirty();
+      }
+    } else if (stored[USAGE_STATS_LEGACY_STORAGE_KEY] !== undefined) {
+      this.state = migrateUsageStatsState(stored[USAGE_STATS_LEGACY_STORAGE_KEY]);
+      this.legacyRemovalPending = true;
+      this.dirty = true;
+      this.markDirty();
+    } else {
+      this.state = emptyUsageStatsState();
+    }
+    this.state = pruneUsageStats(this.state, this.now());
     // The first observation of every tracker instance is recovery-only. This
     // prevents both browser/SW shutdown gaps and overlapping old/new workers
     // from charging or double-charging the persisted segment.
@@ -108,6 +142,16 @@ export class UsageStatsTracker {
       // checkpoint, or advance the checkpoint without committing its time.
       await this.storage.set({ [USAGE_STATS_STORAGE_KEY]: this.state });
       this.dirty = false;
+      if (this.legacyRemovalPending) {
+        // The migrated v2 value is durable now; a failed cleanup only means
+        // the idempotent migration runs again on the next load.
+        try {
+          await this.storage.remove(USAGE_STATS_LEGACY_STORAGE_KEY);
+          this.legacyRemovalPending = false;
+        } catch {
+          /* keep the flag; retry on the next flush */
+        }
+      }
     } catch (error) {
       this.dirty = true;
       throw error;
@@ -117,12 +161,13 @@ export class UsageStatsTracker {
   async checkpointInternal(options: CheckpointOptions = {}): Promise<void> {
     const state = await this.ensureLoaded();
     const at = options.at ?? this.now();
-    const resolution = await this.resolveTarget();
+    const resolution = await this.resolveTarget(at);
     this.state = transitionUsageCheckpoint(
       state,
       at,
       resolution.target,
       !this.hasLiveCheckpoint || options.discardPrevious === true || resolution.discardPrevious,
+      resolution.context,
     );
     this.hasLiveCheckpoint = true;
     this.dirty = true;
@@ -148,6 +193,7 @@ export class UsageStatsTracker {
       at,
       hostname,
       category: input.category,
+      reason: input.reason,
       decisionId: input.decisionId,
     });
     if (this.state !== previous) this.markDirty();
@@ -192,13 +238,19 @@ export class UsageStatsTracker {
     // the pre-clear segment into the fresh generation. Commit the durable
     // removal before replacing in-memory state: if removal fails, the old data
     // remains both visible and retryable instead of disappearing only from UI.
-    const resolution = await this.resolveTarget();
-    await this.storage.remove(USAGE_STATS_STORAGE_KEY);
+    const resolution = await this.resolveTarget(at);
+    await this.storage.remove([USAGE_STATS_STORAGE_KEY, USAGE_STATS_LEGACY_STORAGE_KEY]);
     if (this.writeTimer !== undefined) {
       clearTimeout(this.writeTimer);
       this.writeTimer = undefined;
     }
-    this.state = resetUsageCheckpoint(emptyUsageStatsState(), at, resolution.target);
+    this.legacyRemovalPending = false;
+    this.state = resetUsageCheckpoint(
+      emptyUsageStatsState(),
+      at,
+      resolution.target,
+      resolution.context,
+    );
     this.hasLiveCheckpoint = true;
     this.dirty = false;
     return buildUsageStatsExport(this.state, at);

@@ -5,9 +5,18 @@
 // Privacy boundary: durable state contains local-day hostname/category totals
 // and bounded opaque navigation IDs used only to suppress duplicate blocked
 // decisions. It never contains a URL, path, query, title, score, or rule text.
+//
+// Accounting model (v2):
+// - activeMs is the one total. Protection/lock/break fields are annotations,
+//   never added on top: protectedMs + unprotectedMs + unknownMs == activeMs,
+//   and lockedMs/breakMs are each <= activeMs (subsets, not additional time).
+// - pagesSilenced is the one block total. Every reason counter is disjoint and
+//   their sum is kept equal to pagesSilenced, including after migration.
 
-export const USAGE_STATS_VERSION = 1;
-export const USAGE_STATS_STORAGE_KEY = 'usageStats:v1';
+export const USAGE_STATS_VERSION = 2;
+export const USAGE_STATS_STORAGE_KEY = 'usageStats:v2';
+/** Pre-v2 data is read once, migrated in memory, then removed after a write. */
+export const USAGE_STATS_LEGACY_STORAGE_KEY = 'usageStats:v1';
 export const USAGE_STATS_RETENTION_DAYS = 35;
 export const USAGE_STATS_MAX_DECISION_IDS = 2000;
 export const USAGE_STATS_MAX_SITES_PER_DAY = 100;
@@ -22,6 +31,48 @@ export const UNCATEGORIZED_USAGE_CATEGORY = 'uncategorized';
 export const RULE_USAGE_CATEGORY = 'blocked by rule';
 
 const RULE_DERIVED_LABEL_PREFIXES = ['blocked rule:', 'title rule:', 'channel block:'];
+
+export type UsageBlockReason =
+  | 'classifier'
+  | 'deterministic'
+  | 'channel'
+  | 'adult'
+  | 'fail-closed'
+  | 'unknown';
+
+export interface UsageBlockCounts {
+  classifier: number;
+  deterministic: number;
+  channel: number;
+  adult: number;
+  failClosed: number;
+  /** Pre-v2 decisions whose exact reason was not recorded. */
+  unknown: number;
+}
+
+/**
+ * Active-time annotations. All values are milliseconds of otherwise-counted
+ * on-page active time; they are never summed into additional time.
+ */
+export interface UsageProtectionTime {
+  /** Active time while blocking was enabled or a lock forced it on. */
+  protectedMs: number;
+  /** Active time while blocking was explicitly off (no lock forcing it). */
+  unprotectedMs: number;
+  /** Active time inside an active lock (subset of active time). */
+  lockedMs: number;
+  /** Active time inside a classifier-break relief window (subset). */
+  breakMs: number;
+  /** Pre-v2 active time whose protection state was never recorded. */
+  unknownMs: number;
+}
+
+/** The protection/lock/break state attached to one active-time interval. */
+export interface UsageContext {
+  protected: boolean;
+  locked: boolean;
+  break: boolean;
+}
 
 export interface UsageBucket {
   /** Approximate focused, non-idle time on an active http/https tab. */
@@ -40,10 +91,14 @@ export interface UsageTarget {
 export interface UsageCheckpoint {
   at: number;
   target: UsageTarget | null;
+  /** Null when unknown (legacy v1 or missing browser APIs). */
+  context: UsageContext | null;
 }
 
 export interface UsageDay {
   totals: UsageBucket;
+  protection: UsageProtectionTime;
+  blocks: UsageBlockCounts;
   sites: Record<string, UsageBucket>;
   categories: Record<string, UsageBucket>;
 }
@@ -71,7 +126,12 @@ export interface UsageStatsExport {
   retentionDays: number;
   metricDefinitions: {
     activeMs: string;
+    protectedMs: string;
+    unprotectedMs: string;
+    lockedMs: string;
+    breakMs: string;
     pagesSilenced: string;
+    blockReasons: string;
     overrides: string;
     overrideRate: string;
   };
@@ -81,6 +141,8 @@ export interface UsageStatsExport {
 export interface UsageSummary {
   days: number;
   totals: UsageBucket;
+  protection: UsageProtectionTime;
+  blocks: UsageBlockCounts;
   /** Null when pagesSilenced is zero; never turns an empty denominator into 0%. */
   overrideRate: number | null;
 }
@@ -95,8 +157,21 @@ export function emptyUsageBucket(): UsageBucket {
   return { activeMs: 0, pagesSilenced: 0, overrides: 0 };
 }
 
+export function emptyUsageProtectionTime(): UsageProtectionTime {
+  return { protectedMs: 0, unprotectedMs: 0, lockedMs: 0, breakMs: 0, unknownMs: 0 };
+}
+
+export function emptyUsageBlockCounts(): UsageBlockCounts {
+  return { classifier: 0, deterministic: 0, channel: 0, adult: 0, failClosed: 0, unknown: 0 };
+}
+
 export function emptyUsageStatsState(): UsageStatsState {
-  return { version: USAGE_STATS_VERSION, days: {}, checkpoint: null, recentSilenced: [] };
+  return {
+    version: USAGE_STATS_VERSION,
+    days: {},
+    checkpoint: null,
+    recentSilenced: [],
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -151,6 +226,20 @@ export function normalizeUsageCategory(value: unknown): string {
     return RULE_USAGE_CATEGORY;
   }
   return label.slice(0, 120) || UNCATEGORIZED_USAGE_CATEGORY;
+}
+
+export function normalizeUsageBlockReason(value: unknown): UsageBlockReason {
+  switch (value) {
+    case 'classifier':
+    case 'deterministic':
+    case 'channel':
+    case 'adult':
+    case 'fail-closed':
+    case 'unknown':
+      return value;
+    default:
+      return 'unknown';
+  }
 }
 
 /** Extract only an http/https hostname. Paths and queries never leave this call. */
@@ -218,6 +307,110 @@ function sanitizeBucketMap(value: unknown, hostnames: boolean): Record<string, U
   return result;
 }
 
+/**
+ * Keep the three coverage buckets exactly equal to activeMs. A malformed or
+ * partially written value never manufactures or hides time.
+ */
+function reconcileProtection(
+  protection: UsageProtectionTime,
+  activeMs: number,
+): UsageProtectionTime {
+  let protectedMs = Math.min(protection.protectedMs, activeMs);
+  let unprotectedMs = Math.min(protection.unprotectedMs, activeMs - protectedMs);
+  let unknownMs = Math.min(
+    protection.unknownMs,
+    Math.max(0, activeMs - protectedMs - unprotectedMs),
+  );
+  const missing = activeMs - protectedMs - unprotectedMs - unknownMs;
+  if (missing > 0) unknownMs += missing;
+  return {
+    protectedMs,
+    unprotectedMs,
+    lockedMs: Math.min(protection.lockedMs, activeMs),
+    breakMs: Math.min(protection.breakMs, activeMs),
+    unknownMs,
+  };
+}
+
+/**
+ * Reason counters are disjoint. Force their sum back to pagesSilenced so the
+ * UI's breakdown and total can never disagree, even for corrupted input.
+ */
+function reconcileBlocks(blocks: UsageBlockCounts, pagesSilenced: number): UsageBlockCounts {
+  const result: UsageBlockCounts = { ...blocks };
+  const keys: (keyof UsageBlockCounts)[] = [
+    'unknown',
+    'classifier',
+    'deterministic',
+    'channel',
+    'adult',
+    'failClosed',
+  ];
+  let sum = keys.reduce((total, key) => total + result[key], 0);
+  if (sum > pagesSilenced) {
+    let excess = sum - pagesSilenced;
+    for (const key of keys) {
+      if (excess <= 0) break;
+      const take = Math.min(excess, result[key]);
+      result[key] -= take;
+      excess -= take;
+    }
+    sum = pagesSilenced;
+  }
+  if (sum < pagesSilenced) result.unknown += pagesSilenced - sum;
+  return result;
+}
+
+function sanitizeProtection(
+  value: unknown,
+  activeMs: number,
+  present: boolean,
+): UsageProtectionTime {
+  if (!present) {
+    // Migrated day: active time exists but its protection state is unknown.
+    return reconcileProtection(
+      { protectedMs: 0, unprotectedMs: 0, lockedMs: 0, breakMs: 0, unknownMs: activeMs },
+      activeMs,
+    );
+  }
+  const raw = isRecord(value) ? value : {};
+  return reconcileProtection(
+    {
+      protectedMs: finiteCounter(raw.protectedMs),
+      unprotectedMs: finiteCounter(raw.unprotectedMs),
+      lockedMs: finiteCounter(raw.lockedMs),
+      breakMs: finiteCounter(raw.breakMs),
+      unknownMs: finiteCounter(raw.unknownMs),
+    },
+    activeMs,
+  );
+}
+
+function sanitizeBlocks(
+  value: unknown,
+  pagesSilenced: number,
+  present: boolean,
+): UsageBlockCounts {
+  if (!present) {
+    return reconcileBlocks(
+      { ...emptyUsageBlockCounts(), unknown: pagesSilenced },
+      pagesSilenced,
+    );
+  }
+  const raw = isRecord(value) ? value : {};
+  return reconcileBlocks(
+    {
+      classifier: finiteCounter(raw.classifier),
+      deterministic: finiteCounter(raw.deterministic),
+      channel: finiteCounter(raw.channel),
+      adult: finiteCounter(raw.adult),
+      failClosed: finiteCounter(raw.failClosed),
+      unknown: finiteCounter(raw.unknown),
+    },
+    pagesSilenced,
+  );
+}
+
 function sanitizeTarget(value: unknown): UsageTarget | null {
   if (!isRecord(value)) return null;
   const hostname = cleanHostname(value.hostname);
@@ -226,40 +419,109 @@ function sanitizeTarget(value: unknown): UsageTarget | null {
     : null;
 }
 
+function sanitizeContext(value: unknown): UsageContext | null {
+  if (!isRecord(value)) return null;
+  return {
+    protected: value.protected === true,
+    locked: value.locked === true,
+    break: value.break === true,
+  };
+}
+
+function sanitizeCheckpoint(value: unknown): UsageCheckpoint | null {
+  if (!isRecord(value)) return null;
+  const at = value.at;
+  if (typeof at !== 'number' || !Number.isFinite(at) || at < 0) return null;
+  return {
+    at,
+    target: sanitizeTarget(value.target),
+    context: sanitizeContext(value.context),
+  };
+}
+
+function sanitizeSilenced(value: unknown): SilencedDecision[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(
+      (entry): entry is SilencedDecision =>
+        isRecord(entry) &&
+        typeof entry.id === 'string' &&
+        entry.id.length > 0 &&
+        entry.id.length <= 160 &&
+        typeof entry.day === 'string' &&
+        validDay(entry.day),
+    )
+    .slice(-USAGE_STATS_MAX_DECISION_IDS)
+    .map((entry) => ({ id: entry.id, day: entry.day }));
+}
+
 export function sanitizeUsageStatsState(value: unknown): UsageStatsState {
   if (!isRecord(value) || value.version !== USAGE_STATS_VERSION) return emptyUsageStatsState();
   const state = emptyUsageStatsState();
   if (isRecord(value.days)) {
     for (const [day, rawDay] of Object.entries(value.days)) {
       if (!validDay(day) || !isRecord(rawDay)) continue;
+      const totals = sanitizeBucket(rawDay.totals);
       put(state.days, day, {
-        totals: sanitizeBucket(rawDay.totals),
+        totals,
+        protection: sanitizeProtection(
+          rawDay.protection,
+          totals.activeMs,
+          isRecord(rawDay.protection),
+        ),
+        blocks: sanitizeBlocks(rawDay.blocks, totals.pagesSilenced, isRecord(rawDay.blocks)),
         sites: sanitizeBucketMap(rawDay.sites, true),
         categories: sanitizeBucketMap(rawDay.categories, false),
       });
     }
   }
-  if (isRecord(value.checkpoint)) {
-    const at = value.checkpoint.at;
-    if (typeof at === 'number' && Number.isFinite(at) && at >= 0) {
-      state.checkpoint = { at, target: sanitizeTarget(value.checkpoint.target) };
-    }
-  }
-  if (Array.isArray(value.recentSilenced)) {
-    state.recentSilenced = value.recentSilenced
-      .filter(
-        (entry): entry is SilencedDecision =>
-          isRecord(entry) &&
-          typeof entry.id === 'string' &&
-          entry.id.length > 0 &&
-          entry.id.length <= 160 &&
-          typeof entry.day === 'string' &&
-          validDay(entry.day),
-      )
-      .slice(-USAGE_STATS_MAX_DECISION_IDS)
-      .map((entry) => ({ id: entry.id, day: entry.day }));
-  }
+  state.checkpoint = sanitizeCheckpoint(value.checkpoint);
+  state.recentSilenced = sanitizeSilenced(value.recentSilenced);
   return state;
+}
+
+/**
+ * One-way v1 -> v2 migration. v1 recorded active time and block totals but not
+ * whether protection was on or why a page was blocked, so those portions are
+ * attributed to explicit "unknown" fields instead of guessing.
+ */
+export function migrateUsageStatsV1(value: unknown): UsageStatsState {
+  if (!isRecord(value) || value.version !== 1 || !isRecord(value.days)) {
+    return emptyUsageStatsState();
+  }
+  const migrated: Record<string, unknown> = {};
+  for (const [day, rawDay] of Object.entries(value.days)) {
+    if (!validDay(day) || !isRecord(rawDay)) continue;
+    const totals = sanitizeBucket(rawDay.totals);
+    put(migrated, day, {
+      totals,
+      protection: {
+        protectedMs: 0,
+        unprotectedMs: 0,
+        lockedMs: 0,
+        breakMs: 0,
+        unknownMs: totals.activeMs,
+      },
+      blocks: { ...emptyUsageBlockCounts(), unknown: totals.pagesSilenced },
+      sites: rawDay.sites,
+      categories: rawDay.categories,
+    });
+  }
+  return sanitizeUsageStatsState({
+    version: USAGE_STATS_VERSION,
+    days: migrated,
+    checkpoint: value.checkpoint,
+    recentSilenced: value.recentSilenced,
+  });
+}
+
+/** Read either current v2 or legacy v1 input; anything else starts empty. */
+export function migrateUsageStatsState(value: unknown): UsageStatsState {
+  if (isRecord(value) && value.version === USAGE_STATS_VERSION) {
+    return sanitizeUsageStatsState(value);
+  }
+  if (isRecord(value) && value.version === 1) return migrateUsageStatsV1(value);
+  return emptyUsageStatsState();
 }
 
 function cloneBucketMap(map: Record<string, UsageBucket>): Record<string, UsageBucket> {
@@ -273,6 +535,8 @@ function cloneState(state: UsageStatsState): UsageStatsState {
   for (const [day, value] of Object.entries(state.days)) {
     put(days, day, {
       totals: { ...value.totals },
+      protection: { ...value.protection },
+      blocks: { ...value.blocks },
       sites: cloneBucketMap(value.sites),
       categories: cloneBucketMap(value.categories),
     });
@@ -284,6 +548,7 @@ function cloneState(state: UsageStatsState): UsageStatsState {
       ? {
           at: state.checkpoint.at,
           target: state.checkpoint.target ? { ...state.checkpoint.target } : null,
+          context: state.checkpoint.context ? { ...state.checkpoint.context } : null,
         }
       : null,
     recentSilenced: state.recentSilenced.map((entry) => ({ ...entry })),
@@ -295,6 +560,8 @@ function dayForMutation(state: UsageStatsState, day: string): UsageDay {
   if (existing) return existing;
   const created: UsageDay = {
     totals: emptyUsageBucket(),
+    protection: emptyUsageProtectionTime(),
+    blocks: emptyUsageBlockCounts(),
     sites: {},
     categories: {},
   };
@@ -342,14 +609,28 @@ function increment(
   )[field] += amount;
 }
 
-function addActiveMs(state: UsageStatsState, target: UsageTarget, start: number, end: number): void {
+function addActiveMs(
+  state: UsageStatsState,
+  target: UsageTarget,
+  context: UsageContext | null,
+  start: number,
+  end: number,
+): void {
   for (const chunk of splitUsageIntervalAtLocalMidnight(start, end)) {
-    increment(
-      dayForMutation(state, chunk.date),
-      target,
-      'activeMs',
-      Math.round(chunk.end - chunk.start),
-    );
+    const ms = Math.round(chunk.end - chunk.start);
+    if (ms <= 0) continue;
+    const day = dayForMutation(state, chunk.date);
+    increment(day, target, 'activeMs', ms);
+    if (context === null) {
+      day.protection.unknownMs += ms;
+    } else if (context.protected) {
+      day.protection.protectedMs += ms;
+    } else {
+      day.protection.unprotectedMs += ms;
+    }
+    // Subsets: these never increase the active-time total.
+    if (context?.locked) day.protection.lockedMs += ms;
+    if (context?.break) day.protection.breakMs += ms;
   }
 }
 
@@ -387,10 +668,15 @@ export function resetUsageCheckpoint(
   state: UsageStatsState,
   at: number,
   target: UsageTarget | null,
+  context: UsageContext | null = null,
 ): UsageStatsState {
   if (!Number.isFinite(at) || at < 0) return state;
   const next = cloneState(state);
-  next.checkpoint = { at, target: target ? sanitizeTarget(target) : null };
+  next.checkpoint = {
+    at,
+    target: target ? sanitizeTarget(target) : null,
+    context: context ? sanitizeContext(context) : null,
+  };
   return next;
 }
 
@@ -404,6 +690,7 @@ export function transitionUsageCheckpoint(
   at: number,
   target: UsageTarget | null,
   discardPrevious = false,
+  context: UsageContext | null = null,
 ): UsageStatsState {
   if (!Number.isFinite(at) || at < 0) return state;
   let next = cloneState(state);
@@ -417,9 +704,13 @@ export function transitionUsageCheckpoint(
     at - previous.at <= USAGE_STATS_MAX_CHECKPOINT_GAP_MS
   ) {
     const oldTarget = sanitizeTarget(previous.target);
-    if (oldTarget) addActiveMs(next, oldTarget, previous.at, at);
+    if (oldTarget) addActiveMs(next, oldTarget, sanitizeContext(previous.context), previous.at, at);
   }
-  next.checkpoint = { at, target: target ? sanitizeTarget(target) : null };
+  next.checkpoint = {
+    at,
+    target: target ? sanitizeTarget(target) : null,
+    context: context ? sanitizeContext(context) : null,
+  };
   next = pruneUsageStats(next, at);
   return next;
 }
@@ -427,7 +718,13 @@ export function transitionUsageCheckpoint(
 /** Count one qualified blocked decision. Reused IDs are a write-free no-op. */
 export function recordUsagePageSilenced(
   state: UsageStatsState,
-  input: { at: number; hostname: string; category: string; decisionId: string },
+  input: {
+    at: number;
+    hostname: string;
+    category: string;
+    reason: UsageBlockReason;
+    decisionId: string;
+  },
 ): UsageStatsState {
   const day = localUsageDate(input.at);
   const hostname = cleanHostname(input.hostname);
@@ -436,7 +733,12 @@ export function recordUsagePageSilenced(
   if (state.recentSilenced.some((entry) => entry.id === decisionId)) return state;
   let next = cloneState(state);
   const target = { hostname, category: normalizeUsageCategory(input.category) };
-  increment(dayForMutation(next, day), target, 'pagesSilenced', 1);
+  const usageDay = dayForMutation(next, day);
+  increment(usageDay, target, 'pagesSilenced', 1);
+  const reason = normalizeUsageBlockReason(input.reason);
+  if (reason === 'unknown') usageDay.blocks.unknown += 1;
+  else if (reason === 'fail-closed') usageDay.blocks.failClosed += 1;
+  else usageDay.blocks[reason] += 1;
   next.recentSilenced.push({ id: decisionId, day });
   next.recentSilenced = next.recentSilenced.slice(-USAGE_STATS_MAX_DECISION_IDS);
   next = pruneUsageStats(next, input.at);
@@ -469,8 +771,18 @@ export function buildUsageStatsExport(state: UsageStatsState, generatedAt: numbe
     metricDefinitions: {
       activeMs:
         'Approximate milliseconds on the focused window active http/https tab while the system idle state is active; checkpointed and conservatively undercounted across interruptions.',
+      protectedMs:
+        'Active milliseconds while blocking was enabled, or while a lock forced blocking on. Subset of activeMs.',
+      unprotectedMs:
+        'Active milliseconds while blocking was off and no lock forced it on. Subset of activeMs.',
+      lockedMs:
+        'Active milliseconds inside an active lock. Subset of activeMs; overlapping break time is not double-counted here.',
+      breakMs:
+        'Active milliseconds inside a classifier-break relief window. Subset of activeMs; breaks relax classifier verdicts only.',
       pagesSilenced:
         'Distinct page/navigation transitions into blocked or blocked-rule status, not heartbeats or overlay paints.',
+      blockReasons:
+        'Disjoint reason classes for pagesSilenced: classifier, deterministic rule, channel rule, adult rule, fail-closed locked classifier, or unknown (pre-v2 migration only). Their sum equals pagesSilenced.',
       overrides: 'Completed block-screen override actions accepted by the one-time override token guard.',
       overrideRate:
         'Completed overrides divided by pagesSilenced over the selected period; null when pagesSilenced is zero.',
@@ -480,6 +792,8 @@ export function buildUsageStatsExport(state: UsageStatsState, generatedAt: numbe
       .map(([date, day]) => ({
         date,
         totals: { ...day.totals },
+        protection: { ...day.protection },
+        blocks: { ...day.blocks },
         sites: cloneBucketMap(day.sites),
         categories: cloneBucketMap(day.categories),
       })),
@@ -491,7 +805,9 @@ export function summarizeUsageStats(
   now: number,
   dayCount = 7,
 ): UsageSummary {
-  const count = Number.isInteger(dayCount) ? Math.max(1, Math.min(dayCount, USAGE_STATS_RETENTION_DAYS)) : 7;
+  const count = Number.isInteger(dayCount)
+    ? Math.max(1, Math.min(dayCount, USAGE_STATS_RETENTION_DAYS))
+    : 7;
   const today = new Date(now);
   const validNow = Number.isFinite(now) && Number.isFinite(today.getTime());
   const oldest = validNow
@@ -500,6 +816,8 @@ export function summarizeUsageStats(
   const oldestDay = localUsageDate(oldest);
   const todayDay = localUsageDate(now);
   const totals = emptyUsageBucket();
+  const protection = emptyUsageProtectionTime();
+  const blocks = emptyUsageBlockCounts();
   let days = 0;
   for (const day of data.days) {
     if (!oldestDay || day.date < oldestDay || day.date > todayDay) continue;
@@ -507,10 +825,23 @@ export function summarizeUsageStats(
     totals.activeMs += day.totals.activeMs;
     totals.pagesSilenced += day.totals.pagesSilenced;
     totals.overrides += day.totals.overrides;
+    protection.protectedMs += day.protection.protectedMs;
+    protection.unprotectedMs += day.protection.unprotectedMs;
+    protection.lockedMs += day.protection.lockedMs;
+    protection.breakMs += day.protection.breakMs;
+    protection.unknownMs += day.protection.unknownMs;
+    blocks.classifier += day.blocks.classifier;
+    blocks.deterministic += day.blocks.deterministic;
+    blocks.channel += day.blocks.channel;
+    blocks.adult += day.blocks.adult;
+    blocks.failClosed += day.blocks.failClosed;
+    blocks.unknown += day.blocks.unknown;
   }
   return {
     days,
     totals,
+    protection,
+    blocks,
     overrideRate: totals.pagesSilenced > 0 ? totals.overrides / totals.pagesSilenced : null,
   };
 }

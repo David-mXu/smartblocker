@@ -1,6 +1,8 @@
 // Browser-event wiring for local usage statistics. Registered synchronously
 // from background/index.ts; all asynchronous work is serialized by the tracker.
 import { api } from '../shared/api';
+import { getLockStatus } from '../shared/lock';
+import { getSettings } from '../shared/settings';
 import { getTabStatus, type TabStatus } from '../shared/tab-status';
 import {
   normalizeUsageCategory,
@@ -9,6 +11,8 @@ import {
   USAGE_STATS_HEARTBEAT_MINUTES,
   USAGE_STATS_IDLE_SECONDS,
   UNCATEGORIZED_USAGE_CATEGORY,
+  type UsageBlockReason,
+  type UsageContext,
   type UsageStatsExport,
 } from '../shared/usage-stats';
 import {
@@ -26,43 +30,75 @@ function usageCategory(status: TabStatus | null): string {
   return normalizeUsageCategory(status?.label ?? UNCATEGORIZED_USAGE_CATEGORY);
 }
 
+/**
+ * Classify a block-screen trigger into one disjoint bucket. The blocker's
+ * existing verdict record is sufficient: deterministic rules use
+ * kind=blocked-rule with a channel marker or rule label, adult rules use the
+ * literal "adult" label, and the hard-lock classifier fallback is named.
+ */
+function usageBlockReason(status: TabStatus): UsageBlockReason {
+  if (status.label === 'adult') return 'adult';
+  if (status.rule?.startsWith('channel @')) return 'channel';
+  if (status.kind === 'blocked-rule') return 'deterministic';
+  if (status.label?.startsWith('classifier unavailable')) return 'fail-closed';
+  return 'classifier';
+}
+
 /** Only a currently focused, system-active http/https tab can accrue time. */
-async function resolveUsageTarget(): Promise<UsageTargetResolution> {
+async function resolveUsageTarget(at: number = Date.now()): Promise<UsageTargetResolution> {
   // Missing event APIs cannot prove a continuous foreground/idle segment.
   // Firefox still gets event counters, but time accounting fails conservatively
   // to zero rather than treating a background or idle tab as active.
   if (!focusEventsAvailable || !idleEventsAvailable) {
-    return { target: null, discardPrevious: true };
+    return { target: null, context: null, discardPrevious: true };
   }
   try {
     if (!api.idle?.queryState || !api.windows?.getLastFocused) {
-      return { target: null, discardPrevious: true };
+      return { target: null, context: null, discardPrevious: true };
     }
     const idleState = await api.idle.queryState(USAGE_STATS_IDLE_SECONDS);
-    if (idleState !== 'active') return { target: null, discardPrevious: true };
+    if (idleState !== 'active') return { target: null, context: null, discardPrevious: true };
   } catch {
-    return { target: null, discardPrevious: true };
+    return { target: null, context: null, discardPrevious: true };
   }
 
   try {
-    const window = await api.windows.getLastFocused();
-    if (!window.focused || window.id === undefined) {
-      return { target: null, discardPrevious: false };
-    }
-    const tabs = await api.tabs.query({ active: true, windowId: window.id });
-    const tab = tabs.find((candidate) => candidate.active);
-    const hostname = usageHostnameFromUrl(tab?.url);
-    if (!hostname || tab?.id === undefined || !tab.url) {
-      return { target: null, discardPrevious: false };
-    }
-    // Reuse the blocker's session verdict; never classify or persist page input.
-    const status = await getTabStatus(tab.id, tab.url);
-    return {
-      target: { hostname, category: usageCategory(status) },
-      discardPrevious: false,
+    // Derive lock/break state at the observed boundary, not at the moment the
+    // async queue drains, so an expiring lock cannot be charged to the wrong
+    // interval. A malformed timestamp falls back to the wall clock.
+    const boundary = Number.isFinite(at) && at > 0 ? at : Date.now();
+    const [settings, lock] = await Promise.all([getSettings(), getLockStatus(boundary)]);
+    // "Protected" means the system would block: the master switch is on, or a
+    // lock is force-blocking even while the switch is off. It is independent
+    // of whether this particular page was allowed.
+    const context: UsageContext = {
+      protected: settings.enabled || lock.forceBlocking,
+      locked: lock.settingsLocked,
+      break: lock.breakActive,
     };
+    try {
+      const window = await api.windows.getLastFocused();
+      if (!window.focused || window.id === undefined) {
+        return { target: null, context, discardPrevious: false };
+      }
+      const tabs = await api.tabs.query({ active: true, windowId: window.id });
+      const tab = tabs.find((candidate) => candidate.active);
+      const hostname = usageHostnameFromUrl(tab?.url);
+      if (!hostname || tab?.id === undefined || !tab.url) {
+        return { target: null, context, discardPrevious: false };
+      }
+      // Reuse the blocker's session verdict; never classify or persist page input.
+      const status = await getTabStatus(tab.id, tab.url);
+      return {
+        target: { hostname, category: usageCategory(status) },
+        context,
+        discardPrevious: false,
+      };
+    } catch {
+      return { target: null, context, discardPrevious: true };
+    }
   } catch {
-    return { target: null, discardPrevious: true };
+    return { target: null, context: null, discardPrevious: true };
   }
 }
 
@@ -159,6 +195,7 @@ function observeTabStatus(
     ? tracker.recordSilenced({
         url: status.url,
         category: usageCategory(status),
+        reason: usageBlockReason(status),
         decisionId,
       })
     : tracker.checkpoint();
@@ -212,17 +249,24 @@ export function initUsageStats(): void {
   });
 
   api.storage.onChanged.addListener((changes, area) => {
-    if (area !== 'session') return;
-    for (const [key, change] of Object.entries(changes)) {
-      if (!key.startsWith('tabStatus:')) continue;
-      const tabId = Number(key.slice('tabStatus:'.length));
-      if (!Number.isInteger(tabId) || tabId < 0) continue;
-      observeTabStatus(
-        tabId,
-        change.newValue as TabStatus | undefined,
-        change.oldValue as TabStatus | undefined,
-      );
+    if (area === 'session') {
+      for (const [key, change] of Object.entries(changes)) {
+        if (!key.startsWith('tabStatus:')) continue;
+        const tabId = Number(key.slice('tabStatus:'.length));
+        if (!Number.isInteger(tabId) || tabId < 0) continue;
+        observeTabStatus(
+          tabId,
+          change.newValue as TabStatus | undefined,
+          change.oldValue as TabStatus | undefined,
+        );
+      }
+      return;
     }
+    if (area !== 'local') return;
+    // An exact boundary for protection/lock/break annotations. The prior
+    // interval is charged with the prior context, then a new checkpoint is
+    // resolved against the just-written state.
+    if (changes.settings || changes.lockState) checkpointUsage();
   });
 
   api.alarms.onAlarm.addListener((alarm) => {

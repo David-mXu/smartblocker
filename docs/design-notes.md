@@ -230,8 +230,10 @@ Tint recipe for callouts: `bg-<hue>/10 border-<hue>/30 text-<hue>-soft`.
   reminders — focus hours starting soon, break ending soon, allowance nearly
   used up — each with a 1–60 minute lead; controls disable while locked)
   · Preferences `#preferences` (first day of week, 24-hour time, live preview;
-  display-only) · Usage `#usage` (rolling seven-day silenced pages + override rate, local-day
-  site/category tables, JSON export, two-step clear) · Desktop app `#companion`
+  display-only) · Usage `#usage` (7/35-day protection overview: silenced pages
+  by reason, protection coverage, lock and classifier-break time, override
+  rate; stacked daily-block chart; local-day site/category Top-N tables with
+  an explicit “other” toggle, JSON export, two-step clear) · Desktop app `#companion`
   · Privacy & data `#privacy` (danger zone last) · Advanced `#advanced` (exact sensitivity slider; Diagnostics: Test
   classifier, Scan history, Latency log, `#out`).
 - **Welcome wizard** `#welcome` (`welcome/`): full page, no sidebar, ≤560px
@@ -429,9 +431,14 @@ longer exists.
   `smartblocker-notify-schedule-start`, `…-break-end`, `…-allowance-low`
   (no sound; `silent: true`).
 - `#usage`: `#usage-pages-silenced`, `#usage-override-rate` (dash for an empty
-  denominator), `#usage-active-time`, `#usage-day`, `#usage-sites`,
-  `#usage-categories`, `#usage-export`, `#usage-clear` (second click confirms),
-  `#usage-status`.
+  denominator), `#usage-active-time`, `#usage-protection-coverage`,
+  `#usage-protected-time`, `#usage-unprotected-time`, `#usage-locked-time`,
+  `#usage-break-time`, `#usage-range-7`, `#usage-range-35`,
+  `#usage-tab-blocks`, `#usage-tab-websites`, `#usage-chart` (one
+  `[data-day]` bar per selected day), `#usage-day-today`,
+  `#usage-day-yesterday`, `#usage-day`, `#usage-show-other`, `#usage-sites`,
+  `#usage-categories`, `#usage-sites-toggle`, `#usage-categories-toggle`,
+  `#usage-export`, `#usage-clear` (second click confirms), `#usage-status`.
 - `#companion`: `#companion-status` ("Get SmartBlocker Companion — coming
   with the Pro release" / "Connected — hardcore mode active…"),
   `#companion-enforcement`, `#companion-grace` (same visibility and truthfulness

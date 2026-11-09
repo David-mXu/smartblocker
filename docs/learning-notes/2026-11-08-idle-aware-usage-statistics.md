@@ -1,5 +1,10 @@
 # Idle-aware usage statistics and dashboard
 
+> **Extended 2026-11-09:** protection/lock/break annotations, block-reason
+> classes, v1→v2 storage migration, and the richer Usage dashboard are covered
+> in [2026-11-09-usage-protection-analytics.md](2026-11-09-usage-protection-analytics.md).
+> The storage key is now `usageStats:v2`.
+
 ## Problem and scope
 
 Phase 5 Batch 3 item 9 needed per-local-day site/category usage statistics, a

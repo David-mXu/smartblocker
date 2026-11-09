@@ -9,6 +9,7 @@ import {
   buildUsageStatsExport,
   emptyUsageStatsState,
   localUsageDate,
+  migrateUsageStatsV1,
   nextLocalUsageMidnight,
   pruneUsageStats,
   recordUsageOverride,
@@ -19,6 +20,7 @@ import {
   summarizeUsageStats,
   transitionUsageCheckpoint,
   usageHostnameFromUrl,
+  USAGE_STATS_LEGACY_STORAGE_KEY,
   USAGE_STATS_MAX_CHECKPOINT_GAP_MS,
   USAGE_STATS_MAX_CATEGORIES_PER_DAY,
   USAGE_STATS_MAX_DECISION_IDS,
@@ -27,6 +29,7 @@ import {
   USAGE_STATS_OTHER_SITES_BUCKET,
   USAGE_STATS_RETENTION_DAYS,
   USAGE_STATS_STORAGE_KEY,
+  USAGE_STATS_VERSION,
 } from '../src/shared/usage-stats.ts';
 
 // Production imports are extensionless for Vite. Resolve those to TypeScript
@@ -70,7 +73,12 @@ class MemoryUsageStorage {
   failNextRemove = false;
 
   async get(key) {
-    return this.data.has(key) ? { [key]: clone(this.data.get(key)) } : {};
+    const keys = Array.isArray(key) ? key : [key];
+    const result = {};
+    for (const entry of keys) {
+      if (this.data.has(entry)) result[entry] = clone(this.data.get(entry));
+    }
+    return result;
   }
 
   async set(items) {
@@ -84,17 +92,19 @@ class MemoryUsageStorage {
       this.failNextRemove = false;
       throw new Error('injected remove failure');
     }
-    this.data.delete(key);
+    for (const entry of Array.isArray(key) ? key : [key]) this.data.delete(entry);
   }
 }
 
 const target = (hostname = 'example.com', category = 'programming') => ({ hostname, category });
+const context = (overrides = {}) => ({ protected: true, locked: false, break: false, ...overrides });
 const activeMs = (state, day) => state.days[day]?.totals.activeMs ?? 0;
-const silenced = (state, at, id, hostname = 'example.com') =>
+const silenced = (state, at, id, hostname = 'example.com', reason = 'classifier', category = 'video games') =>
   recordUsagePageSilenced(state, {
     at,
     hostname,
-    category: 'video games',
+    category,
+    reason,
     decisionId: id,
   });
 
@@ -167,6 +177,7 @@ await test('counters are safe for unusual category map keys', () => {
     at,
     hostname: 'example.com',
     category: '__proto__',
+    reason: 'classifier',
     decisionId: 'opaque-id',
   });
   assert.equal(state.days['2026-11-08'].categories['__proto__'].pagesSilenced, 1);
@@ -263,6 +274,7 @@ await test('daily host/category maps stay bounded without losing total counters'
       at,
       hostname: `site-${i}.example`,
       category: `category-${i}`,
+      reason: 'classifier',
       decisionId: `bounded-${i}`,
     });
   }
@@ -270,6 +282,7 @@ await test('daily host/category maps stay bounded without losing total counters'
   assert.equal(Object.keys(day.sites).length, USAGE_STATS_MAX_SITES_PER_DAY);
   assert.equal(Object.keys(day.categories).length, USAGE_STATS_MAX_CATEGORIES_PER_DAY);
   assert.equal(day.totals.pagesSilenced, count);
+  assert.equal(day.blocks.classifier, count);
   assert.equal(day.sites[USAGE_STATS_OTHER_SITES_BUCKET].pagesSilenced, 6);
   assert.equal(day.categories[USAGE_STATS_OTHER_CATEGORIES_BUCKET].pagesSilenced, count - (USAGE_STATS_MAX_CATEGORIES_PER_DAY - 1));
 });
@@ -279,7 +292,7 @@ await test('JSON export has aggregate days only, never checkpoints, event trails
   let state = resetUsageCheckpoint(emptyUsageStatsState(), at, target());
   state = silenced(state, at, 'opaque-navigation-id');
   const exported = buildUsageStatsExport(state, at);
-  assert.equal(exported.version, 1);
+  assert.equal(exported.version, USAGE_STATS_VERSION);
   assert.equal(exported.retentionDays, USAGE_STATS_RETENTION_DAYS);
   assert.equal(exported.days[0].date, '2026-11-08');
   assert.ok(exported.metricDefinitions.overrideRate.includes('null'));
@@ -307,11 +320,338 @@ await test('civil-date helpers observe spring 23-hour and fall 25-hour DST days'
   }
 });
 
+await test('protection, lock, and break annotations split at midnight without adding time', () => {
+  const start = Date.UTC(2026, 10, 7, 23, 59, 55);
+  let state = resetUsageCheckpoint(
+    emptyUsageStatsState(),
+    start,
+    target(),
+    context({ protected: true, locked: true, break: true }),
+  );
+  state = transitionUsageCheckpoint(
+    state,
+    start + 10_000,
+    target(),
+    false,
+    context({ protected: true, locked: true, break: true }),
+  );
+  const before = state.days['2026-11-07'];
+  const after = state.days['2026-11-08'];
+  assert.equal(before.totals.activeMs, 5_000);
+  assert.deepEqual(before.protection, {
+    protectedMs: 5_000,
+    unprotectedMs: 0,
+    lockedMs: 5_000,
+    breakMs: 5_000,
+    unknownMs: 0,
+  });
+  assert.equal(after.totals.activeMs, 5_000);
+  assert.deepEqual(after.protection, {
+    protectedMs: 5_000,
+    unprotectedMs: 0,
+    lockedMs: 5_000,
+    breakMs: 5_000,
+    unknownMs: 0,
+  });
+});
+
+await test('break relief can outlive its lock while both remain active-time subsets', () => {
+  const start = Date.UTC(2026, 10, 8, 12, 0, 0);
+  let state = resetUsageCheckpoint(
+    emptyUsageStatsState(),
+    start,
+    target(),
+    context({ protected: true, locked: true, break: true }),
+  );
+  state = transitionUsageCheckpoint(
+    state,
+    start + 30_000,
+    target(),
+    false,
+    context({ protected: true, locked: false, break: true }),
+  );
+  state = transitionUsageCheckpoint(
+    state,
+    start + 50_000,
+    target(),
+    false,
+    context({ protected: true, locked: false, break: true }),
+  );
+  const day = state.days['2026-11-08'];
+  assert.equal(day.totals.activeMs, 50_000);
+  assert.equal(day.protection.lockedMs, 30_000);
+  assert.equal(day.protection.breakMs, 50_000);
+  assert.equal(day.protection.protectedMs, 50_000);
+  const summary = summarizeUsageStats(buildUsageStatsExport(state, start + 50_000), start + 50_000);
+  assert.equal(summary.totals.activeMs, 50_000);
+  assert.equal(summary.protection.lockedMs, 30_000);
+  assert.equal(summary.protection.breakMs, 50_000);
+});
+
+await test('disabled protection records unprotected time instead of guessing', () => {
+  const start = Date.UTC(2026, 10, 8, 12, 0, 0);
+  let state = resetUsageCheckpoint(emptyUsageStatsState(), start, target(), context());
+  state = transitionUsageCheckpoint(
+    state,
+    start + 12_000,
+    target(),
+    false,
+    context({ protected: false, locked: false, break: false }),
+  );
+  state = transitionUsageCheckpoint(
+    state,
+    start + 20_000,
+    target(),
+    false,
+    context({ protected: false, locked: false, break: false }),
+  );
+  const day = state.days['2026-11-08'];
+  assert.equal(day.totals.activeMs, 20_000);
+  assert.equal(day.protection.protectedMs, 12_000);
+  assert.equal(day.protection.unprotectedMs, 8_000);
+  assert.equal(day.protection.unknownMs, 0);
+});
+
+await test('block reason counters are disjoint, deduped, and always sum to pages silenced', () => {
+  const at = Date.UTC(2026, 10, 8, 12, 0, 0);
+  let state = emptyUsageStatsState();
+  const reasons = ['classifier', 'deterministic', 'channel', 'adult', 'fail-closed'];
+  for (const [index, reason] of reasons.entries()) {
+    state = silenced(state, at, `reason-${index}`, 'example.com', reason);
+  }
+  const once = state;
+  state = silenced(state, at, 'reason-0', 'example.com', 'adult');
+  assert.equal(state, once, 'duplicate decision must not change any reason counter');
+  const day = state.days['2026-11-08'];
+  assert.equal(day.totals.pagesSilenced, 5);
+  assert.deepEqual(day.blocks, {
+    classifier: 1,
+    deterministic: 1,
+    channel: 1,
+    adult: 1,
+    failClosed: 1,
+    unknown: 0,
+  });
+  assert.equal(
+    Object.values(day.blocks).reduce((sum, count) => sum + count, 0),
+    day.totals.pagesSilenced,
+  );
+  const summary = summarizeUsageStats(buildUsageStatsExport(state, at), at);
+  assert.deepEqual(summary.blocks, day.blocks);
+  assert.equal(summary.totals.pagesSilenced, 5);
+});
+
+await test('exact export shape is stable, bounded, and excludes checkpoints and dedupe IDs', () => {
+  const at = Date.UTC(2026, 10, 8, 12, 0, 0);
+  let state = resetUsageCheckpoint(
+    emptyUsageStatsState(),
+    at,
+    target(),
+    context({ protected: true, locked: true }),
+  );
+  state = transitionUsageCheckpoint(
+    state,
+    at + 2_000,
+    target(),
+    false,
+    context({ protected: false, locked: false, break: false }),
+  );
+  state = silenced(state, at, 'export-id', 'example.com', 'channel');
+  state = recordUsageOverride(state, { at, hostname: 'example.com', category: 'video games' });
+  const exported = buildUsageStatsExport(state, at + 2_000);
+  assert.deepEqual(Object.keys(exported).sort(), [
+    'days',
+    'generatedAt',
+    'metricDefinitions',
+    'retentionDays',
+    'version',
+  ]);
+  assert.deepEqual(Object.keys(exported.metricDefinitions).sort(), [
+    'activeMs',
+    'blockReasons',
+    'breakMs',
+    'lockedMs',
+    'overrideRate',
+    'overrides',
+    'pagesSilenced',
+    'protectedMs',
+    'unprotectedMs',
+  ]);
+  assert.equal(exported.version, 2);
+  assert.equal(exported.generatedAt, at + 2_000);
+  assert.equal(exported.retentionDays, USAGE_STATS_RETENTION_DAYS);
+  const bucket = { activeMs: 2_000, pagesSilenced: 1, overrides: 1 };
+  assert.deepEqual(exported.days, [
+    {
+      date: '2026-11-08',
+      totals: bucket,
+      protection: {
+        protectedMs: 2_000,
+        unprotectedMs: 0,
+        lockedMs: 2_000,
+        breakMs: 0,
+        unknownMs: 0,
+      },
+      blocks: {
+        classifier: 0,
+        deterministic: 0,
+        channel: 1,
+        adult: 0,
+        failClosed: 0,
+        unknown: 0,
+      },
+      sites: { 'example.com': bucket },
+      categories: {
+        programming: { activeMs: 2_000, pagesSilenced: 0, overrides: 0 },
+        'video games': { activeMs: 0, pagesSilenced: 1, overrides: 1 },
+      },
+    },
+  ]);
+  const json = JSON.stringify(exported);
+  assert.ok(!json.includes('export-id'));
+  assert.ok(!json.includes('"checkpoint"'));
+  assert.ok(!json.includes('"recentSilenced"'));
+});
+
+await test('v1 migration preserves aggregates as explicit unknown protection and reasons', () => {
+  const at = Date.UTC(2026, 10, 8, 12, 0, 0);
+  const v1 = {
+    version: 1,
+    days: {
+      '2026-11-08': {
+        totals: { activeMs: 12_000, pagesSilenced: 3, overrides: 1 },
+        sites: { 'example.com': { activeMs: 12_000, pagesSilenced: 3, overrides: 1 } },
+        categories: { 'video games': { activeMs: 12_000, pagesSilenced: 3, overrides: 1 } },
+      },
+    },
+    checkpoint: { at, target: target() },
+    recentSilenced: [{ id: 'legacy-decision', day: '2026-11-08' }],
+  };
+  const state = migrateUsageStatsV1(v1);
+  assert.equal(state.version, 2);
+  const day = state.days['2026-11-08'];
+  assert.deepEqual(day.totals, v1.days['2026-11-08'].totals);
+  assert.deepEqual(day.protection, {
+    protectedMs: 0,
+    unprotectedMs: 0,
+    lockedMs: 0,
+    breakMs: 0,
+    unknownMs: 12_000,
+  });
+  assert.deepEqual(day.blocks, {
+    classifier: 0,
+    deterministic: 0,
+    channel: 0,
+    adult: 0,
+    failClosed: 0,
+    unknown: 3,
+  });
+  assert.deepEqual(state.recentSilenced, [{ id: 'legacy-decision', day: '2026-11-08' }]);
+  const exported = buildUsageStatsExport(state, at);
+  assert.equal(exported.days[0].protection.unknownMs, 12_000);
+  assert.equal(exported.days[0].blocks.unknown, 3);
+  const summary = summarizeUsageStats(exported, at);
+  assert.equal(summary.protection.protectedMs, 0);
+  assert.equal(summary.protection.unknownMs, 12_000);
+  assert.equal(summary.blocks.unknown, 3);
+});
+
+await test('v1 storage migrates once into v2, keeps dedupe state, and prunes expired days', async () => {
+  const storage = new MemoryUsageStorage();
+  const now = Date.UTC(2026, 10, 8, 12, 0, 0);
+  const oldDay = '2026-09-01';
+  storage.data.set(USAGE_STATS_LEGACY_STORAGE_KEY, {
+    version: 1,
+    days: {
+      '2026-11-08': {
+        totals: { activeMs: 5_000, pagesSilenced: 2, overrides: 0 },
+        sites: {},
+        categories: {},
+      },
+      [oldDay]: {
+        totals: { activeMs: 9_000, pagesSilenced: 4, overrides: 0 },
+        sites: {},
+        categories: {},
+      },
+    },
+    checkpoint: { at: now, target: target() },
+    recentSilenced: [{ id: 'legacy-decision', day: '2026-11-08' }],
+  });
+  const tracker = new UsageStatsTracker(
+    storage,
+    () => ({ target: target(), context: context(), discardPrevious: false }),
+    () => now,
+  );
+  try {
+    const exported = await tracker.snapshot();
+    assert.equal(exported.version, 2);
+    assert.deepEqual(exported.days.map((day) => day.date), ['2026-11-08']);
+    assert.equal(exported.days[0].protection.unknownMs, 5_000);
+    assert.equal(exported.days[0].blocks.unknown, 2);
+    assert.equal(storage.data.has(USAGE_STATS_STORAGE_KEY), true);
+    assert.equal(storage.data.has(USAGE_STATS_LEGACY_STORAGE_KEY), false);
+    assert.equal(
+      await tracker.recordSilenced({
+        url: 'https://example.com/private',
+        category: 'video games',
+        reason: 'classifier',
+        decisionId: 'legacy-decision',
+      }),
+      false,
+      'migrated dedupe IDs must still suppress the first re-emitted verdict',
+    );
+    const writes = storage.writes.map((write) => write[USAGE_STATS_STORAGE_KEY]).filter(Boolean);
+    assert.ok(writes.length >= 1);
+    assert.equal(writes.at(-1).version, 2);
+  } finally {
+    tracker.dispose();
+  }
+});
+
+await test('a stale v1 copy beside v2 is cleaned up without re-migrating over v2', async () => {
+  const storage = new MemoryUsageStorage();
+  const now = Date.UTC(2026, 10, 8, 12, 0, 0);
+  storage.data.set(USAGE_STATS_STORAGE_KEY, {
+    version: 2,
+    days: {
+      '2026-11-08': {
+        totals: { activeMs: 1_000, pagesSilenced: 0, overrides: 0 },
+        protection: {
+          protectedMs: 1_000,
+          unprotectedMs: 0,
+          lockedMs: 0,
+          breakMs: 0,
+          unknownMs: 0,
+        },
+        blocks: { classifier: 0, deterministic: 0, channel: 0, adult: 0, failClosed: 0, unknown: 0 },
+        sites: {},
+        categories: {},
+      },
+    },
+    checkpoint: null,
+    recentSilenced: [],
+  });
+  storage.data.set(USAGE_STATS_LEGACY_STORAGE_KEY, {
+    version: 1,
+    days: {},
+    checkpoint: null,
+    recentSilenced: [],
+  });
+  const tracker = new UsageStatsTracker(storage, () => ({ target: target(), context: context(), discardPrevious: false }), () => now);
+  try {
+    const exported = await tracker.snapshot();
+    assert.equal(exported.days[0].protection.protectedMs, 1_000);
+    assert.equal(storage.data.has(USAGE_STATS_LEGACY_STORAGE_KEY), false);
+  } finally {
+    tracker.dispose();
+  }
+});
+
 await test('tracker batches writes, suppresses duplicates, and stores no full event URL', async () => {
   process.env.TZ = 'UTC';
   const storage = new MemoryUsageStorage();
   let now = Date.UTC(2026, 10, 7, 23, 59, 45);
-  let resolution = { target: target(), discardPrevious: false };
+  let resolution = { target: target(), context: context(), discardPrevious: false };
   const tracker = new UsageStatsTracker(storage, () => resolution, () => now);
   try {
     await tracker.checkpoint(); // first observation is recovery/initialization only
@@ -322,6 +662,7 @@ await test('tracker batches writes, suppresses duplicates, and stores no full ev
       await tracker.recordSilenced({
         url: 'https://example.com/private/movie?query=do-not-store#fragment',
         category: 'movies and tv shows',
+        reason: 'classifier',
         decisionId: 'nav-1:block-1',
       }),
       true,
@@ -330,6 +671,7 @@ await test('tracker batches writes, suppresses duplicates, and stores no full ev
       await tracker.recordSilenced({
         url: 'https://example.com/private/movie?query=do-not-store#fragment',
         category: 'movies and tv shows',
+        reason: 'classifier',
         decisionId: 'nav-1:block-1',
       }),
       false,
@@ -354,7 +696,7 @@ await test('tracker batches writes, suppresses duplicates, and stores no full ev
     assert.ok(!raw.includes('query='));
   } finally {
     tracker.dispose();
-    resolution = { target: null, discardPrevious: true };
+    resolution = { target: null, context: null, discardPrevious: true };
   }
 });
 
@@ -362,7 +704,7 @@ await test('serialized overlapping checkpoints and restart recovery never double
   const storage = new MemoryUsageStorage();
   const start = Date.UTC(2026, 10, 8, 12, 0, 0);
   let now = start;
-  const resolution = { target: target(), discardPrevious: false };
+  const resolution = { target: target(), context: context(), discardPrevious: false };
   const first = new UsageStatsTracker(storage, () => resolution, () => now);
   await first.checkpoint();
   now += 20_000;
@@ -397,7 +739,7 @@ await test('queued checkpoints retain their event timestamps behind a slow resol
   const storage = new MemoryUsageStorage();
   const start = Date.UTC(2026, 10, 8, 12, 0, 0);
   let now = start;
-  let resolution = { target: target(), discardPrevious: false };
+  let resolution = { target: target(), context: context(), discardPrevious: false };
   let resolutions = 0;
   let releaseFirst;
   let markFirstStarted;
@@ -423,7 +765,7 @@ await test('queued checkpoints retain their event timestamps behind a slow resol
     const initial = tracker.checkpoint();
     await firstStarted;
     now += 30_000;
-    resolution = { target: null, discardPrevious: false };
+    resolution = { target: null, context: null, discardPrevious: false };
     const unfocus = tracker.checkpoint();
     now += 30_000;
     releaseFirst();
@@ -440,21 +782,21 @@ await test('idle discards uncertain time; a precise unfocus boundary closes acti
   const storage = new MemoryUsageStorage();
   const start = Date.UTC(2026, 10, 8, 12, 0, 0);
   let now = start;
-  let resolution = { target: target(), discardPrevious: false };
+  let resolution = { target: target(), context: context(), discardPrevious: false };
   const tracker = new UsageStatsTracker(storage, () => resolution, () => now);
   try {
     await tracker.checkpoint();
     now += 20_000;
-    resolution = { target: null, discardPrevious: true };
+    resolution = { target: null, context: null, discardPrevious: true };
     await tracker.checkpoint();
     let exported = await tracker.snapshot();
     assert.equal(exported.days.length, 0, 'idle observation should not charge the preceding gap');
 
     now += 10_000;
-    resolution = { target: target(), discardPrevious: false };
+    resolution = { target: target(), context: context(), discardPrevious: false };
     await tracker.checkpoint();
     now += 15_000;
-    resolution = { target: null, discardPrevious: false };
+    resolution = { target: null, context: null, discardPrevious: false };
     await tracker.checkpoint();
     exported = await tracker.snapshot();
     assert.equal(exported.days[0].totals.activeMs, 15_000);
@@ -466,11 +808,12 @@ await test('idle discards uncertain time; a precise unfocus boundary closes acti
 await test('clear removes the persisted namespace and returns an actually empty export', async () => {
   const storage = new MemoryUsageStorage();
   const now = Date.UTC(2026, 10, 8, 12, 0, 0);
-  const tracker = new UsageStatsTracker(storage, () => ({ target: target(), discardPrevious: false }), () => now);
+  const tracker = new UsageStatsTracker(storage, () => ({ target: target(), context: context(), discardPrevious: false }), () => now);
   try {
     await tracker.recordSilenced({
       url: 'https://example.com/a?private=1',
       category: 'video games',
+      reason: 'classifier',
       decisionId: 'one',
     });
     await tracker.snapshot();
@@ -487,11 +830,12 @@ await test('clear removes the persisted namespace and returns an actually empty 
 await test('failed clear preserves durable and in-memory data and remains retryable', async () => {
   const storage = new MemoryUsageStorage();
   const now = Date.UTC(2026, 10, 8, 12, 0, 0);
-  const tracker = new UsageStatsTracker(storage, () => ({ target: null, discardPrevious: false }), () => now);
+  const tracker = new UsageStatsTracker(storage, () => ({ target: null, context: null, discardPrevious: false }), () => now);
   try {
     await tracker.recordSilenced({
       url: 'https://example.com/a?private=1',
       category: 'video games',
+      reason: 'classifier',
       decisionId: 'one',
     });
     await tracker.snapshot();
@@ -666,6 +1010,99 @@ await test('background listeners dedupe real session status events and gate focu
     events.alarm.emit({ name: 'usage-stats-heartbeat' });
     exported = await usage.getUsageStatsSnapshot();
     assert.equal(exported.days[0].totals.activeMs, 20_000, 'late alarm must not add a capped interval');
+
+    // Settings changes are exact context boundaries: the preceding segment
+    // keeps its protection state, and the next one starts unprotected.
+    await storage.set({ settings: { enabled: false } });
+    storageChanges.emit(
+      { settings: { oldValue: { enabled: true }, newValue: { enabled: false } } },
+      'local',
+    );
+    await usage.getUsageStatsSnapshot();
+    now += 10_000;
+    exported = await usage.getUsageStatsSnapshot();
+    assert.equal(exported.days[0].protection.protectedMs, 20_000);
+    assert.equal(exported.days[0].protection.unprotectedMs, 10_000);
+    assert.equal(exported.days[0].protection.unknownMs, 0);
+
+    // Re-enable, then start a timer lock. A timer freezes settings but does not
+    // force blocking, so only a re-enabled master switch makes it protected.
+    await storage.set({ settings: { enabled: true } });
+    storageChanges.emit(
+      { settings: { oldValue: { enabled: false }, newValue: { enabled: true } } },
+      'local',
+    );
+    await usage.getUsageStatsSnapshot();
+    now += 5_000;
+    await storage.set({ lockState: { timerUntil: now + 60_000 } });
+    storageChanges.emit(
+      { lockState: { oldValue: undefined, newValue: { timerUntil: now + 60_000 } } },
+      'local',
+    );
+    await usage.getUsageStatsSnapshot();
+    now += 7_000;
+    exported = await usage.getUsageStatsSnapshot();
+    assert.equal(exported.days[0].protection.unprotectedMs, 10_000);
+    assert.equal(exported.days[0].protection.protectedMs, 32_000);
+    assert.equal(exported.days[0].protection.lockedMs, 7_000);
+
+    // A break operation is an independent annotation and can remain active
+    // after its lock; it must never be added to active/locked time.
+    await storage.set({
+      lockState: {
+        timerUntil: now + 120_000,
+        breakStartedAt: now,
+        breakNotBefore: null,
+        breakEndsAt: now + 30_000,
+      },
+    });
+    storageChanges.emit(
+      { lockState: { oldValue: { timerUntil: now + 60_000 }, newValue: {} } },
+      'local',
+    );
+    await usage.getUsageStatsSnapshot();
+    now += 8_000;
+    exported = await usage.getUsageStatsSnapshot();
+    assert.equal(exported.days[0].protection.lockedMs, 15_000);
+    assert.equal(exported.days[0].protection.breakMs, 8_000);
+
+    // Reason classes are derived from the blocker's existing verdict record.
+    const blockReason = async (nextStatus) => {
+      await session.set({
+        'tabStatus:7': { ...status, kind: 'allowed', label: 'video games', ts: now },
+      });
+      await usage.getUsageStatsSnapshot();
+      await session.set({ 'tabStatus:7': nextStatus });
+      return usage.getUsageStatsSnapshot();
+    };
+    let reasonState = await blockReason({
+      ...status,
+      kind: 'blocked-rule',
+      rule: 'example.com',
+      label: 'blocked rule: "example.com"',
+    });
+    assert.equal(reasonState.days[0].blocks.deterministic, 1);
+    reasonState = await blockReason({
+      ...status,
+      kind: 'blocked-rule',
+      rule: 'channel @demo',
+      label: 'channel block: "@demo"',
+    });
+    assert.equal(reasonState.days[0].blocks.channel, 1);
+    reasonState = await blockReason({ ...status, kind: 'blocked', label: 'adult' });
+    assert.equal(reasonState.days[0].blocks.adult, 1);
+    reasonState = await blockReason({
+      ...status,
+      kind: 'blocked',
+      label: 'classifier unavailable (locked)',
+    });
+    assert.equal(reasonState.days[0].blocks.failClosed, 1);
+    assert.equal(reasonState.days[0].blocks.classifier, 2);
+    assert.equal(
+      Object.values(reasonState.days[0].blocks).reduce((sum, count) => sum + count, 0),
+      reasonState.days[0].totals.pagesSilenced,
+      'reason classes must remain a partition of the silenced-page total',
+    );
 
     // An authenticated deterministic-rule override carries its user-facing
     // label. Subsequent active time must collapse it to a generic category,

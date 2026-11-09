@@ -105,10 +105,15 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   schedules, overlapping-rule dedupe, DST edge days, disabled defaults,
   no-fire when inactive, and the bounded duplicate-suppression ledger.
 - `node scripts/usage-stats-test.mjs` — idle-aware usage local-midnight/DST,
-  counter-deduplication, retention/export, batched persistence/restart recovery,
-  and mocked browser-event integration (`src/shared/usage-stats.ts` is the pure
-  erasable-syntax-only core; `src/background/usage-stats-tracker.ts` is also
-  directly Node-tested with in-memory storage).
+  counter-deduplication, protection/lock/break subset accounting, block-reason
+  partition, v1→v2 migration, retention/export, batched persistence/restart
+  recovery, and mocked browser-event integration (`src/shared/usage-stats.ts`
+  is the pure erasable-syntax-only core; `src/background/usage-stats-tracker.ts`
+  is also directly Node-tested with in-memory storage).
+- `node scripts/e2e-usage-ui.mjs` — focused Usage dashboard e2e (run after
+  `npm run build:chrome`): seeds v2 aggregates into a disposable profile,
+  relaunches the extension, verifies the 7/35-day range, reason chart, day
+  presets, Top-N/“other” controls, aggregate-only JSON export, and clear.
 - `node scripts/rules-test.mjs` — pure unit tests for the deterministic rule
   core: title-rule compiler/matcher + channel rules (`src/shared/rules.ts`,
   same type-stripping constraints), the shared classifier block predicate, and
@@ -311,9 +316,14 @@ Commit and push when appropriate.
     `storage.session` verdicts, never `chrome.history`. One-minute heartbeat,
     15-second write batching, 135-second stale-gap discard, restart-only
     recovery, 35-local-day retention, bounded duplicate IDs and bucket maps.
-    Authenticated OVERRIDE actions increment the override numerator; blocked
-    page/navigation decisions increment pages-silenced once. New local key:
-    `usageStats:v1`; no URLs/titles/score/rule text or network telemetry.
+    v2 (`usageStats:v2`, one-way migration from `usageStats:v1`) adds
+    protection-on/off, lock, and classifier-break annotations as SUBSETS of
+    active time, plus disjoint block-reason counters (classifier,
+    deterministic rule, channel, adult, fail-closed, migrated-unknown) whose
+    sum always equals pages silenced. Authenticated OVERRIDE actions increment
+    the override numerator; blocked page/navigation decisions increment pages
+    silenced once. Settings/lock changes are exact context boundaries. No
+    URLs/titles/score/rule text or network telemetry.
   - `history-ingester.ts` scans chrome.history (only the explicitly triggered
     history-review feature); `index.ts` wires listeners, first-run onboarding,
     and the `OVERRIDE` / `REPORT_FN` / `CLOSE_TAB` handlers.

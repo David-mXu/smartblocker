@@ -53,22 +53,29 @@ at any time from the options page.
 ## Local usage statistics (idle-aware)
 
 The options **Usage** page reports approximate active time, per-local-day
-hostname/category totals, distinct blocked page decisions, and completed
-block-screen overrides. It is computed from tab, window-focus, system-idle, and
-existing per-tab verdict events — **never from `chrome.history`**. The separate
-history-review feature still runs only when explicitly requested.
+hostname/category totals, distinct blocked page decisions, protection/lock/
+break time, block-reason counters, and completed block-screen overrides. It is
+computed from tab, window-focus, system-idle, and existing per-tab verdict
+events — **never from `chrome.history`**. The separate history-review feature
+still runs only when explicitly requested.
 
 These aggregates stay in this browser profile's `storage.local` under
-`usageStats:v1`. Stored fields are local calendar dates, hostnames, category
-names, active-time totals, decision/action counters, a foreground checkpoint,
-and bounded opaque navigation IDs used to suppress duplicate blocked statuses.
-There are no full URLs, paths, query strings, page titles, scores, rule text, or
-page-history log. Rule-derived verdict labels collapse to the generic
-**blocked by rule** category before they can enter a checkpoint or daily bucket.
-Host/category maps and duplicate IDs are bounded, aggregates
-are pruned after **35 local days**, and no usage data is sent over the network.
-JSON export is a manual download of those same local aggregates. Opaque
-checkpoints and duplicate-suppression IDs are omitted from the exported file.
+`usageStats:v2` (one-way migrated from the older `usageStats:v1`; migrated
+time and blocks are labeled **unknown** rather than guessed). Stored fields are
+local calendar dates, hostnames, category names, active-time totals,
+protection-on/off/lock/break annotations (subsets of active time, not extra
+time), disjoint block-reason counters (classifier, deterministic rule,
+channel, adult, fail-closed, or migrated unknown), decision/action counters, a
+foreground checkpoint, and bounded opaque navigation IDs used to suppress
+duplicate blocked statuses. There are no full URLs, paths, query strings, page
+titles, scores, rule text, or page-history log. Rule-derived verdict labels
+collapse to the generic **blocked by rule** category before they can enter a
+checkpoint or daily bucket. Host/category maps and duplicate IDs are bounded,
+aggregates are pruned after **35 local days**, and no usage data is sent over
+the network. JSON export is a manual download of those same local aggregates.
+Opaque checkpoints, protection context, and duplicate-suppression IDs are
+omitted from the exported file; the exported day rows keep their protection and
+reason aggregates.
 
 **Incognito/private access is intentionally included** whenever the extension is
 allowed to run there. Usage aggregates do not depend on browser history, so
