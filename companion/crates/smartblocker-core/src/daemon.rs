@@ -1160,7 +1160,9 @@ impl Shared {
                             true
                         }
                         Err(error) => {
-                            eprintln!("[daemon] failed to persist partner clock observation: {error}");
+                            eprintln!(
+                                "[daemon] failed to persist partner clock observation: {error}"
+                            );
                             false
                         }
                     }
@@ -1265,7 +1267,9 @@ impl Shared {
                         // Activation is genuinely observed here, so make that
                         // proof durable before the arm can be acknowledged.
                         if let Err(error) = self.store.save_partner_state(&observed) {
-                            Err(format!("couldn't persist partner activation proof: {error}"))
+                            Err(format!(
+                                "couldn't persist partner activation proof: {error}"
+                            ))
                         } else {
                             *partner_state = observed.clone();
                             match partner::random_id() {
@@ -1273,9 +1277,10 @@ impl Shared {
                                 Ok(generation) => {
                                     if lock.partner_arm_generation.as_deref()
                                         == Some(generation.as_str())
-                                        || observed.pending_operations.iter().any(|operation| {
-                                            operation.arm_generation == generation
-                                        })
+                                        || observed
+                                            .pending_operations
+                                            .iter()
+                                            .any(|operation| operation.arm_generation == generation)
                                     {
                                         Err("random partner arm generation collided; retry arm"
                                             .to_string())
@@ -1873,9 +1878,8 @@ fn load_or_initialize_partner_state(
             })?
         }
     };
-    let rehydrated = partner::rehydrate(&state, now, now_mono).map_err(|error| {
-        io::Error::new(io::ErrorKind::InvalidData, error.to_string())
-    })?;
+    let rehydrated = partner::rehydrate(&state, now, now_mono)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
     // This save also upgrades legacy files and drops unsigned operations before
     // a listener can accept any command. Present corruption never gets here.
     store.save_partner_state(&rehydrated)?;
@@ -2643,8 +2647,8 @@ mod tests {
     fn test_shared() -> (tempfile::TempDir, Arc<Shared>) {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
-        let partner = partner::rehydrate(&PartnerState::new(&"01".repeat(32)).unwrap(), 0, 0)
-            .unwrap();
+        let partner =
+            partner::rehydrate(&PartnerState::new(&"01".repeat(32)).unwrap(), 0, 0).unwrap();
         store.save_partner_state(&partner).unwrap();
         let shared = Arc::new(Shared {
             store,
@@ -4511,7 +4515,11 @@ mod tests {
 
         shared.partner_add_key_at(92, &test_public(&signing), now, TEST_MONO);
         assert_eq!(latest_command_result(&cli)["ok"], true);
-        shared.partner_arm_at(92, now + partner::PARTNER_ACTIVATION_DELAY_MS - 1, TEST_MONO + partner::PARTNER_ACTIVATION_DELAY_MS as u64 - 1);
+        shared.partner_arm_at(
+            92,
+            now + partner::PARTNER_ACTIVATION_DELAY_MS - 1,
+            TEST_MONO + partner::PARTNER_ACTIVATION_DELAY_MS as u64 - 1,
+        );
         assert_eq!(latest_command_result(&cli)["ok"], false);
         assert!(shared
             .lock_state
@@ -4525,7 +4533,11 @@ mod tests {
 
         // Exactly twenty-four hours is active; an existing arm also makes any
         // subsequent arm attempt a refusal, not a generation replacement.
-        shared.partner_arm_at(92, now + partner::PARTNER_ACTIVATION_DELAY_MS, TEST_MONO + partner::PARTNER_ACTIVATION_DELAY_MS as u64);
+        shared.partner_arm_at(
+            92,
+            now + partner::PARTNER_ACTIVATION_DELAY_MS,
+            TEST_MONO + partner::PARTNER_ACTIVATION_DELAY_MS as u64,
+        );
         assert_eq!(latest_command_result(&cli)["ok"], true);
         let generation = shared
             .lock_state
@@ -4533,7 +4545,11 @@ mod tests {
             .unwrap()
             .partner_arm_generation
             .clone();
-        shared.partner_arm_at(92, now + partner::PARTNER_ACTIVATION_DELAY_MS + 1, TEST_MONO + partner::PARTNER_ACTIVATION_DELAY_MS as u64 + 1);
+        shared.partner_arm_at(
+            92,
+            now + partner::PARTNER_ACTIVATION_DELAY_MS + 1,
+            TEST_MONO + partner::PARTNER_ACTIVATION_DELAY_MS as u64 + 1,
+        );
         assert_eq!(latest_command_result(&cli)["ok"], false);
         assert_eq!(
             shared.lock_state.lock().unwrap().partner_arm_generation,
@@ -4630,7 +4646,10 @@ mod tests {
         let status_operations = first_result["status"]["partner"]["pendingOperations"]
             .as_array()
             .unwrap();
-        assert!(status_operations.len() >= 2, "B is intentionally in A's status");
+        assert!(
+            status_operations.len() >= 2,
+            "B is intentionally in A's status"
+        );
         let exact_a = serde_json::to_value(&first_operation).unwrap();
         assert!(status_operations.contains(&exact_a));
         assert!(status_operations.contains(&serde_json::to_value(&second_operation).unwrap()));
@@ -4792,12 +4811,15 @@ mod tests {
 
         // A wall-only legacy observation is not allowed to become active just
         // because its old activeAtMs is far in the past.
-        let disk: Value = serde_json::from_slice(
-            &std::fs::read(dir.path().join("partner-state.json")).unwrap(),
-        )
-        .unwrap();
-        assert!(disk["publicKeys"][0].get("activationObservedAtMs").is_none());
-        assert!(disk["publicKeys"][0].get("activationObservedMonoMs").is_none());
+        let disk: Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("partner-state.json")).unwrap())
+                .unwrap();
+        assert!(disk["publicKeys"][0]
+            .get("activationObservedAtMs")
+            .is_none());
+        assert!(disk["publicKeys"][0]
+            .get("activationObservedMonoMs")
+            .is_none());
     }
 
     #[test]

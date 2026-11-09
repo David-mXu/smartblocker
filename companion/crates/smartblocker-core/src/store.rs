@@ -332,12 +332,8 @@ mod tests {
     fn partner_state_roundtrips_and_corruption_has_no_active_key_fallback() {
         let (dir, store) = temp_store();
         assert_eq!(store.load_partner_state(), None);
-        let state = crate::partner::rehydrate(
-            &PartnerState::new(&"01".repeat(32)).unwrap(),
-            0,
-            0,
-        )
-        .unwrap();
+        let state =
+            crate::partner::rehydrate(&PartnerState::new(&"01".repeat(32)).unwrap(), 0, 0).unwrap();
         let public = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32])
             .verifying_key()
             .to_bytes()

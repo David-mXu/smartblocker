@@ -80,6 +80,17 @@ try {
   await options.getByRole('button', { name: 'Arm partner gate', exact: true }).click();
   check(await poll(() => /^[0-9a-f]{64}$/.test(read('lock-state.json')?.partnerArmGeneration ?? ''), 15_000, 'fresh partner arm persisted'), 'daemon arms a fresh generation with its already-active key');
   const arm = read('lock-state.json').partnerArmGeneration;
+  check(
+    await poll(async () => {
+      const stored = await sw.evaluate(() => chrome.storage.local.get('lockState'));
+      return stored.lockState?.partnerArmGeneration === arm;
+    }, 15_000, 'daemon arm reaches browser lockState'),
+    'daemon-issued arming reaches chrome.storage.local.lockState',
+  );
+  check(
+    await poll(() => options.locator('#break-mode').isDisabled(), 10_000, 'partner arm locks settings controls'),
+    'an active partner arm makes settings writes unavailable in the real UI',
+  );
   const blockingBefore = read('blocking-state.json');
 
   // Raw generic lockStateSync may never forge a partner release.
@@ -133,6 +144,13 @@ try {
     other.timerUntil > untilTimer - 1_000 && other.timerUntil < untilTimer + 1_000 && other.frozenUntil === untilFrozen &&
       other.randomTextLen === 25 && other.delayUntil === 0 && JSON.stringify(read('blocking-state.json')) === JSON.stringify(blockingBefore),
     'timer, Frozen, delay/random-text gates, and ordinary blocking are untouched by release',
+  );
+  check(
+    await poll(async () => {
+      const stored = await sw.evaluate(() => chrome.storage.local.get('lockState'));
+      return !stored.lockState?.partnerArmGeneration;
+    }, 15_000, 'release reaches browser lockState'),
+    'the exact released arm disappears from chrome.storage.local.lockState',
   );
   await options.locator('#partner-redeem-code').fill(signedCode);
   await options.getByRole('button', { name: 'Redeem', exact: true }).click();

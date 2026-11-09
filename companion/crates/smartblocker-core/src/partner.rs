@@ -201,7 +201,9 @@ impl PartnerState {
                         && valid_mono(observed_mono)
                         && observed_wall >= key.active_at_ms
                         && observed_wall <= self.last_observed_at_ms
-                        && key.active_mono_ms.is_some_and(|active| observed_mono >= active)
+                        && key
+                            .active_mono_ms
+                            .is_some_and(|active| observed_mono >= active)
                 }
                 (None, None) => true,
                 _ => false,
@@ -225,9 +227,7 @@ impl PartnerState {
                 && valid_id(&operation.operation_id)
                 && valid_id(&operation.nonce)
                 && valid_time(operation.expires_at_ms)
-                && operation
-                    .expires_mono_ms
-                    .is_none_or(valid_mono)
+                && operation.expires_mono_ms.is_none_or(valid_mono)
                 && operation_ids.insert(operation.operation_id.clone())
                 && nonces.insert(operation.nonce.clone())
         }) {
@@ -249,9 +249,10 @@ impl PartnerState {
     pub fn validate(&self) -> bool {
         self.validate_structure()
             && self.last_observed_mono_ms.is_some()
-            && self.public_keys.iter().all(|key| {
-                key.added_mono_ms.is_some() && key.active_mono_ms.is_some()
-            })
+            && self
+                .public_keys
+                .iter()
+                .all(|key| key.added_mono_ms.is_some() && key.active_mono_ms.is_some())
             && self
                 .pending_operations
                 .iter()
@@ -261,7 +262,9 @@ impl PartnerState {
     fn prune(&mut self, now: i64, now_mono: u64) {
         self.pending_operations.retain(|operation| {
             operation.expires_at_ms > now
-                && operation.expires_mono_ms.is_some_and(|expiry| expiry > now_mono)
+                && operation
+                    .expires_mono_ms
+                    .is_some_and(|expiry| expiry > now_mono)
         });
         // Beyond signed expiry, replay is impossible even if its tombstone is
         // evicted. Retain every unexpired record before applying the cap.
@@ -273,11 +276,7 @@ impl PartnerState {
     }
 }
 
-fn checked_now(
-    state: &PartnerState,
-    now: i64,
-    now_mono: u64,
-) -> PartnerResult<(i64, u64)> {
+fn checked_now(state: &PartnerState, now: i64, now_mono: u64) -> PartnerResult<(i64, u64)> {
     if !state.validate() {
         return Err(PartnerError::InvalidState);
     }
@@ -305,11 +304,7 @@ fn key_is_active(key: &PartnerPublicKey, now: i64, now_mono: u64) -> bool {
  * It clears unsigned operations, preserves proof/tombstones and gives every
  * unproven key a fresh wall+monotonic 24h wait. Durable writes happen in the
  * daemon before this returned state can accept any command. */
-pub fn rehydrate(
-    state: &PartnerState,
-    now: i64,
-    now_mono: u64,
-) -> PartnerResult<PartnerState> {
+pub fn rehydrate(state: &PartnerState, now: i64, now_mono: u64) -> PartnerResult<PartnerState> {
     if !state.validate_structure() {
         return Err(PartnerError::InvalidState);
     }
@@ -343,11 +338,7 @@ pub fn rehydrate(
 
 /** Record a genuine clock observation. Once the wall and monotonic boundaries
  * have both been reached, the paired proof remains active across restart. */
-pub fn observe_at(
-    state: &PartnerState,
-    now: i64,
-    now_mono: u64,
-) -> PartnerResult<PartnerState> {
+pub fn observe_at(state: &PartnerState, now: i64, now_mono: u64) -> PartnerResult<PartnerState> {
     checked_now(state, now, now_mono)?;
     let mut next = state.clone();
     next.prune(now, now_mono);
@@ -622,11 +613,14 @@ pub fn redeem_operation_at(
     if payload.expires_at_ms > operation.expires_at_ms {
         return Err(PartnerError::WrongExpiry);
     }
-    let mono_expiry = mapped_mono_expiry(&operation, payload.expires_at_ms)
-        .ok_or(PartnerError::InvalidState)?;
+    let mono_expiry =
+        mapped_mono_expiry(&operation, payload.expires_at_ms).ok_or(PartnerError::InvalidState)?;
     if now >= payload.expires_at_ms
         || now >= operation.expires_at_ms
-        || now_mono >= operation.expires_mono_ms.ok_or(PartnerError::InvalidState)?
+        || now_mono
+            >= operation
+                .expires_mono_ms
+                .ok_or(PartnerError::InvalidState)?
         || now_mono >= mono_expiry
     {
         return Err(PartnerError::Expired);
@@ -772,7 +766,10 @@ mod tests {
         assert_eq!(restarted.public_keys[0].added_at_ms, DAY + DAY - 1);
         assert_eq!(restarted.public_keys[0].active_at_ms, DAY + DAY - 1 + DAY);
         assert_eq!(restarted.public_keys[0].added_mono_ms, Some(7));
-        assert_eq!(restarted.public_keys[0].active_mono_ms, Some(7 + DAY as u64));
+        assert_eq!(
+            restarted.public_keys[0].active_mono_ms,
+            Some(7 + DAY as u64)
+        );
         assert!(!has_active_key_at(&restarted, old_wall_active + DAY, 8));
 
         let legacy_json = serde_json::json!({
@@ -796,20 +793,18 @@ mod tests {
         let migrated = rehydrate(&legacy, DAY * 3, 20).unwrap();
         assert_eq!(migrated.public_keys[0].added_at_ms, DAY * 3);
         assert_eq!(migrated.public_keys[0].active_at_ms, DAY * 4);
-        assert_eq!(migrated.public_keys[0].active_mono_ms, Some(20 + DAY as u64));
+        assert_eq!(
+            migrated.public_keys[0].active_mono_ms,
+            Some(20 + DAY as u64)
+        );
         assert!(!has_active_key_at(&migrated, DAY * 4, 21));
     }
 
     #[test]
     fn asymmetric_verification_observes_activation_at_exactly_24h() {
         let added = added();
-        let duplicate = add_public_key_at(
-            &added,
-            &public(&signing()),
-            DAY + 1000,
-            MONO_ADD + 1000,
-        )
-        .unwrap();
+        let duplicate =
+            add_public_key_at(&added, &public(&signing()), DAY + 1000, MONO_ADD + 1000).unwrap();
         assert_eq!(duplicate.public_keys, added.public_keys);
         let operation = ready();
         assert!(operation.public_keys[0].activation_observed_at_ms.is_some());
@@ -935,7 +930,9 @@ mod tests {
             Err(PartnerError::UnknownOperation)
         );
         assert!(restarted.public_keys[0].activation_observed_at_ms.is_some());
-        assert!(restarted.public_keys[0].activation_observed_mono_ms.is_some());
+        assert!(restarted.public_keys[0]
+            .activation_observed_mono_ms
+            .is_some());
         assert_eq!(restarted.spent_codes, before_restart.spent_codes);
     }
 
@@ -1009,14 +1006,21 @@ mod tests {
         let mut partial_proof = state.clone();
         partial_proof.public_keys[0].activation_observed_mono_ms = None;
         assert!(!partial_proof.validate());
-        assert_eq!(rehydrate(&partial_proof, NOW + 1, 1), Err(PartnerError::InvalidState));
+        assert_eq!(
+            rehydrate(&partial_proof, NOW + 1, 1),
+            Err(PartnerError::InvalidState)
+        );
         let mut duplicate_keys = state.clone();
         duplicate_keys
             .public_keys
             .push(duplicate_keys.public_keys[0].clone());
         assert!(!duplicate_keys.validate());
         let result = redeem_operation_at(&state, &token(), NOW + 1, MONO_NOW + 1).unwrap();
-        assert_eq!(state, ready(), "successful pure transitions do not mutate inputs");
+        assert_eq!(
+            state,
+            ready(),
+            "successful pure transitions do not mutate inputs"
+        );
         assert_eq!(result.state.spent_codes.len(), 1);
     }
 
