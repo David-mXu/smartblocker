@@ -19,6 +19,11 @@ import {
   normalizeBreakMode,
   type BreakMode,
 } from './breaks';
+import {
+  DEFAULT_NOTIFICATION_PREFS,
+  normalizeNotificationPrefs,
+  type NotificationPrefs,
+} from './notifications';
 
 export interface Settings {
   /** Candidate categories the zero-shot model scores against. */
@@ -141,6 +146,13 @@ export interface Settings {
    * individually classified videos on YouTube Search. Default true.
    */
   maskSearchElements: boolean;
+  /**
+   * Opt-in, quiet browser reminders (versioned and sanitized on every read and
+   * write — see shared/notifications.ts). EVERY group is OFF by default so an
+   * existing install never starts receiving toasts after an update. Global to
+   * this browser profile: no per-category or per-schedule notification scope.
+   */
+  notificationPrefs: NotificationPrefs;
 }
 
 /** v1: original list (search engines whitelisted). v2 (2026-11-07): search
@@ -173,6 +185,7 @@ export const DEFAULTS: Settings = {
   breakTextLength: 100,
   surrenderMode: 'off',
   maskSearchElements: true,
+  notificationPrefs: DEFAULT_NOTIFICATION_PREFS,
 };
 
 const STORAGE_KEY = 'settings';
@@ -272,6 +285,7 @@ export async function getSettings(): Promise<Settings> {
     ...normalizeBreakSettings(storedSettings),
     ...migrateLabels(storedSettings),
     ...migrateWhitelist(storedSettings),
+    notificationPrefs: normalizeNotificationPrefs(storedSettings?.notificationPrefs),
   };
   return cache;
 }
@@ -302,6 +316,7 @@ async function writeSettings(patch: Partial<Settings>, echoId?: string): Promise
     next.resumeAt = clampResumeAt(patch.resumeAt, Date.now());
   }
   Object.assign(next, normalizeBreakSettings(next));
+  next.notificationPrefs = normalizeNotificationPrefs(next.notificationPrefs);
   cache = next;
   await api.storage.local.set({
     [STORAGE_KEY]: next,

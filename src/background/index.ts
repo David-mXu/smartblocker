@@ -39,6 +39,7 @@ import {
   startDelayUnlockRpc,
 } from './lock-types';
 import { initResumeEnforcer } from './resume-enforcer';
+import { initNotificationScheduler } from './notifications';
 import { getAllowanceResponse, submitAllowanceCommand } from './allowance';
 import { cancelFocusCycle, getFocusCycleResponse, initFocusCycleScheduler, startFocusCycle } from './focus-cycles';
 import { scanHistory } from './history-ingester';
@@ -69,6 +70,7 @@ initBlocker();
 initFeedbackUploader();
 initLockEnforcer();
 initResumeEnforcer(); // registers runtime.onStartup here (auto-resume, constraint #4)
+initNotificationScheduler();
 initCompanionBridge();
 initFocusSessionCommitter();
 initUsageStats();

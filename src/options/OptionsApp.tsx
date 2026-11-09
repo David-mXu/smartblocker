@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
+  Bell,
   CalendarBlank,
   ChartLineUp,
   Desktop,
@@ -24,6 +25,7 @@ import { FocusPage } from './pages/FocusPage';
 import { LocksPage } from './pages/LocksPage';
 import { AllowancePage } from './pages/AllowancePage';
 import { SchedulePage } from './pages/SchedulePage';
+import { NotificationsPage } from './pages/NotificationsPage';
 import { CompanionPage } from './pages/CompanionPage';
 import { PrivacyPage } from './pages/PrivacyPage';
 import { AdvancedPage } from './pages/AdvancedPage';
@@ -49,6 +51,7 @@ const PAGES: PageDef[] = [
   { id: 'locks', label: 'Locks', icon: LockSimple, Component: LocksPage },
   { id: 'allowance', label: 'Breaks', icon: Timer, Component: AllowancePage },
   { id: 'schedule', label: 'Focus hours', icon: CalendarBlank, Component: SchedulePage },
+  { id: 'notifications', label: 'Notifications', icon: Bell, Component: NotificationsPage },
   { id: 'usage', label: 'Usage', icon: ChartLineUp, Component: UsagePage },
   { id: 'companion', label: 'Desktop app', icon: Desktop, Component: CompanionPage },
   { id: 'privacy', label: 'Privacy & data', icon: ShieldCheck, Component: PrivacyPage },

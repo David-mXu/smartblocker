@@ -220,6 +220,9 @@ Tint recipe for callouts: `bg-<hue>/10 border-<hue>/30 text-<hue>-soft`.
   context, start a focus session) · Locks `#locks` (timer, password, optional delay/random-text break
   gates, incognito warning; break settings disable while locked) · Focus hours `#schedule` (summary cards, S–M–T–W–T–F–S
   day chips, overnight note, presets "Weekdays 9–5" / "Every evening 7–10 PM")
+  · Notifications `#notifications` (three independent, silent, off-by-default
+  reminders — focus hours starting soon, break ending soon, allowance nearly
+  used up — each with a 1–60 minute lead; controls disable while locked)
   · Usage `#usage` (rolling seven-day silenced pages + override rate, local-day
   site/category tables, JSON export, two-step clear) · Desktop app `#companion`
   · Privacy & data `#privacy` (danger zone last) · Advanced `#advanced` (exact sensitivity slider; Diagnostics: Test
@@ -401,6 +404,13 @@ Global: `#banner`, `#lock-status` (visible only when locked, contains
   `#incognito-warning`.
 - `#schedule`: `#schedule-list` (`.schedule-row`, `.day-label`,
   `.schedule-remove`), `#schedule-add`, `#schedule-save`, `#schedule-msg`.
+- `#notifications`: `#notify-schedule-toggle`, `#notify-schedule-lead`,
+  `#notify-break-toggle`, `#notify-break-lead`, `#notify-allowance-toggle`,
+  `#notify-allowance-threshold` (minute inputs are `1–60`; switches and
+  inputs disable while locked). Alarm names: `sb-notify:schedule-start`,
+  `sb-notify:break-end`, `sb-notify:allowance-low`; OS notification ids:
+  `smartblocker-notify-schedule-start`, `…-break-end`, `…-allowance-low`
+  (no sound; `silent: true`).
 - `#usage`: `#usage-pages-silenced`, `#usage-override-rate` (dash for an empty
   denominator), `#usage-active-time`, `#usage-day`, `#usage-sites`,
   `#usage-categories`, `#usage-export`, `#usage-clear` (second click confirms),

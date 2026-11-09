@@ -8,6 +8,7 @@ dist-site/
 .e2e-profile-p2/
 .e2e-profile-security/
 .e2e-companion-profile/
+.e2e-notifications-profile/
 *.local
 .DS_Store
 # Private key that fixes the Chrome extension ID (manifest "key" is derived

@@ -99,6 +99,11 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   derivations (`src/shared/resume.ts` — also erasable-syntax-only and
   Node-imported; its runtime import of lock-math carries an explicit `.ts`
   extension, enabled by tsconfig `allowImportingTsExtensions`).
+- `node scripts/notifications-test.mjs` — pure reminder derivations and
+  preference/ledger sanitization (`src/shared/notifications.ts`, same
+  erasable-syntax-only constraint): lead windows, overnight/category
+  schedules, overlapping-rule dedupe, DST edge days, disabled defaults,
+  no-fire when inactive, and the bounded duplicate-suppression ledger.
 - `node scripts/usage-stats-test.mjs` — idle-aware usage local-midnight/DST,
   counter-deduplication, retention/export, batched persistence/restart recovery,
   and mocked browser-event integration (`src/shared/usage-stats.ts` is the pure
@@ -121,6 +126,13 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   verdict, a settled query still blocks, and one blocked query cannot curtain a
   later productive search. Uses routed fixtures + `SB_E2E_PROFILE`, preserves
   CacheStorage, requires the warm-model final allow when a model cache exists.
+- `node scripts/e2e-notifications.mjs` — focused notification suite (run after
+  `npm run build:chrome`): options page defaults/wiring/lock state, a real MV3
+  one-shot alarm armed at `start − lead`, stale `sb-notify:*` cleanup, one fire
+  per event with the following start re-armed, dedupe across a reconcile, and
+  cleared alarms when every group is disabled. Stubs
+  `chrome.notifications.create` in the service worker; uses a throwaway
+  `.e2e-notifications-profile`.
 - `node scripts/e2e-test.mjs` — full e2e in a real Chromium (Playwright):
   boots the SW, runs Test Pair, fakes YouTube pages via network interception
   to verify block/allow + latency + feedback capture, seeds and runs the
@@ -273,6 +285,14 @@ Commit and push when appropriate.
     `resumeAt` but keeps the mode. Promptness-only alarm; posts a quiet
     notification (the manifests carry the `"notifications"` permission,
     added with this feature).
+  - `notifications.ts` — opt-in, silent reminders (focus hours starting soon,
+    break ending soon, allowance nearly used up) from `settings.notificationPrefs`
+    (global, versioned, OFF by default). One one-shot alarm per kind
+    (`sb-notify:*`), a storage.onChanged/onStartup reconcile, stale-prefix
+    cleanup, fixed OS-notification ids, and a bounded `notificationState`
+    ledger for durable dedupe. `planNotifications` lives in
+    `shared/notifications.ts` (pure, Node-tested); the background only reads
+    state, arms alarms, and delivers best-effort toasts.
   - `feedback-uploader.ts` — daily `alarms`-driven opt-in uploader: only when
     `settings.shareFeedback` (default OFF) AND `config.ts FEEDBACK_ENDPOINT`
     (empty = disabled) are set; batches unsent records + random resettable
@@ -321,7 +341,8 @@ Commit and push when appropriate.
   routes: `#dashboard` (read-only Now / Next / Relief plus today's focus-hours
   and category timeline), `#blocking` (switch, strictness presets, categories,
   history review), `#sites` (`ListEditor` Always allow / Always block), `#focus`,
-  `#locks` (+ incognito-access warning), `#schedule` (focus hours), `#usage`
+  `#locks` (+ incognito-access warning), `#schedule` (focus hours),
+  `#notifications` (silent reminder toggles + minute leads), `#usage`
   (idle-aware local-day host/category dashboard + JSON export/clear),
   `#companion`, `#privacy`, `#advanced` (exact threshold slider +
   diagnostics: Test classifier / Scan history / Latency log → `#out`), and
@@ -379,7 +400,10 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   `scripts/rta-test.mjs`), `resume.ts` (pure auto-resume derivations —
   mode normalization, the 24h `resumeAt` clamp, and `nextScheduleStart`
   built ONLY on lock-math's public builders; erasable-syntax-only, tested
-  by `scripts/resume-test.mjs`), `lock-math.ts` (pure
+  by `scripts/resume-test.mjs`), `notifications.ts` (pure reminder
+  preferences/ledger sanitization + `planNotifications` derivation from lock
+  state, category schedules, and allowance authority; erasable-syntax-only,
+  tested by `scripts/notifications-test.mjs`), `lock-math.ts` (pure
   lock/schedule time math — no browser APIs, Node-testable; also
   `mergeLockStates` + `sanitizeLockState`, MIRRORED in the companion's
   `merge.rs`/`lock_math.rs` — change both together, parity enforced by
