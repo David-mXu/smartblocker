@@ -3,6 +3,7 @@ import {
   CalendarBlank,
   ChartLineUp,
   Desktop,
+  Gauge,
   Globe,
   LockSimple,
   Prohibit,
@@ -27,6 +28,7 @@ import { CompanionPage } from './pages/CompanionPage';
 import { PrivacyPage } from './pages/PrivacyPage';
 import { AdvancedPage } from './pages/AdvancedPage';
 import { UsagePage } from './pages/UsagePage';
+import { DashboardPage } from './pages/DashboardPage';
 
 // Options shell: slim header + sidebar + ONE page at a time, hash-routed
 // (options.html#sites). #welcome renders the first-run wizard full-page.
@@ -40,6 +42,7 @@ interface PageDef {
 }
 
 const PAGES: PageDef[] = [
+  { id: 'dashboard', label: 'Now', icon: Gauge, Component: DashboardPage },
   { id: 'blocking', label: 'Blocking', icon: Prohibit, Component: BlockingPage },
   { id: 'sites', label: 'Sites', icon: Globe, Component: SitesPage },
   { id: 'focus', label: 'Focus', icon: Target, Component: FocusPage },
@@ -79,7 +82,7 @@ function useHashRoute(): string {
 
 function Wordmark() {
   return (
-    <a href="#blocking" className="flex min-w-0 items-center gap-2.5 text-foreground no-underline">
+    <a href="#dashboard" className="flex min-w-0 items-center gap-2.5 text-foreground no-underline">
       <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
         <LockSimple weight="bold" className="size-3.5" />
       </span>

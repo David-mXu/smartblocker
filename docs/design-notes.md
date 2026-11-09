@@ -194,11 +194,20 @@ Tint recipe for callouts: `bg-<hue>/10 border-<hue>/30 text-<hue>-soft`.
   `format.ts`; one file per page in `pages/`.
 - **Navigation:** 180px sticky sidebar of real links (`href="#sites"`,
   `aria-current="page"`); below `md` it becomes a horizontally scrollable pill
-  row. Hash routing; unknown hash → Blocking; legacy hashes (`#categories`,
-  `#history`, `#commitment`, `#schedules`) redirect. Focus moves to the page
-  heading on navigation.
-- **Pages:** Blocking `#blocking` (master switch with opt-in "Typed confirmation
-  for overrides" and "Turn blocking back on" right under it — Never / when the
+  row. Now `#dashboard` is first; the wordmark links to it. Hash routing;
+  unknown hash → Blocking; legacy hashes (`#categories`, `#history`,
+  `#commitment`, `#schedules`) redirect. Focus moves to the page heading on
+  navigation.
+- **Pages:** Now `#dashboard` (read-only answer to "is it blocking, what happens
+  next, what relief is real?": blocking on/paused/forced; every active lock
+  reason with its own countdown and aggregate end; active global/category
+  windows; break, focus goal, pending focus undo, companion health; next
+  global/category transition and armed auto-resume in local time; break mode,
+  authority-labelled allowance/opening grants, and the classifier-only relief
+  statement; 24-hour focus-hours and category-window lanes with current-time
+  marker and textual equivalents) · Blocking `#blocking` (master switch with
+  opt-in "Typed confirmation for overrides" and "Turn blocking back on" right
+  under it — Never / when the
   browser restarts / when focus hours begin / at a set time — "Hide distractions
   in search results",
   strictness presets
@@ -360,6 +369,16 @@ authoritative grace observation), `#popup-enabled-toggle`, `#open-options`,
 ### Options (navigate to `options.html#<page>` — only the active page renders)
 Global: `#banner`, `#lock-status` (visible only when locked, contains
 "Locked"), `#save-msg`, `#model-progress`. `#save-btn` no longer exists.
+- `#dashboard`: `#dashboard-now`, `#dashboard-blocking`,
+  `#dashboard-blocking-detail`, `#dashboard-lock`, `#dashboard-lock-summary`,
+  `#dashboard-lock-reasons` (`li` per active reason), `#dashboard-companion`,
+  `#dashboard-next`, `#dashboard-next-global`, `#dashboard-next-category`,
+  `#dashboard-next-resume`, `#dashboard-next-focus`, `#dashboard-relief`,
+  `#dashboard-relief-break`, `#dashboard-relief-allowance`,
+  `#dashboard-relief-statement`, `#dashboard-timeline`,
+  `#dashboard-timeline-now`, `#dashboard-timeline-global` /
+  `#dashboard-timeline-category` (each with a `-marker` child),
+  `#dashboard-timeline-text` (`li` per occurrence). Read-only; no controls.
 - `#blocking`: `#enabled-toggle`, `#surrender-mode-toggle`, `#resume-mode`,
   `#resume-at`, `#mask-search-elements-toggle`, `#block-adult-toggle`, `#label-list` (`li`,
   `.delete-label-btn`),

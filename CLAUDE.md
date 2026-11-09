@@ -318,8 +318,9 @@ Commit and push when appropriate.
   merge stay monotonic). No diagnostics in the popup.
 - `src/options/` (`OptionsApp.tsx` shell, `useOptionsState.ts`, `format.ts`,
   `pages/*`, `welcome/*`) — sidebar settings, ONE page at a time via hash
-  routes: `#blocking` (switch, strictness presets, categories, history
-  review), `#sites` (`ListEditor` Always allow / Always block), `#focus`,
+  routes: `#dashboard` (read-only Now / Next / Relief plus today's focus-hours
+  and category timeline), `#blocking` (switch, strictness presets, categories,
+  history review), `#sites` (`ListEditor` Always allow / Always block), `#focus`,
   `#locks` (+ incognito-access warning), `#schedule` (focus hours), `#usage`
   (idle-aware local-day host/category dashboard + JSON export/clear),
   `#companion`, `#privacy`, `#advanced` (exact threshold slider +

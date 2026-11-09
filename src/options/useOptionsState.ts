@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../shared/api';
 import { getSettings, setSettings, type Settings } from '../shared/settings';
 import { getLockState, getLockStatus } from '../shared/lock';
-import type { LockStatus } from '../shared/lock-math';
+import { EMPTY_LOCK_STATE, type LockState, type LockStatus } from '../shared/lock-math';
 import type { CompanionStatusResponse } from '../shared/messages';
 import type { CompanionSnapshot } from '../shared/companion-protocol';
 import {
@@ -56,6 +56,8 @@ const UNLOCKED: LockStatus = {
 export interface OptionsState {
   settings: Settings | null;
   lock: LockInfo;
+  /** Full persisted lock state (schedules, category schedules, gates). */
+  lockState: LockState;
   refreshLock: () => Promise<void>;
   /** Persist a patch (optimistic). Resolves false when the write was refused. */
   save: (patch: SettingsPatch) => Promise<boolean>;
@@ -74,6 +76,7 @@ export interface OptionsState {
 export function useOptionsState(): OptionsState {
   const [settings, setLocalSettings] = useState<Settings | null>(null);
   const [lockStatus, setLockStatus] = useState<LockStatus>(UNLOCKED);
+  const [lockState, setLockState] = useState<LockState>(EMPTY_LOCK_STATE);
   const [passwordArmed, setPasswordArmed] = useState(false);
   const [pendingFocus, setPendingFocus] = useState<PendingFocusSession | null>(null);
   const [companion, setCompanion] = useState<CompanionSnapshot | null>(null);
@@ -98,6 +101,7 @@ export function useOptionsState(): OptionsState {
   const refreshLock = useCallback(async () => {
     const [status, state] = await Promise.all([getLockStatus(), getLockState()]);
     setLockStatus(status);
+    setLockState(state);
     setPasswordArmed(Boolean(state.passwordHash));
   }, []);
 
@@ -219,6 +223,7 @@ export function useOptionsState(): OptionsState {
   return {
     settings,
     lock,
+    lockState,
     refreshLock,
     save,
     saveStatus,
