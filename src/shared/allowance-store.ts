@@ -3,6 +3,7 @@
 import { api } from './api';
 import { getLockStatus } from './lock';
 import {
+  allowanceStateHasLocalOnlyReceipts,
   allowanceStateIdentity,
   applyAllowanceCommand,
   cloneAllowanceAuthorityState,
@@ -17,6 +18,33 @@ import {
 export const ALLOWANCE_AUTHORITY_STORAGE_KEY = 'allowanceAuthority';
 
 let localCommandQueue: Promise<void> = Promise.resolve();
+
+/** Serialize a read/decide/write with ordinary fallback commands. Without
+ * this, a bridge mirror and a fallback writer can both read revision R and
+ * then land their writes in either order, losing the later command. */
+function enqueueLocal<T>(task: () => Promise<T>): Promise<T> {
+  const attempt = localCommandQueue.then(task);
+  localCommandQueue = attempt.then(
+    () => undefined,
+    () => undefined,
+  );
+  return attempt;
+}
+
+export interface AllowanceSnapshotReconciliation {
+  /** `accepted`: the daemon snapshot is now durable (or already identical).
+   *  `local-newer`/`divergent`: the durable local snapshot wins and must be
+   *  offered to the daemon. `retired`: the caller's connection changed before
+   *  the write, so nothing was persisted. */
+  decision: 'accepted' | 'local-newer' | 'divergent' | 'retired';
+  state: AllowanceAuthorityState;
+  /** Persistence failed; `state` is the pre-write durable value. */
+  error?: Error;
+}
+
+function asError(value: unknown): Error {
+  return value instanceof Error ? value : new Error(String(value));
+}
 
 export async function getLocalAllowanceAuthority(): Promise<AllowanceAuthorityState> {
   const stored = await api.storage.local.get(ALLOWANCE_AUTHORITY_STORAGE_KEY);
@@ -34,10 +62,61 @@ export async function writeLocalAllowanceAuthority(state: AllowanceAuthorityStat
   await api.storage.local.set({ [ALLOWANCE_AUTHORITY_STORAGE_KEY]: cloneAllowanceAuthorityState(clean) });
 }
 
+/** Atomically fold a daemon snapshot into durable fallback state. Runs on the
+ * same queue as fallback commands so the read/decide/write cannot interleave
+ * with a command that starts after the bridge's first observation.
+ *
+ * The daemon wins only when it leads and the browser cannot prove a local-only
+ * transition. Otherwise the local history is preserved and promoted above
+ * both revisions so a strictly-greater recovery bootstrap can carry it. */
+export async function reconcileLocalAllowanceSnapshot(
+  incoming: AllowanceAuthorityState,
+  stillCurrent?: () => boolean,
+): Promise<AllowanceSnapshotReconciliation> {
+  const clean = normalizeAllowanceAuthorityState(incoming);
+  if (!clean) throw new Error('Invalid allowance authority snapshot.');
+  const cleanIdentity = allowanceStateIdentity(clean);
+  return enqueueLocal(async (): Promise<AllowanceSnapshotReconciliation> => {
+    const local = await getLocalAllowanceAuthority();
+    if (stillCurrent && !stillCurrent()) {
+      return { decision: 'retired', state: local };
+    }
+    if (local.revision > clean.revision) {
+      return { decision: 'local-newer', state: local };
+    }
+    if (local.revision === clean.revision && allowanceStateIdentity(local) === cleanIdentity) {
+      return { decision: 'accepted', state: local };
+    }
+    const divergent =
+      local.revision === clean.revision ||
+      allowanceStateHasLocalOnlyReceipts(local, clean);
+    if (divergent) {
+      const target = Math.max(local.revision + 1, clean.revision + 1);
+      if (local.revision >= Number.MAX_SAFE_INTEGER || target > Number.MAX_SAFE_INTEGER) {
+        return { decision: 'divergent', state: local };
+      }
+      const promoted = cloneAllowanceAuthorityState(local);
+      promoted.revision = target;
+      try {
+        await writeLocalAllowanceAuthority(promoted);
+        return { decision: 'divergent', state: promoted };
+      } catch (error) {
+        return { decision: 'divergent', state: local, error: asError(error) };
+      }
+    }
+    try {
+      await writeLocalAllowanceAuthority(clean);
+      return { decision: 'accepted', state: clean };
+    } catch (error) {
+      return { decision: 'accepted', state: clean, error: asError(error) };
+    }
+  });
+}
+
 export async function submitLocalAllowanceCommand(
   command: AllowanceCommand,
 ): Promise<AllowanceCommandResult> {
-  const attempt = localCommandQueue.then(async (): Promise<AllowanceCommandResult> => {
+  return enqueueLocal(async (): Promise<AllowanceCommandResult> => {
     const current = await getLocalAllowanceAuthority();
     const applied = applyAllowanceCommand(current, command, current.revision);
     if (!applied.ok || applied.duplicate) return applied;
@@ -52,13 +131,6 @@ export async function submitLocalAllowanceCommand(
     await writeLocalAllowanceAuthority(committed);
     return { ...applied, state: committed };
   });
-  // A persistence/lock error belongs to this caller only; it must not poison
-  // the single-flight chain for later independent commands.
-  localCommandQueue = attempt.then(
-    () => undefined,
-    () => undefined,
-  );
-  return attempt;
 }
 
 /** A divergent snapshot means this browser holds transitions the daemon did not
@@ -71,7 +143,7 @@ export async function promoteLocalAllowanceAuthorityForConflict(
   minimumRevision = 0,
 ): Promise<AllowanceAuthorityState> {
   const expectedIdentity = allowanceStateIdentity(expected);
-  const attempt = localCommandQueue.then(async (): Promise<AllowanceAuthorityState> => {
+  return enqueueLocal(async (): Promise<AllowanceAuthorityState> => {
     const current = await getLocalAllowanceAuthority();
     if (allowanceStateIdentity(current) !== expectedIdentity) return current;
     const target = Math.max(current.revision + 1, minimumRevision + 1);
@@ -83,11 +155,6 @@ export async function promoteLocalAllowanceAuthorityForConflict(
     await writeLocalAllowanceAuthority(promoted);
     return promoted;
   });
-  localCommandQueue = attempt.then(
-    () => undefined,
-    () => undefined,
-  );
-  return attempt;
 }
 
 /** Local calendar day for pure local-midnight pool rollover. This is a date

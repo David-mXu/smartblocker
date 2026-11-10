@@ -503,4 +503,145 @@ await test('a committed daemon snapshot is mirrored before an offline fallback e
   connected = true;
 });
 
+await test('a mirror write cannot land after a fallback command', async () => {
+  bridge.reset();
+  epoch++;
+  connected = true;
+  values.allowanceAuthority = structuredClone(server);
+  bridge = createAllowanceBridge({
+    getConnection: () => connected ? ({ epoch, send }) : null,
+    onAuthority: (state) => results.push(state.revision),
+  });
+  bridge.onMessage({ type: 'allowanceStateSync', allowance: server }, epoch);
+  for (let n = 0; n < 8; n++) await flush();
+  const config = {
+    dailyAllowanceMs: 600_000, dailyOpenings: 1, waitingBaseMs: 0, waitingStepMs: 0,
+    waitingMaxMs: 0, rewardCapMs: 60_000,
+  };
+  const categoryName = 'serialization';
+  const configured = await dispatch({ kind: 'configure', operationId: id(100), category: categoryName, config });
+  assert.equal(configured.source, 'daemon');
+  const base = values.allowanceAuthority.revision;
+
+  connected = false;
+  const gate = deferred();
+  writeGate = gate;
+  const pending = dispatch({
+    kind: 'opening-start', operationId: id(101), category: categoryName, grantId: 'serial-race', ...at,
+  });
+  for (let n = 0; n < 4; n++) await flush();
+  // The fallback command now holds an unpersisted rev+1 write. Reconnect and
+  // deliver the older daemon snapshot before releasing the write.
+  connected = true;
+  epoch++;
+  bridge.onMessage({ type: 'allowanceStateSync', allowance: server }, epoch);
+  for (let n = 0; n < 4; n++) await flush();
+  writeGate = null;
+  gate.resolve();
+  const opened = await pending;
+  for (let n = 0; n < 10; n++) await flush();
+  assert.equal(opened.ok, true);
+  const local = values.allowanceAuthority;
+  assert.equal(local.revision, base + 1, 'the fallback opening still owns revision');
+  assert.equal(local.categories[categoryName].ledger.openingsUsed, 1, 'the older mirror did not overwrite it');
+});
+
+await test('a daemon-acked snapshot on a retired epoch is still mirrored', async () => {
+  bridge.reset();
+  epoch++;
+  connected = true;
+  values.allowanceAuthority = structuredClone(server);
+  bridge = createAllowanceBridge({
+    getConnection: () => connected ? ({ epoch, send }) : null,
+    onAuthority: (state) => results.push(state.revision),
+  });
+  bridge.onMessage({ type: 'allowanceStateSync', allowance: server }, epoch);
+  for (let n = 0; n < 8; n++) await flush();
+  const config = {
+    dailyAllowanceMs: 600_000, dailyOpenings: 1, waitingBaseMs: 0, waitingStepMs: 0,
+    waitingMaxMs: 0, rewardCapMs: 600_000,
+  };
+  const categoryName = 'retired-epoch';
+  const configured = await dispatch({ kind: 'configure', operationId: id(110), category: categoryName, config });
+  assert.equal(configured.source, 'daemon');
+  const base = values.allowanceAuthority.revision;
+
+  // The daemon commits a reward whose reply is ready only after the next
+  // connection epoch begins.
+  const rewardCommand = { ...reward(111), category: categoryName, earnedMs: 30_000 };
+  const applied = applyAllowanceCommand(server, rewardCommand, server.revision);
+  assert.equal(applied.ok, true);
+  server = commitAllowanceCommandRevision(applied.state, server.revision + 1, rewardCommand);
+  const earned = server.categories[categoryName].ledger.earnedRewardMs;
+  const retiredEpoch = epoch;
+  epoch++;
+  bridge.onMessage({
+    type: 'allowanceCommandResult', ok: true, operationId: rewardCommand.operationId,
+    allowance: server,
+  }, retiredEpoch);
+  for (let n = 0; n < 10; n++) await flush();
+  assert.equal(values.allowanceAuthority.revision, base + 1, 'the committed daemon snapshot was mirrored');
+  assert.equal(values.allowanceAuthority.categories[categoryName].ledger.earnedRewardMs, earned);
+
+  connected = false;
+  const offline = await dispatch({ kind: 'configure', operationId: id(112), category: 'after-retired', config });
+  assert.equal(offline.ok, true);
+  assert.equal(values.allowanceAuthority.revision, base + 2, 'fallback built on the mirrored revision');
+  assert.equal(values.allowanceAuthority.categories[categoryName].ledger.earnedRewardMs, earned, 'the reward survived fallback');
+  connected = true;
+});
+
+await test('a full receipt window does not promote an unchanged daemon lead', async () => {
+  bridge.reset();
+  epoch++;
+  connected = true;
+  const categoryName = 'receipt-window';
+  const config = {
+    dailyAllowanceMs: 600_000, dailyOpenings: 1, waitingBaseMs: 0, waitingStepMs: 0,
+    waitingMaxMs: 0, rewardCapMs: 600_000,
+  };
+  const build = (count) => {
+    let state = emptyAllowanceAuthorityState();
+    const configure = { kind: 'configure', operationId: id(120), category: categoryName, config };
+    let applied = applyAllowanceCommand(state, configure, state.revision);
+    assert.equal(applied.ok, true);
+    state = commitAllowanceCommandRevision(applied.state, state.revision + 1, configure);
+    for (let n = 1; n < count; n++) {
+      const value = {
+        kind: 'reward', operationId: id(200 + n), category: categoryName,
+        grantId: 'unused', earnedMs: 1, ...at,
+      };
+      applied = applyAllowanceCommand(state, value, state.revision);
+      assert.equal(applied.ok, true);
+      state = commitAllowanceCommandRevision(applied.state, state.revision + 1, value);
+    }
+    return state;
+  };
+  const local = build(70);
+  const daemon = build(72);
+  assert.equal(local.receipts[0].revision, 7);
+  assert.equal(daemon.receipts[0].revision, 9);
+  values.allowanceAuthority = local;
+  server = daemon;
+  bridge = createAllowanceBridge({
+    getConnection: () => connected ? ({ epoch, send }) : null,
+    onAuthority: (state) => results.push(state.revision),
+  });
+  const sentBefore = sent.length;
+  bridge.onMessage({ type: 'allowanceStateSync', allowance: daemon }, epoch);
+  for (let n = 0; n < 10; n++) await flush();
+  assert.equal(server.revision, 72, 'the daemon lead was not replaced');
+  assert.equal(values.allowanceAuthority.revision, 72, 'the daemon snapshot was accepted');
+  assert.equal(
+    values.allowanceAuthority.categories[categoryName].ledger.earnedRewardMs,
+    daemon.categories[categoryName].ledger.earnedRewardMs,
+    'the newest daemon rewards survived',
+  );
+  assert.equal(
+    sent.slice(sentBefore).filter((message) => message.type === 'allowanceBootstrap').length,
+    0,
+    'no false divergence bootstrap was sent',
+  );
+});
+
 console.log(`\n${passed} passed, 0 failed`);

@@ -14,7 +14,6 @@ const MAX_TIMESTAMP_MS: i64 = 9_007_199_254_740_991;
 const MAX_MONO_MS: u64 = MAX_TIMESTAMP_MS as u64;
 const MAX_KEYS: usize = 8;
 const MAX_OPERATIONS: usize = 8;
-const MAX_SPENT_CODES: usize = 256;
 const MAX_TOKEN_CHARS: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,7 +175,6 @@ impl PartnerState {
                 .is_some_and(|mono| !valid_mono(mono))
             || self.public_keys.len() > MAX_KEYS
             || self.pending_operations.len() > MAX_OPERATIONS
-            || self.spent_codes.len() > MAX_SPENT_CODES
         {
             return false;
         }
@@ -267,12 +265,10 @@ impl PartnerState {
                     .is_some_and(|expiry| expiry > now_mono)
         });
         // Beyond signed expiry, replay is impossible even if its tombstone is
-        // evicted. Retain every unexpired record before applying the cap.
+        // evicted. Retain EVERY unexpired record: evicting a live tombstone
+        // would let a caller-chosen operation id replay a still-valid code.
+        // Expired records are the only ones safe to drop.
         self.spent_codes.retain(|spent| spent.expires_at_ms > now);
-        if self.spent_codes.len() > MAX_SPENT_CODES {
-            let remove = self.spent_codes.len() - MAX_SPENT_CODES;
-            self.spent_codes.drain(0..remove);
-        }
     }
 }
 
@@ -988,6 +984,30 @@ mod tests {
         assert_eq!(
             redeem_operation_at(&state, &oversized, NOW + 1, MONO_NOW + 1),
             Err(PartnerError::MalformedCode)
+        );
+    }
+
+    #[test]
+    fn live_replay_tombstones_survive_beyond_the_old_cap() {
+        let mut state = added();
+        for n in 0..300u64 {
+            state.spent_codes.push(SpentPartnerCode {
+                operation_id: format!("{n:064x}"),
+                signature: format!("{n:0128x}"),
+                expires_at_ms: NOW + 60_000,
+            });
+        }
+        assert!(state.validate());
+        let observed = observe_at(&state, NOW, MONO_NOW).unwrap();
+        assert_eq!(
+            observed.spent_codes.len(),
+            300,
+            "no unexpired replay tombstone is evicted"
+        );
+        let later = observe_at(&observed, NOW + 61_000, MONO_NOW + 61_000).unwrap();
+        assert!(
+            later.spent_codes.is_empty(),
+            "expired tombstones are the only ones pruned"
         );
     }
 

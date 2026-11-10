@@ -21,6 +21,10 @@ import {
 
 export const ALLOWANCE_STATE_VERSION = 1;
 export const MAX_ALLOWANCE_CATEGORIES = 64;
+/** Bound on the acknowledged-command window. Both peers keep the newest
+ * receipts; reconciliation must treat older local entries as ambiguous rather
+ * than as proof of a local-only transition. */
+export const MAX_ALLOWANCE_RECEIPTS = 64;
 
 export interface AllowanceCategoryState {
   config: AllowanceConfig;
@@ -139,7 +143,7 @@ export function normalizeAllowanceAuthorityState(raw: unknown): AllowanceAuthori
   }
   if (raw.receipts !== undefined && !Array.isArray(raw.receipts)) return null;
   const rawReceipts = (raw.receipts ?? []) as unknown[];
-  if (rawReceipts.length > 64) return null;
+  if (rawReceipts.length > MAX_ALLOWANCE_RECEIPTS) return null;
   const seen = new Set<string>();
   const receipts: AllowanceOperationReceipt[] = [];
   for (const value of rawReceipts) {
@@ -212,7 +216,13 @@ export function allowanceStateIdentity(raw: unknown): string | null {
  * other snapshot. At an equal revision that means this side holds a local
  * transition the other side never saw; replacing it would silently discard
  * offline allowance consumption. A reused operation ID with a different
- * fingerprint or revision is a divergence too, not an identical receipt. */
+ * fingerprint or revision is a divergence too, not an identical receipt.
+ *
+ * Both peers retain only the newest MAX_ALLOWANCE_RECEIPTS entries, so a
+ * receipt older than the other snapshot's retained window proves nothing: it
+ * may simply have been evicted there. Treating it as local-only would promote
+ * an unchanged snapshot over a legitimate daemon lead and erase the daemon's
+ * newest commands. */
 export function allowanceStateHasLocalOnlyReceipts(rawLocal: unknown, rawOther: unknown): boolean {
   const local = normalizeAllowanceAuthorityState(rawLocal);
   const other = normalizeAllowanceAuthorityState(rawOther);
@@ -223,9 +233,16 @@ export function allowanceStateHasLocalOnlyReceipts(rawLocal: unknown, rawOther: 
       `${receipt.revision}:${receipt.fingerprint}`,
     ]),
   );
-  return local.receipts.some(
-    (receipt) => known.get(receipt.operationId) !== `${receipt.revision}:${receipt.fingerprint}`,
-  );
+  // The window starts at the oldest retained receipt. When the other snapshot
+  // kept none, derive the same bound from its revision; a malformed shape with
+  // a high revision and no receipts is still comparable for the newest 64.
+  const oldestComparable = other.receipts.length > 0
+    ? Math.min(...other.receipts.map((receipt) => receipt.revision))
+    : Math.max(1, other.revision - (MAX_ALLOWANCE_RECEIPTS - 1));
+  return local.receipts.some((receipt) => {
+    if (receipt.revision < oldestComparable) return false;
+    return known.get(receipt.operationId) !== `${receipt.revision}:${receipt.fingerprint}`;
+  });
 }
 
 /** A persisted, acknowledged command-id prefix per category/day lets fallback
@@ -367,7 +384,7 @@ export function commitAllowanceCommandRevision(
       fingerprint: fingerprintAllowanceCommand(command),
       revision,
     });
-    next.receipts = next.receipts.slice(-64);
+    next.receipts = next.receipts.slice(-MAX_ALLOWANCE_RECEIPTS);
   }
   return next;
 }

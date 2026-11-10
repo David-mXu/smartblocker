@@ -1,6 +1,5 @@
 import { PROTOCOL_VERSION } from '../shared/companion-protocol';
 import {
-  allowanceStateHasLocalOnlyReceipts,
   allowanceStateIdentity,
   normalizeAllowanceAuthorityState,
   type AllowanceAuthorityState,
@@ -9,8 +8,7 @@ import {
 import type { AllowanceResponse } from '../shared/messages';
 import {
   getLocalAllowanceAuthority,
-  promoteLocalAllowanceAuthorityForConflict,
-  writeLocalAllowanceAuthority,
+  reconcileLocalAllowanceSnapshot,
 } from '../shared/allowance-store';
 
 interface Connection {
@@ -66,25 +64,17 @@ export function createAllowanceBridge(hooks: Hooks) {
     const pendingState = pendingMirror;
     if (!pendingState) return Promise.resolve();
     const pendingIdentity = allowanceStateIdentity(pendingState);
-    return enqueue(async () => {
-      const local = await getLocalAllowanceAuthority();
-      if (local.revision > pendingState.revision) return;
-      if (
-        local.revision === pendingState.revision &&
-        allowanceStateIdentity(local) !== pendingIdentity &&
-        allowanceStateHasLocalOnlyReceipts(local, pendingState)
-      ) {
-        // A fallback command won the race. Preserve it; reconnect reconciliation
-        // will promote the local history instead of silently dropping either.
-        return;
-      }
-      if (allowanceStateIdentity(local) === pendingIdentity) {
-        if (allowanceStateIdentity(pendingMirror) === pendingIdentity) pendingMirror = null;
-        return;
-      }
-      await writeLocalAllowanceAuthority(pendingState);
-      if (allowanceStateIdentity(pendingMirror) === pendingIdentity) pendingMirror = null;
-    });
+    return reconcileLocalAllowanceSnapshot(pendingState)
+      .then((result) => {
+        if (allowanceStateIdentity(pendingMirror) !== pendingIdentity) return;
+        // `accepted` persisted it; `local-newer`/`divergent` means the
+        // durable local snapshot already superseded it. Only a failed write
+        // keeps the mirror pending for the next fallback attempt.
+        if (!result.error) pendingMirror = null;
+      })
+      .catch((error) => {
+        console.warn('[SmartBlocker] allowance mirror recovery failed:', error);
+      });
   }
 
   function settleInitialization(state: AllowanceAuthorityState | null): void {
@@ -133,95 +123,74 @@ export function createAllowanceBridge(hooks: Hooks) {
   ) {
     enqueue(async () => {
       try {
-        if (fallbackAfterInitializationTimeout) {
-          // This connection deliberately chose fallback after the bounded wait.
-          // A late observation must not replace commands written since then.
-          completion?.call.resolve({
-            ok: completion.ok,
-            source: 'fallback',
-            state: current() ?? (await getLocalAllowanceAuthority()),
-            reason: completion.reason,
-            duplicate: completion.duplicate,
-          });
-          return;
-        }
-        let live = hooks.getConnection();
-        if (!live || live.epoch !== epoch) {
-          completion?.call.reject(new Error('The allowance authority disconnected before persistence.'));
-          return;
-        }
-        if (authority && authorityEpoch === epoch && incoming.revision < authority.revision) {
-          // An in-flight observation can arrive after a newer one was already
-          // accepted. It must not roll authority or fallback state backwards.
-          completion?.call.resolve({
-            ok: completion.ok,
-            source: 'daemon',
-            state: current() ?? incoming,
-            reason: completion.reason,
-            duplicate: completion.duplicate,
-          });
-          return;
-        }
-        const local = await getLocalAllowanceAuthority();
-        if (fallbackAfterInitializationTimeout) {
-          completion?.call.resolve({
-            ok: completion.ok,
-            source: 'fallback',
-            state: local,
-            reason: completion.reason,
-            duplicate: completion.duplicate,
-          });
-          return;
-        }
-        live = hooks.getConnection();
-        if (!live || live.epoch !== epoch) {
-          completion?.call.reject(new Error('The allowance authority disconnected before persistence.'));
-          return;
-        }
-        if (local.revision > incoming.revision) {
-          // Never roll back fallback commands. Offer the newer durable snapshot
-          // and stay in fallback until a real newer/equal authority arrives.
-          // An older peer that ignores this additive message cannot erase it.
-          const sent = live.send({ v: PROTOCOL_VERSION, type: 'allowanceBootstrap', allowance: local });
-          completion?.call.reject(new Error(
-            sent
-              ? 'Local allowance usage is newer than the daemon; reconcile and retry.'
-              : 'Local allowance usage is newer; the daemon could not receive it.',
-          ));
-          authority = null;
-          authorityEpoch = null;
-          return;
-        }
-        const divergent =
-          local.revision < incoming.revision
-            ? allowanceStateHasLocalOnlyReceipts(local, incoming)
-            : local.revision === incoming.revision &&
-              allowanceStateIdentity(local) !== allowanceStateIdentity(incoming);
-        if (divergent) {
-          // Revision equality (or a daemon lead) is not proof that this
-          // browser's durable transitions are included. Preserve local history
-          // and promote above the daemon so it adopts the complete local
-          // snapshot instead of silently erasing offline consumption.
-          const promoted = await promoteLocalAllowanceAuthorityForConflict(local, incoming.revision);
+        // A retired connection or a deliberate fallback still receives
+        // daemon-committed snapshots. Mirror them best-effort on the shared
+        // writer queue: a newer fallback snapshot wins, but a committed
+        // command must not disappear merely because the reply arrived late.
+        const liveNow = hooks.getConnection();
+        if (fallbackAfterInitializationTimeout || !liveNow || liveNow.epoch !== epoch) {
+          try {
+            const mirrored = await reconcileLocalAllowanceSnapshot(incoming);
+            if (mirrored.error) pendingMirror = incoming;
+          } catch (error) {
+            pendingMirror = incoming;
+            console.warn('[SmartBlocker] late allowance snapshot was not mirrored:', error);
+          }
           if (fallbackAfterInitializationTimeout) {
             completion?.call.resolve({
               ok: completion.ok,
               source: 'fallback',
-              state: promoted,
+              state: current() ?? (await getLocalAllowanceAuthority()),
               reason: completion.reason,
               duplicate: completion.duplicate,
             });
-            return;
+          } else {
+            completion?.call.reject(new Error('The allowance authority disconnected before persistence.'));
           }
-          live = hooks.getConnection();
-          if (!live || live.epoch !== epoch) {
-            completion?.call.reject(new Error('The allowance authority disconnected before reconciliation.'));
+          return;
+        }
+        const reconciliation = await reconcileLocalAllowanceSnapshot(incoming, () => {
+          const live = hooks.getConnection();
+          return Boolean(live && live.epoch === epoch) && !fallbackAfterInitializationTimeout;
+        });
+        if (reconciliation.decision === 'retired') {
+          completion?.call.reject(new Error('The allowance authority disconnected before persistence.'));
+          return;
+        }
+        if (fallbackAfterInitializationTimeout) {
+          // This connection deliberately chose fallback after the bounded wait.
+          // The queued mirror above preserved the daemon snapshot only when no
+          // newer fallback command won, so it cannot replace later choices.
+          completion?.call.resolve({
+            ok: completion.ok,
+            source: 'fallback',
+            state: reconciliation.state,
+            reason: completion.reason,
+            duplicate: completion.duplicate,
+          });
+          return;
+        }
+        const live = hooks.getConnection();
+        if (!live || live.epoch !== epoch) {
+          if (reconciliation.error) pendingMirror = incoming;
+          completion?.call.reject(new Error('The allowance authority disconnected before persistence.'));
+          return;
+        }
+        if (reconciliation.decision !== 'accepted') {
+          // The durable local snapshot is newer or holds a transition the
+          // daemon did not include. Offer it and stay in reconciliation;
+          // `current()` must not claim a revision the daemon has not adopted.
+          pendingMirror = null;
+          if (reconciliation.error) {
+            completion?.call.reject(reconciliation.error);
+            authority = null;
+            authorityEpoch = null;
             return;
           }
           const sent = live.send({
             v: PROTOCOL_VERSION,
             type: 'allowanceBootstrap',
-            allowance: promoted,
+            allowance: reconciliation.state,
           });
           completion?.call.reject(new Error(
             sent
@@ -232,41 +201,31 @@ export function createAllowanceBridge(hooks: Hooks) {
           authorityEpoch = null;
           return;
         }
-        if (fallbackAfterInitializationTimeout) {
-          completion?.call.resolve({
-            ok: completion.ok,
-            source: 'fallback',
-            state: local,
-            reason: completion.reason,
-            duplicate: completion.duplicate,
-          });
+        if (reconciliation.error) {
+          // The daemon accepted the snapshot, but the local mirror did not.
+          // Latch it for the next authenticated base revision and keep it
+          // pending so a fallback command flushes it first.
+          pendingMirror = incoming;
+          if (!authority || authorityEpoch !== epoch || incoming.revision >= authority.revision) {
+            authority = incoming;
+            authorityEpoch = epoch;
+            settleInitialization(incoming);
+            hooks.onAuthority(incoming);
+          }
+          completion?.call.reject(reconciliation.error);
           return;
         }
-        // Reconciliation is complete: this snapshot does not erase a newer or
-        // divergent local transition. Latch it before the mirror write so a
-        // failed mirror cannot make the next authenticated command reuse an old
-        // base revision; the command itself still waits for persistence below.
+        pendingMirror = null;
         if (!authority || authorityEpoch !== epoch || incoming.revision >= authority.revision) {
           authority = incoming;
           authorityEpoch = epoch;
           settleInitialization(incoming);
           hooks.onAuthority(incoming);
         }
-        pendingMirror = incoming;
-        try {
-          await writeLocalAllowanceAuthority(incoming);
-        } catch (error) {
-          completion?.call.reject(error instanceof Error ? error : new Error(String(error)));
-          console.warn('[SmartBlocker] authority snapshot was not persisted:', error);
-          return;
-        }
-        if (allowanceStateIdentity(pendingMirror) === allowanceStateIdentity(incoming)) {
-          pendingMirror = null;
-        }
         completion?.call.resolve({
           ok: completion.ok,
           source: authority ? 'daemon' : 'fallback',
-          state: current() ?? local,
+          state: current() ?? reconciliation.state,
           reason: completion.reason,
           duplicate: completion.duplicate,
         });
@@ -279,7 +238,7 @@ export function createAllowanceBridge(hooks: Hooks) {
   }
 
   function onMessage(raw: unknown, epoch: number): void {
-    if (fallbackAfterInitializationTimeout || !raw || typeof raw !== 'object') return;
+    if (!raw || typeof raw !== 'object') return;
     const message = raw as {
       type?: unknown;
       allowance?: unknown;

@@ -103,6 +103,7 @@ const {
   getFocusCycleResponse,
   initFocusCycleScheduler,
   __runFocusCycleForTest,
+  __focusCycleProgramForTest,
 } = await import('../src/background/focus-cycles.ts?cycle-tests=1');
 initFocusCycleScheduler();
 const flush = () => new Promise((resolve) => setImmediate(resolve));
@@ -266,6 +267,11 @@ await test('a stale program read cannot overwrite a newer start or clear its ala
   assert.equal(started.ok, true);
   gate.resolve();
   await tick;
+  assert.equal(
+    __focusCycleProgramForTest()?.id,
+    started.program.id,
+    'the stale read did not clobber the newer in-memory program',
+  );
   const current = (await getFocusCycleResponse()).program;
   assert.equal(current?.id, started.program.id, 'the newer start still owns the state');
   assert.equal(alarmWhen, started.program.stageEndsAtMs, 'the newer alarm was not cleared');
@@ -329,6 +335,33 @@ await test('an alarm failure clears only the program installed by that start', a
   assert.equal((await getFocusCycleResponse()).program, null);
   assert.equal(values.focusCycleProgram, undefined);
   assert.equal(alarmWhen, null);
+});
+
+await test('a Pomodoro work rollback advances without an invalid break and recovers', async () => {
+  await cancelFocusCycle();
+  const started = await start('pomodoro', 2);
+  assert.equal(started.ok, true);
+  stalePending = true;
+  now += 1;
+  await fire();
+  let response = await getFocusCycleResponse();
+  assert.equal(response.error, undefined, 'no invalid break state was reported');
+  assert.equal(response.program.cycle, 2, 'the rollback advanced to the next cycle');
+  assert.equal(response.program.stage, 'work');
+  assert.equal(response.program.pendingCommand.kind, 'reward');
+  const secondCycleEnd = response.program.stageEndsAtMs;
+  const before = commands.length;
+  now = secondCycleEnd;
+  await fire();
+  assert.deepEqual(
+    commands.slice(before).map((command) => command.kind),
+    ['reward', 'pomodoro-start'],
+    'the second cycle still gets its fixed break',
+  );
+  response = await getFocusCycleResponse();
+  assert.equal(response.program.stage, 'break');
+  assert.equal(response.program.pendingCommand, null);
+  await cancelFocusCycle();
 });
 
 await test('clock-rollback makes a stale pending reward terminal without retry spam', async () => {

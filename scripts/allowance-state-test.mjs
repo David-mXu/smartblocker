@@ -2,7 +2,9 @@
 import assert from 'node:assert/strict';
 import {
   MAX_ALLOWANCE_CATEGORIES,
+  MAX_ALLOWANCE_RECEIPTS,
   activeAllowanceRelief,
+  allowanceStateHasLocalOnlyReceipts,
   applyAllowanceCommand,
   commitAllowanceCommandRevision,
   deriveAllowanceCategory,
@@ -206,6 +208,37 @@ await test('cap and malformed authority failures never fabricate a category tran
     kind: 'configure', ...base(1), config: CONFIG,
   }), 'version');
   assert.deepEqual(state, snapshot);
+});
+
+await test('a receipt evicted from the peer window is not local-only history', () => {
+  const configureChain = (count) => {
+    let state = emptyAllowanceAuthorityState();
+    for (let n = 1; n <= count; n++) {
+      const value = { kind: 'configure', ...base(n), config: CONFIG };
+      state = accepted(state, value);
+    }
+    return state;
+  };
+  const local = configureChain(70); // retained receipts 7..70
+  const daemon = configureChain(72); // retained receipts 9..72
+  assert.equal(local.receipts.length, MAX_ALLOWANCE_RECEIPTS);
+  assert.equal(local.receipts[0].revision, 7);
+  assert.equal(daemon.receipts[0].revision, 9);
+  assert.equal(
+    allowanceStateHasLocalOnlyReceipts(local, daemon),
+    false,
+    'evicted receipts 7/8 are ambiguous, not proof of an offline transition',
+  );
+
+  const divergent = structuredClone(local);
+  divergent.revision = 71;
+  divergent.receipts.push({ operationId: id(999), fingerprint: 'f'.repeat(64), revision: 71 });
+  divergent.receipts = divergent.receipts.slice(-MAX_ALLOWANCE_RECEIPTS);
+  assert.equal(allowanceStateHasLocalOnlyReceipts(divergent, daemon), true, 'a receipt inside the peer window is genuine divergence');
+
+  const changed = structuredClone(local);
+  changed.receipts.at(-1).fingerprint = 'e'.repeat(64);
+  assert.equal(allowanceStateHasLocalOnlyReceipts(changed, daemon), true, 'a same-revision fingerprint mismatch still diverges');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

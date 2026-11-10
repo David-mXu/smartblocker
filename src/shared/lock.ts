@@ -32,22 +32,59 @@ import type {
 } from './lock-math';
 
 const STORAGE_KEY = 'lockState';
+/** Last partner arm/release confirmed by the daemon. Kept separate from the
+ * generic lock state so a raw `lockState` write (DevTools, a stale peer) can
+ * change the generation without also forging the authorization. The daemon is
+ * the only origin of these fields. */
+const PARTNER_ARM_KEY = 'partnerArmState';
+interface PartnerArmPin {
+  generation: string | null;
+  updatedAt: number;
+}
 
 /** Fat-finger cap on timer/frozen durations. */
 export const MAX_LOCK_MS = 30 * 24 * 3_600_000;
 
 let cache: LockState | null = null;
 
+function parsePartnerArmPin(raw: unknown): PartnerArmPin | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as { generation?: unknown; updatedAt?: unknown };
+  const generation = value.generation;
+  const updatedAt = value.updatedAt;
+  if (
+    generation !== null &&
+    !(typeof generation === 'string' && /^[0-9a-f]{64}$/.test(generation))
+  ) {
+    return null;
+  }
+  if (typeof updatedAt !== 'number' || !Number.isSafeInteger(updatedAt) || updatedAt < 0) {
+    return null;
+  }
+  return { generation, updatedAt };
+}
+
+async function getPartnerArmPin(): Promise<PartnerArmPin | null> {
+  const stored = await api.storage.local.get(PARTNER_ARM_KEY);
+  return parsePartnerArmPin(stored[PARTNER_ARM_KEY]);
+}
+
 // Invalidate when any context (options page, popup) writes lock state, so a
 // long-lived service worker / offscreen doc sees changes.
 api.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes[STORAGE_KEY]) cache = null;
+  if (area === 'local' && (changes[STORAGE_KEY] || changes[PARTNER_ARM_KEY])) cache = null;
 });
 
 export async function getLockState(): Promise<LockState> {
   if (cache) return cache;
-  const stored = await api.storage.local.get(STORAGE_KEY);
-  cache = { ...EMPTY_LOCK_STATE, ...(stored[STORAGE_KEY] as Partial<LockState> | undefined) };
+  const stored = await api.storage.local.get([STORAGE_KEY, PARTNER_ARM_KEY]);
+  const state: LockState = { ...EMPTY_LOCK_STATE, ...(stored[STORAGE_KEY] as Partial<LockState> | undefined) };
+  const pin = parsePartnerArmPin(stored[PARTNER_ARM_KEY]);
+  if (pin) {
+    state.partnerArmGeneration = pin.generation;
+    state.partnerArmUpdatedAt = pin.updatedAt;
+  }
+  cache = state;
   return cache;
 }
 
@@ -461,15 +498,54 @@ function canonicalJson(value: unknown): string {
 export async function mergeRemoteLockState(remote: unknown): Promise<boolean> {
   const now = Date.now();
   const current = { ...EMPTY_LOCK_STATE, ...(await getLockState()) };
-  const merged = mergeLockStates(current, sanitizeLockState(remote, now, MAX_LOCK_MS), now);
+  const sanitizedRemote = sanitizeLockState(remote, now, MAX_LOCK_MS);
+  const merged = mergeLockStates(current, sanitizedRemote, now);
+  // The daemon originates every partner arm/release, so its fields win over a
+  // forged or stale local LWW stamp. Without this, a raw
+  // `{partnerArmGeneration: null}` write would unlock settings locally while
+  // the daemon stayed armed, and a legitimate release could be outranked by a
+  // future local stamp.
+  const hasPartner =
+    sanitizedRemote.partnerArmGeneration !== undefined ||
+    sanitizedRemote.partnerArmUpdatedAt !== undefined;
+  if (hasPartner) {
+    merged.partnerArmGeneration = sanitizedRemote.partnerArmGeneration ?? null;
+    merged.partnerArmUpdatedAt = sanitizedRemote.partnerArmUpdatedAt ?? 0;
+  }
+  const raw = await api.storage.local.get(STORAGE_KEY);
+  const rawState = raw[STORAGE_KEY] as Partial<LockState> | undefined;
+  const rawGeneration = rawState?.partnerArmGeneration ?? null;
+  const rawUpdatedAt = rawState?.partnerArmUpdatedAt ?? 0;
+  const partnerRepair = hasPartner && (
+    rawGeneration !== (merged.partnerArmGeneration ?? null) ||
+    rawUpdatedAt !== (merged.partnerArmUpdatedAt ?? 0)
+  );
   const changed =
+    partnerRepair ||
     canonicalJson(merged) !==
-    canonicalJson({
-      ...current,
-      breakUpdatedAt: current.breakUpdatedAt ?? 0,
-      passwordTs: current.passwordTs ?? 0,
-      schedulesUpdatedAt: current.schedulesUpdatedAt ?? 0,
-    });
-  if (changed) await writeLockState(merged);
-  return changed;
+      canonicalJson({
+        ...current,
+        breakUpdatedAt: current.breakUpdatedAt ?? 0,
+        passwordTs: current.passwordTs ?? 0,
+        schedulesUpdatedAt: current.schedulesUpdatedAt ?? 0,
+      });
+  const pin = hasPartner
+    ? {
+        generation: merged.partnerArmGeneration ?? null,
+        updatedAt: merged.partnerArmUpdatedAt ?? 0,
+      }
+    : null;
+  const existingPin = pin ? await getPartnerArmPin() : null;
+  const pinChanged = pin !== null && (
+    !existingPin ||
+    existingPin.generation !== pin.generation ||
+    existingPin.updatedAt !== pin.updatedAt
+  );
+  if (changed || pinChanged) {
+    cache = merged;
+    const payload: Record<string, unknown> = { [STORAGE_KEY]: merged };
+    if (pin) payload[PARTNER_ARM_KEY] = pin;
+    await api.storage.local.set(payload);
+  }
+  return changed || pinChanged;
 }

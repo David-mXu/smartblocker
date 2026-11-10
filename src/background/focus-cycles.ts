@@ -253,6 +253,13 @@ async function runTick(): Promise<void> {
   if (current.stage === 'work') {
     await rewardWork();
     if (epoch !== operationEpoch || !program || program.id !== current.id) return;
+    if (program.stage !== 'work' || program.stageEndsAtMs !== current.stageEndsAtMs) {
+      // A rollback terminal reward already advanced to a fresh work cycle.
+      // Building a break from this tick's older `now` would compute a duration
+      // longer than breakDurationMs and fail validation on every retry.
+      await arm(program, Date.now());
+      return;
+    }
     if (current.mode === 'focus') {
       await store(null);
       if (epoch !== operationEpoch) return;
@@ -278,7 +285,13 @@ async function tick(): Promise<void> {
   if (ticking) return ticking;
   ticking = runTick().catch(async (error) => {
     issue(error);
-    await arm(program, Date.now(), true);
+    try {
+      await arm(program, Date.now(), true);
+    } catch (recoveryError) {
+      // `tick()` is fired and forgotten; a second rejection here would be an
+      // unhandled rejection instead of a logged issue.
+      issue(recoveryError);
+    }
   }).finally(() => {
     ticking = null;
   });
@@ -294,3 +307,7 @@ export function initFocusCycleScheduler(): void {
 
 export type { FocusCycleProgram, FocusCycleMode };
 export const __runFocusCycleForTest = tick;
+/** Test-only in-memory view; `getFocusCycleResponse` re-reads storage and
+ * would mask a stale read that clobbered the module state. */
+export const __focusCycleProgramForTest = (): FocusCycleProgram | null =>
+  program ? clone(program) : null;

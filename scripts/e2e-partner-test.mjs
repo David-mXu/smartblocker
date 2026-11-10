@@ -109,6 +109,15 @@ try {
   }));
   await sleep(800);
   check(read('lock-state.json')?.partnerArmGeneration === arm, 'raw browser storage cannot release a live partner arm through generic lock merge');
+  // The daemon does not echo a pinned partner field, so the browser must keep
+  // its own daemon-confirmed pin. Reloading drops any in-memory UI state and
+  // proves the settings guard still sees the arm from `getLockStatus`.
+  await options.reload();
+  await options.waitForLoadState('domcontentloaded');
+  check(
+    await poll(() => options.locator('#break-mode').isDisabled(), 10_000, 'settings remain locked after raw clear'),
+    'raw browser storage cannot unlock settings while the daemon stays armed',
+  );
 
   // Release must preserve completely independent gates, exactly.
   const untilTimer = Date.now() + 600_000;
