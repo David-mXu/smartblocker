@@ -3541,6 +3541,7 @@ mod tests {
         *shared.lock_state.lock().unwrap() = LockState {
             schedules: vec![ScheduleRule {
                 id: "keep".into(),
+                label: None,
                 days: vec![1, 2, 3, 4, 5],
                 start_minutes: 540,
                 end_minutes: 1020,
@@ -4874,6 +4875,7 @@ mod tests {
         // deliberately full compound lock to prove exact field preservation.
         let schedule = ScheduleRule {
             id: "keep-global".into(),
+            label: None,
             days: vec![1],
             start_minutes: 540,
             end_minutes: 1020,

@@ -26,7 +26,25 @@ pub const MIN_RANDOM_TEXT_LOCK_LENGTH: u16 = 1;
 pub const MAX_RANDOM_TEXT_LOCK_LENGTH: u16 = 5_000;
 pub const MIN_SCHEDULE_LEAD_MINUTES: u16 = 1;
 pub const MAX_SCHEDULE_LEAD_MINUTES: u16 = 1_440;
+/// Display-only rule-name cap; mirrors `MAX_SCHEDULE_LABEL_LENGTH` in
+/// `src/shared/lock-math.ts`. Labels do not affect evaluation.
+pub const MAX_SCHEDULE_LABEL_LENGTH: usize = 80;
 const MAX_SAFE_TIMESTAMP_MS: u64 = 9_007_199_254_740_991;
+
+/// Collapse control characters/whitespace and cap a rule label. A malformed
+/// label must never drop the rule itself: the window is the enforcement
+/// contract, the name is convenience.
+pub fn sanitize_schedule_label(label: Option<String>) -> Option<String> {
+    let flattened: String = label?
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let collapsed = flattened.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return None;
+    }
+    Some(collapsed.chars().take(MAX_SCHEDULE_LABEL_LENGTH).collect())
+}
 
 fn is_zero(value: &u64) -> bool {
     *value == 0
@@ -36,6 +54,12 @@ fn is_zero(value: &u64) -> bool {
 #[serde(rename_all = "camelCase")]
 pub struct ScheduleRule {
     pub id: String,
+    /// Optional user-facing name. Display-only: evaluation never reads it.
+    /// Kept on this struct so a daemon merge/broadcast round-trip cannot
+    /// silently strip the extension's duplicate-rule label. Bounded and
+    /// control-character-collapsed by [`sanitize_schedule_label`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     /// Days the window STARTS on: 0–6, Sunday = 0 (matches JS `Date.getDay()`).
     pub days: Vec<u8>,
     /// Minutes since local midnight, 0..=1439.
@@ -903,6 +927,10 @@ pub fn sanitize_lock_state(raw: &Value, now: i64, max_lock_ms: i64) -> LockState
         .map(|arr| {
             arr.iter()
                 .filter_map(|v| serde_json::from_value::<ScheduleRule>(v.clone()).ok())
+                .map(|mut r| {
+                    r.label = sanitize_schedule_label(r.label);
+                    r
+                })
                 .filter(|r| validate_schedule_rule(r).is_none())
                 .collect()
         })
@@ -916,6 +944,10 @@ pub fn sanitize_lock_state(raw: &Value, now: i64, max_lock_ms: i64) -> LockState
                 .map(|value| {
                     serde_json::from_value::<CategoryScheduleRule>(value.clone())
                         .ok()
+                        .map(|mut rule| {
+                            rule.schedule.label = sanitize_schedule_label(rule.schedule.label);
+                            rule
+                        })
                         .filter(|rule| validate_category_schedule_rule(rule).is_none())
                 })
                 .collect::<Option<Vec<_>>>()
@@ -1075,6 +1107,7 @@ mod tests {
     fn rule(id: &str, days: &[u8], start: u16, end: u16) -> ScheduleRule {
         ScheduleRule {
             id: id.into(),
+            label: None,
             days: days.to_vec(),
             start_minutes: start,
             end_minutes: end,
@@ -1420,6 +1453,65 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(parsed.schedules_updated_at, 0);
+    }
+
+    #[test]
+    fn rule_labels_survive_sanitize_and_round_trip_without_affecting_evaluation() {
+        let oversized = format!("Deep\nwork {}", "x".repeat(200));
+        let state = sanitize_lock_state(
+            &json!({
+                "schedules": [
+                    {
+                        "id": "labelled",
+                        "label": oversized,
+                        "days": [1, 2, 3, 4, 5],
+                        "startMinutes": 540,
+                        "endMinutes": 1020
+                    },
+                    {
+                        "id": "blank-label",
+                        "label": "   ",
+                        "days": [1],
+                        "startMinutes": 600,
+                        "endMinutes": 660
+                    }
+                ],
+                "categorySchedules": [{
+                    "id": "scoped",
+                    "label": "  Reading\tblock ",
+                    "days": [2],
+                    "startMinutes": 720,
+                    "endMinutes": 780,
+                    "categories": ["video games"]
+                }]
+            }),
+            1_000_000,
+            2_592_000_000,
+        );
+        let expected = format!("Deep work {}", "x".repeat(70));
+        let labelled = &state.schedules[0];
+        assert_eq!(labelled.label.as_deref(), Some(expected.as_str()));
+        assert!(state.schedules[1].label.is_none());
+        assert_eq!(
+            state.category_schedules.as_ref().unwrap()[0]
+                .schedule
+                .label
+                .as_deref(),
+            Some("Reading block")
+        );
+
+        // Serialization keeps the name, and the window math ignores it.
+        let json = serde_json::to_value(&state).unwrap();
+        assert_eq!(json["schedules"][0]["label"], json!(expected));
+        assert!(json["schedules"][1].get("label").is_none());
+        let tz = FixedOffset::east_opt(-5 * 3600).unwrap();
+        assert!(state.schedules[0].label.is_some());
+        let status = derive_lock_status_in(
+            &schedules_state(vec![state.schedules[0].clone()]),
+            at(&tz, 6, 10, 0),
+            &tz,
+        );
+        assert!(status.reasons.contains(&LockReason::Schedule));
     }
 
     #[test]
