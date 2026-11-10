@@ -172,7 +172,7 @@ await test('a promotion write failure rejects, preserves the snapshot, and frees
 await test('fallback reward commands honor the opt-in reward config and daily cap', async () => {
   const category = 'social media and networking';
   const configured = await submitLocalAllowanceCommand({
-    ...command('configure', 20, {
+    ...command('configure', 30, {
       category,
       config: {
         ...CONFIG,
@@ -187,7 +187,7 @@ await test('fallback reward commands honor the opt-in reward config and daily ca
   });
   assert.equal(configured.ok, true);
   const first = await submitLocalAllowanceCommand(
-    command('reward', 21, { category, earnedMs: 60_000 }),
+    command('reward', 31, { category, earnedMs: 60_000 }),
   );
   assert.equal(first.ok, true);
   assert.equal(first.state.categories[category].ledger.earnedRewardMs, 60_000);
@@ -195,7 +195,7 @@ await test('fallback reward commands honor the opt-in reward config and daily ca
   assert.equal(first.state.categories[category].config.rewardWorkMs, 300_000);
   assert.equal(first.state.categories[category].config.rewardAwardMs, 60_000);
   const second = await submitLocalAllowanceCommand(
-    command('reward', 22, { category, earnedMs: 60_000 }),
+    command('reward', 32, { category, earnedMs: 60_000 }),
   );
   assert.equal(second.ok, true);
   assert.equal(
