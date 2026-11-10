@@ -229,22 +229,31 @@ impl Shared {
     }
 
     fn status_for_browser(&self, browser: CompanionBrowser) -> (CompanionStatus, u64, u64) {
+        // The configured duration is the honest "connected" answer too: the
+        // extension needs the same value it would see when grace starts.
+        let configured_grace_seconds = self.store.load_config().extension_loss_grace_seconds;
         loop {
             // Seqlock-style capture: a grace-track writer holds enforcer_state
             // while changing both the tracks and this revision. If it won the
             // race before our lock, retry; if it wins afterward, queue handoff
             // rejects this captured revision instead of reviving stale grace.
             let before = self.extension_loss_revision.load(Ordering::SeqCst);
-            let (grace_remaining_ms, sequence) = {
+            let (grace_remaining_ms, grace_seconds, sequence) = {
                 let state = self.enforcer_state.lock().unwrap();
                 let remaining = state.grace_remaining_ms(browser, self.mono_ms());
+                // An active track owns the duration actually used for its
+                // close decision; a connected browser reports the current
+                // setting so the next warning already agrees.
+                let seconds = state
+                    .grace_seconds(browser)
+                    .unwrap_or(configured_grace_seconds);
                 // Allocation shares the capture lock: two observations cannot
                 // acquire sequence and monotonic time in opposite orders.
                 let sequence = self
                     .next_extension_loss_sequence
                     .fetch_add(1, Ordering::SeqCst)
                     + 1;
-                (remaining, sequence)
+                (remaining, seconds, sequence)
             };
             let after = self.extension_loss_revision.load(Ordering::SeqCst);
             if before != after {
@@ -257,7 +266,7 @@ impl Shared {
                 } else {
                     ExtensionLossState::Connected
                 },
-                grace_seconds: enforcer::WATCHDOG_GRACE_MS / 1000,
+                grace_seconds,
                 grace_remaining_ms,
             });
             return (status, after, sequence);
@@ -1738,14 +1747,14 @@ fn build_snapshot(shared: &Shared, now_wall_ms: i64, now_mono_ms: u64) -> Status
             .grace_browsers()
             .into_iter()
             .filter_map(|kind| {
-                state
-                    .grace_remaining_ms(kind, now_mono_ms)
-                    .map(|grace_remaining_ms| BrowserGraceInfo {
-                        kind,
-                        observed_at_ms: now_wall_ms,
-                        grace_seconds: enforcer::WATCHDOG_GRACE_MS / 1000,
-                        grace_remaining_ms,
-                    })
+                let grace_remaining_ms = state.grace_remaining_ms(kind, now_mono_ms)?;
+                let grace_seconds = state.grace_seconds(kind)?;
+                Some(BrowserGraceInfo {
+                    kind,
+                    observed_at_ms: now_wall_ms,
+                    grace_seconds,
+                    grace_remaining_ms,
+                })
             })
             .collect()
     };
@@ -1784,21 +1793,31 @@ fn write_status_snapshot(shared: &Shared, now_wall_ms: i64, now_mono_ms: u64) {
 
 /// Publish transitions immediately (including recovery/lock end), then refresh
 /// active grace every ten seconds without producing healthy-status traffic.
+/// The tracked signature includes each browser's effective duration, so a
+/// settings change mid-grace publishes immediately instead of waiting for the
+/// periodic refresh.
 fn sync_extension_loss_statuses(
     shared: &Shared,
-    last_grace_browsers: &mut Vec<CompanionBrowser>,
+    last_grace_tracks: &mut Vec<(CompanionBrowser, u64)>,
     last_push_mono_ms: &mut u64,
     now_mono_ms: u64,
 ) {
-    let current = shared.enforcer_state.lock().unwrap().grace_browsers();
-    let changed = current != *last_grace_browsers;
+    let current = {
+        let state = shared.enforcer_state.lock().unwrap();
+        state
+            .grace_browsers()
+            .into_iter()
+            .map(|kind| (kind, state.grace_seconds(kind).unwrap_or(0)))
+            .collect::<Vec<_>>()
+    };
+    let changed = current != *last_grace_tracks;
     let refresh_due = !current.is_empty()
         && now_mono_ms.saturating_sub(*last_push_mono_ms) >= GRACE_STATUS_REFRESH_MS;
     if !changed && !refresh_due {
         return;
     }
     shared.broadcast_extension_loss();
-    *last_grace_browsers = current;
+    *last_grace_tracks = current;
     *last_push_mono_ms = now_mono_ms;
 }
 
@@ -2205,7 +2224,7 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
         let notifier = opts.notifier;
         std::thread::spawn(move || {
             let mut source = SysinfoSource::new();
-            let mut last_grace_browsers: Vec<CompanionBrowser> = Vec::new();
+            let mut last_grace_tracks: Vec<(CompanionBrowser, u64)> = Vec::new();
             let mut last_grace_push_mono_ms = 0;
             let own_pid = std::process::id();
             // (wall, mono) of the last tick that ran LOCKED — the baseline
@@ -2265,7 +2284,7 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
                     write_status_snapshot(&shared, now_wall, now_mono);
                     sync_extension_loss_statuses(
                         &shared,
-                        &mut last_grace_browsers,
+                        &mut last_grace_tracks,
                         &mut last_grace_push_mono_ms,
                         now_mono,
                     );
@@ -2360,7 +2379,7 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
                 write_status_snapshot(&shared, now_wall, now_mono);
                 sync_extension_loss_statuses(
                     &shared,
-                    &mut last_grace_browsers,
+                    &mut last_grace_tracks,
                     &mut last_grace_push_mono_ms,
                     now_mono,
                 );
@@ -3065,6 +3084,10 @@ mod tests {
     }
 
     fn state_with_chrome_grace(since_mono_ms: u64) -> EnforcerState {
+        state_with_chrome_grace_seconds(since_mono_ms, 60)
+    }
+
+    fn state_with_chrome_grace_seconds(since_mono_ms: u64, grace_seconds: u64) -> EnforcerState {
         let lock = LockState {
             frozen_until: Some(2_000_000),
             ..LockState::default()
@@ -3077,6 +3100,10 @@ mod tests {
             exe: None,
             package_family: None,
         }];
+        let config = CompanionConfig {
+            extension_loss_grace_seconds: grace_seconds,
+            ..CompanionConfig::default()
+        };
         let (state, _) = enforcer::tick(
             &EnforcerState::default(),
             &TickInputs {
@@ -3085,7 +3112,7 @@ mod tests {
                 lock_status: &lock_status,
                 processes: &processes,
                 connections: &[],
-                config: &crate::store::CompanionConfig::default(),
+                config: &config,
                 own_pid: 999,
             },
         );
@@ -4470,9 +4497,21 @@ mod tests {
         shared.set_enforcer_state(state_with_chrome_grace(shared.mono_ms()));
         sync_extension_loss_statuses(&shared, &mut last_browsers, &mut last_push, 2_000);
         assert_eq!(frames_in(&chrome).len(), 1, "grace begins immediately");
-        sync_extension_loss_statuses(&shared, &mut last_browsers, &mut last_push, 11_999);
-        assert!(frames_in(&chrome).is_empty(), "no per-tick status churn");
+
+        // The duration changes while the same browser stays in grace: publish
+        // immediately so the extension's countdown uses the new authority.
+        shared.set_enforcer_state(state_with_chrome_grace_seconds(2_000, 120));
+        sync_extension_loss_statuses(&shared, &mut last_browsers, &mut last_push, 2_001);
+        let duration_change = frames_in(&chrome);
+        assert_eq!(duration_change.len(), 1, "duration change publishes");
+        assert_eq!(
+            duration_change[0]["status"]["extensionLoss"]["graceSeconds"],
+            120
+        );
+
         sync_extension_loss_statuses(&shared, &mut last_browsers, &mut last_push, 12_000);
+        assert!(frames_in(&chrome).is_empty(), "no per-tick status churn");
+        sync_extension_loss_statuses(&shared, &mut last_browsers, &mut last_push, 12_001);
         assert_eq!(frames_in(&chrome).len(), 1, "ten-second grace refresh");
 
         shared.set_enforcer_state(EnforcerState::default());
@@ -4480,6 +4519,44 @@ mod tests {
         let recovery = frames_in(&chrome);
         assert_eq!(recovery.len(), 1, "recovered, or lock ended");
         assert_eq!(recovery[0]["status"]["extensionLoss"]["state"], "connected");
+    }
+
+    #[test]
+    fn status_and_snapshot_report_the_configured_extension_loss_grace() {
+        let (_dir, shared) = test_shared();
+        let _relay = add_conn(&shared, 1, true);
+        assert!(mark_authed(&shared, 1, CompanionBrowser::Chrome, "0.5.0"));
+
+        // A persisted 120s setting reaches both the extension-facing status
+        // and the desktop snapshot, not the old hard-coded 60s.
+        shared
+            .store
+            .save_config(&CompanionConfig {
+                extension_loss_grace_seconds: 120,
+                ..CompanionConfig::default()
+            })
+            .unwrap();
+        shared.set_enforcer_state(state_with_chrome_grace_seconds(0, 120));
+
+        let (status, _, _) = shared.status_for_browser(CompanionBrowser::Chrome);
+        let loss = status.extension_loss.expect("authenticated observation");
+        assert_eq!(loss.state, ExtensionLossState::Grace);
+        assert_eq!(loss.grace_seconds, 120);
+        assert!(loss.grace_remaining_ms.is_some());
+
+        let snapshot = build_snapshot(&shared, shared.wall_ms(), 30_000);
+        assert_eq!(snapshot.browser_grace.len(), 1);
+        assert_eq!(snapshot.browser_grace[0].grace_seconds, 120);
+        assert_eq!(snapshot.browser_grace[0].grace_remaining_ms, 90_000);
+
+        // With no active track the status is connected but still advertises
+        // the configured duration the next grace will use.
+        shared.set_enforcer_state(EnforcerState::default());
+        let (connected, _, _) = shared.status_for_browser(CompanionBrowser::Chrome);
+        let connected = connected.extension_loss.expect("authenticated observation");
+        assert_eq!(connected.state, ExtensionLossState::Connected);
+        assert_eq!(connected.grace_seconds, 120);
+        assert_eq!(connected.grace_remaining_ms, None);
     }
 
     #[test]

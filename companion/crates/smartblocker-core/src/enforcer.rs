@@ -30,10 +30,14 @@ use crate::store::CompanionConfig;
 /// Heartbeat gap after which a connected browser counts as not responding
 /// (~2 missed 20s heartbeats, with slack for SW wake latency).
 pub const HEARTBEAT_GAP_MS: u64 = 45_000;
-/// Warning period between "extension not responding" and closing the browser.
-/// Must comfortably exceed the extension's 30s keepalive-alarm cadence, or a
-/// reaped-but-recovering service worker would get its browser shot.
-pub const WATCHDOG_GRACE_MS: u64 = 60_000;
+/// Historical default warning period between "extension not responding" and
+/// closing the browser. The EFFECTIVE duration comes from
+/// `CompanionConfig::extension_loss_grace_seconds` (60s by default,
+/// 15–300s); this constant keeps the default readable for tests and callers
+/// that only have `CompanionConfig::default()`. Must comfortably exceed the
+/// extension's 30s keepalive-alarm cadence, or a reaped-but-recovering
+/// service worker would get its browser shot.
+pub const WATCHDOG_GRACE_MS: u64 = crate::store::DEFAULT_EXTENSION_LOSS_GRACE_SECONDS * 1_000;
 /// Notice period before an incompatible browser is closed.
 pub const INCOMPATIBLE_GRACE_MS: u64 = 10_000;
 
@@ -90,6 +94,10 @@ pub enum Action {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SuspectTrack {
     since_mono_ms: u64,
+    /// Effective grace captured from config on the latest tick. Monotonic
+    /// elapsed time is always measured from `since_mono_ms`; a settings
+    /// change refreshes only the duration, never the start.
+    grace_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -112,8 +120,16 @@ impl EnforcerState {
     /// zero means the deadline has arrived but the process may still exist.
     pub fn grace_remaining_ms(&self, kind: CompanionBrowser, now_mono_ms: u64) -> Option<u64> {
         self.suspects.get(&kind).map(|track| {
-            WATCHDOG_GRACE_MS.saturating_sub(now_mono_ms.saturating_sub(track.since_mono_ms))
+            track
+                .grace_ms
+                .saturating_sub(now_mono_ms.saturating_sub(track.since_mono_ms))
         })
+    }
+
+    /// The effective grace duration of an active track, in whole seconds.
+    /// `None` = this browser has no active extension-loss grace.
+    pub fn grace_seconds(&self, kind: CompanionBrowser) -> Option<u64> {
+        self.suspects.get(&kind).map(|track| track.grace_ms / 1_000)
     }
 
     /// Whether every browser's exact grace-start track is unchanged. Passage
@@ -261,6 +277,11 @@ pub fn tick(state: &EnforcerState, inp: &TickInputs) -> (EnforcerState, Vec<Acti
     }
 
     // -- watchdog: supported browsers must have a responsive extension ------
+    // The grace is a persisted user setting, not a build constant. Reading it
+    // once per tick keeps every close decision on one duration; refreshing the
+    // track's duration (never its monotonic start) means a settings change
+    // applies on the next tick without restarting the countdown.
+    let grace_ms = inp.config.extension_loss_grace_ms();
     for (kind, procs) in &by_browser {
         let responsive = inp.connections.iter().any(|c| {
             c.browser == *kind
@@ -280,11 +301,11 @@ pub fn tick(state: &EnforcerState, inp: &TickInputs) -> (EnforcerState, Vec<Acti
                 body: format!(
                     "The SmartBlocker extension is not responding in {}. Re-enable it or the browser will be closed in {}s.",
                     browser_label(*kind),
-                    WATCHDOG_GRACE_MS / 1000
+                    grace_ms / 1_000
                 ),
             });
         }
-        if inp.now_mono_ms.saturating_sub(since) >= WATCHDOG_GRACE_MS {
+        if inp.now_mono_ms.saturating_sub(since) >= grace_ms {
             for p in procs {
                 actions.push(Action::Kill {
                     pid: p.pid,
@@ -301,6 +322,7 @@ pub fn tick(state: &EnforcerState, inp: &TickInputs) -> (EnforcerState, Vec<Acti
             *kind,
             SuspectTrack {
                 since_mono_ms: since,
+                grace_ms,
             },
         );
     }
@@ -458,6 +480,13 @@ mod tests {
         CompanionConfig {
             app_blocklist: blocklist.iter().map(|s| s.to_string()).collect(),
             extra_incompatible_browsers: extra.iter().map(|s| s.to_string()).collect(),
+            ..CompanionConfig::default()
+        }
+    }
+
+    fn config_with_grace(seconds: u64) -> CompanionConfig {
+        CompanionConfig {
+            extension_loss_grace_seconds: seconds,
             ..CompanionConfig::default()
         }
     }
@@ -670,6 +699,128 @@ mod tests {
             s3.grace_remaining_ms(CompanionBrowser::Chrome, 120_000),
             Some(0)
         );
+    }
+
+    #[test]
+    fn configured_grace_shortens_the_close_boundary() {
+        let cfg = config_with_grace(15);
+        let status = forced_status();
+        let procs = [proc(10, "chrome")];
+
+        let (s1, a1) = tick_at(&EnforcerState::default(), 1_000, &status, &procs, &[], &cfg);
+        assert_eq!(notifies(&a1), 1);
+        assert!(kills(&a1).is_empty());
+        assert!(
+            a1.iter().any(|a| matches!(
+                a,
+                Action::Notify { body, .. } if body.contains("closed in 15s")
+            )),
+            "the warning quotes the configured grace, not the 60s default"
+        );
+        assert_eq!(
+            s1.grace_remaining_ms(CompanionBrowser::Chrome, 1_000),
+            Some(15_000)
+        );
+        assert_eq!(s1.grace_seconds(CompanionBrowser::Chrome), Some(15));
+
+        // One millisecond before the configured deadline: still only a warning.
+        let (s2, a2) = tick_at(&s1, 15_999, &status, &procs, &[], &cfg);
+        assert!(kills(&a2).is_empty());
+        assert_eq!(
+            s2.grace_remaining_ms(CompanionBrowser::Chrome, 15_999),
+            Some(1)
+        );
+
+        let (_s3, a3) = tick_at(&s2, 16_000, &status, &procs, &[], &cfg);
+        assert_eq!(kills(&a3), vec![(10, KillReason::Watchdog)]);
+    }
+
+    #[test]
+    fn configured_grace_extends_the_close_boundary() {
+        let cfg = config_with_grace(120);
+        let status = forced_status();
+        let procs = [proc(10, "firefox")];
+
+        let (s1, a1) = tick_at(&EnforcerState::default(), 1_000, &status, &procs, &[], &cfg);
+        assert_eq!(notifies(&a1), 1);
+        assert!(kills(&a1).is_empty());
+        assert_eq!(s1.grace_seconds(CompanionBrowser::Firefox), Some(120));
+
+        // Far past the old 60s default, still inside the configured grace.
+        let (s2, a2) = tick_at(&s1, 61_001, &status, &procs, &[], &cfg);
+        assert!(kills(&a2).is_empty());
+        assert_eq!(
+            s2.grace_remaining_ms(CompanionBrowser::Firefox, 61_001),
+            Some(59_999)
+        );
+
+        let (_s3, a3) = tick_at(&s2, 121_000, &status, &procs, &[], &cfg);
+        assert_eq!(kills(&a3), vec![(10, KillReason::Watchdog)]);
+    }
+
+    #[test]
+    fn grace_change_mid_track_keeps_the_monotonic_start_and_applies_the_new_duration() {
+        let short = config_with_grace(15);
+        let long = config_with_grace(120);
+        let status = forced_status();
+        let procs = [proc(10, "chrome")];
+
+        let (s1, _) = tick_at(
+            &EnforcerState::default(),
+            1_000,
+            &status,
+            &procs,
+            &[],
+            &short,
+        );
+        // The setting lengthens mid-grace; the original start is preserved.
+        let (s2, a2) = tick_at(&s1, 2_000, &status, &procs, &[], &long);
+        assert!(kills(&a2).is_empty());
+        assert_eq!(
+            s2.grace_remaining_ms(CompanionBrowser::Chrome, 2_000),
+            Some(119_000)
+        );
+        // Past the old 15s deadline but inside the new one: no close.
+        let (s3, a3) = tick_at(&s2, 16_000, &status, &procs, &[], &long);
+        assert!(kills(&a3).is_empty());
+        assert_eq!(
+            s3.grace_remaining_ms(CompanionBrowser::Chrome, 16_000),
+            Some(105_000)
+        );
+        // The new deadline is still measured from the original start.
+        let (_s4, a4) = tick_at(&s3, 121_000, &status, &procs, &[], &long);
+        assert_eq!(kills(&a4), vec![(10, KillReason::Watchdog)]);
+    }
+
+    #[test]
+    fn configured_grace_restarts_after_reconnect_then_disconnect() {
+        let cfg = config_with_grace(15);
+        let status = forced_status();
+        let procs = [proc(10, "chrome")];
+
+        let (suspect, _) = tick_at(&EnforcerState::default(), 1_000, &status, &procs, &[], &cfg);
+        assert_eq!(suspect.grace_seconds(CompanionBrowser::Chrome), Some(15));
+
+        // The extension returns: the track clears and the browser is healthy.
+        let healthy_conn = [ConnInfo {
+            browser: CompanionBrowser::Chrome,
+            last_heartbeat_mono_ms: 9_000,
+        }];
+        let (healthy, a2) = tick_at(&suspect, 10_000, &status, &procs, &healthy_conn, &cfg);
+        assert!(a2.is_empty());
+        assert!(healthy.suspects.is_empty());
+
+        // A fresh disconnect starts a full, independent countdown.
+        let (again, a3) = tick_at(&healthy, 20_000, &status, &procs, &[], &cfg);
+        assert_eq!(notifies(&a3), 1);
+        assert_eq!(
+            again.grace_remaining_ms(CompanionBrowser::Chrome, 20_000),
+            Some(15_000)
+        );
+        let (still_open, a4) = tick_at(&again, 34_999, &status, &procs, &[], &cfg);
+        assert!(kills(&a4).is_empty());
+        let (_s5, a5) = tick_at(&still_open, 35_000, &status, &procs, &[], &cfg);
+        assert_eq!(kills(&a5), vec![(10, KillReason::Watchdog)]);
     }
 
     #[test]

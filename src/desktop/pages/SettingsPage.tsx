@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Callout, SettingRow, SettingsGroup, SettingsSection } from '../../components/ui/settings';
+import { Switch } from '../../components/ui/switch';
 import { errorText, invoke, type LicenseInfo } from '../api';
 import { formatEndTime, formatTime, lockedUntilText } from '../format';
 import { DurationPicker, resolveMinutes, type DurationValue, type Preset } from '../components/DurationPicker';
@@ -15,6 +16,7 @@ export function SettingsPage() {
       <LockSection />
       <LicenseSection />
       <ConnectionSection />
+      <GraceSection />
       <AboutSection />
     </Page>
   );
@@ -281,7 +283,9 @@ function LicenseSection() {
 function ConnectionSection() {
   const { status, refresh } = useStatus();
   const [busy, setBusy] = useState(false);
+  const [autostartBusy, setAutostartBusy] = useState(false);
   const [msg, setMsg] = useState<Message>(null);
+  const [autostartMsg, setAutostartMsg] = useState<Message>(null);
 
   const repair = async () => {
     setBusy(true);
@@ -295,6 +299,25 @@ function ConnectionSection() {
       setMsg({ tone: 'error', text: errorText(e) });
     } finally {
       setBusy(false);
+      void refresh();
+    }
+  };
+
+  const setAutostart = async (enabled: boolean) => {
+    setAutostartBusy(true);
+    setAutostartMsg(null);
+    try {
+      const result = await invoke('set_autostart', { enabled });
+      setAutostartMsg({
+        tone: 'ok',
+        text: result
+          ? 'Start with Windows is on.'
+          : 'Start with Windows is off. Repair still turns it on for detected browsers.',
+      });
+    } catch (e) {
+      setAutostartMsg({ tone: 'error', text: errorText(e) });
+    } finally {
+      setAutostartBusy(false);
       void refresh();
     }
   };
@@ -313,6 +336,7 @@ function ConnectionSection() {
         />
         <SettingRow
           label="Start with Windows"
+          htmlFor="autostart-toggle"
           description={
             <span id="autostart-status">
               {status.testMode
@@ -322,9 +346,110 @@ function ConnectionSection() {
                   : 'Off — repairing a detected browser connection turns it on'}
             </span>
           }
+          control={
+            <Switch
+              id="autostart-toggle"
+              checked={!status.testMode && status.autostart}
+              disabled={status.testMode || autostartBusy}
+              aria-busy={autostartBusy}
+              aria-describedby="autostart-status"
+              onChange={(e) => void setAutostart(e.target.checked)}
+            />
+          }
         />
       </SettingsGroup>
-      <FormMessage message={msg} className="px-1" />
+      <FormMessage id="settings-repair-msg" message={msg} className="px-1" />
+      <FormMessage id="autostart-msg" message={autostartMsg} className="px-1" />
+    </SettingsSection>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Extension-loss grace
+// ---------------------------------------------------------------------------
+
+function GraceSection() {
+  const { status, refresh } = useStatus();
+  const [seconds, setSeconds] = useState(String(status.extensionLossGraceSeconds));
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<Message>(null);
+  const min = status.extensionLossGraceMinSeconds;
+  const max = status.extensionLossGraceMaxSeconds;
+
+  // Follow daemon/store refreshes (the field is the same value this page
+  // saves), without clobbering an in-progress edit.
+  useEffect(() => {
+    setSeconds(String(status.extensionLossGraceSeconds));
+  }, [status.extensionLossGraceSeconds]);
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const parsed = Number(seconds);
+    if (seconds.trim() === '' || !Number.isSafeInteger(parsed)) {
+      setMsg({ tone: 'error', text: 'Use a whole number of seconds.' });
+      return;
+    }
+    setBusy(true);
+    setMsg(null);
+    try {
+      const effective = await invoke('set_extension_loss_grace_seconds', { seconds: parsed });
+      setSeconds(String(effective));
+      setMsg({
+        tone: 'ok',
+        text:
+          parsed === effective
+            ? `Saved — the extension-loss grace is ${effective} seconds.`
+            : `Saved — ${effective} seconds (allowed ${min}–${max}).`,
+      });
+    } catch (err) {
+      setMsg({ tone: 'error', text: errorText(err) });
+    } finally {
+      setBusy(false);
+      void refresh();
+    }
+  };
+
+  return (
+    <SettingsSection
+      title="Enforcement timing"
+      description="How the companion treats a browser whose SmartBlocker extension stops responding during a lock."
+    >
+      <SettingsGroup>
+        <SettingRow
+          label="Extension-loss grace"
+          htmlFor="extension-grace-seconds"
+          description={
+            <span id="extension-grace-status" className="tabular-nums">
+              {status.extensionLossGraceSeconds} seconds between the warning and closing the browser. Allowed{' '}
+              {min}–{max} whole seconds; the default is 60.
+            </span>
+          }
+          control={
+            <form className="flex items-center gap-2" noValidate onSubmit={save}>
+              <Input
+                id="extension-grace-seconds"
+                type="number"
+                min={min}
+                max={max}
+                step={1}
+                inputMode="numeric"
+                value={seconds}
+                disabled={busy}
+                aria-describedby="extension-grace-status"
+                onChange={(e) => {
+                  setSeconds(e.target.value);
+                  if (msg?.tone === 'error') setMsg(null);
+                }}
+                className="w-20 tabular-nums"
+              />
+              <Button id="extension-grace-save" type="submit" variant="secondary" size="sm" disabled={busy}>
+                {busy ? 'Saving…' : 'Save'}
+              </Button>
+            </form>
+          }
+        />
+      </SettingsGroup>
+      <FormMessage id="extension-grace-msg" message={msg} className="px-1" />
     </SettingsSection>
   );
 }

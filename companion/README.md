@@ -11,8 +11,9 @@ password lock, Frozen Turkey, or an active schedule window — it:
   wiped/reinstalled extension, so a storage wipe heals back to the lock
   instead of freeing you,
 - watches supported browsers (Chrome/Edge/Firefox): running without a
-  responsive SmartBlocker extension → notification → 60s grace → browser
-  closed. Browsers are identified **behaviorally**, not by filename:
+  responsive SmartBlocker extension → notification → grace (default 60s,
+  tunable 15–300s in desktop Settings) → browser closed. Browsers are
+  identified **behaviorally**, not by filename:
   `procwatch.rs classify_process` reads each process's command line for
   renderer structure (`--type=renderer` on Chromium, `-contentproc` on
   Firefox) — renaming `brave.exe` to `chrome.exe` no longer inherits trust,
@@ -228,6 +229,10 @@ tray icon art ever changes, regenerate via `cargo tauri icon <1024px png>`.
 1. Launch the app → **Install / Repair** → verify HKCU
    `Software\{Google\Chrome,Microsoft\Edge,Mozilla}\NativeMessagingHosts\dev.davidxu.smartblocker`
    exist and point at the manifest JSONs next to the exe; autostart enabled.
+   Then Settings → **Start with Windows** off/on removes and restores the HKCU
+   `...\CurrentVersion\Run` value named `SmartBlocker Companion`; Repair turns
+   it back on. Set **Extension-loss grace** to 15, relaunch the app, and confirm
+   the value survives in `config.json`.
 2. Load `dist/chrome` unpacked in Chrome AND Edge (same stable ID
    `dhbhbhhcjkfdkfbloeaeedndfjfadajh`), the signed build in Firefox
    (`smartblocker-poc@davidxu.dev`). Options page of each shows
@@ -235,7 +240,8 @@ tray icon art ever changes, regenerate via `cargo tauri icon <1024px png>`.
 3. Add `notepad` to Blocked apps; start a 2-minute Frozen Turkey from the
    extension popup; open Notepad → closed within ~3s, toast shown.
 4. During the same lock: disable the extension in Chrome → toast warning →
-   Chrome closed after the 60s grace.
+   Chrome closed after the configured extension-loss grace (60s by default;
+   set it to 15 and 120 once each to confirm the boundary moves).
 5. During the same lock: open Brave (or any incompatible browser) → closed
    after the 10s notice.
 6. Tray → Quit while locked → refused with a toast; after expiry → quits.

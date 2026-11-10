@@ -362,6 +362,9 @@ function baseState(now: number): MockState {
       license: { pro: false, state: 'none', expiresAtMs: null, keyHint: null },
       policyProtected: false,
       autostart: true,
+      extensionLossGraceSeconds: 60,
+      extensionLossGraceMinSeconds: 15,
+      extensionLossGraceMaxSeconds: 300,
     },
     events: seedEvents(now),
     running: RUNNING_APPS.map((a) => ({ ...a })),
@@ -402,6 +405,9 @@ const SCENARIOS: Record<string, Patch> = {
   },
   'autostart-off': (s) => {
     s.status.autostart = false;
+  },
+  'grace-120': (s) => {
+    s.status.extensionLossGraceSeconds = 120;
   },
   'browsers-missing': (s) => {
     s.status.browsers = [];
@@ -708,6 +714,26 @@ export async function mockInvoke(cmd: string, args: Record<string, unknown> = {}
   switch (cmd) {
     case 'get_status':
       return clone(s.status);
+
+    case 'get_autostart':
+      return s.status.testMode ? false : s.status.autostart;
+
+    case 'set_autostart': {
+      // Test mode leaves the real startup setting untouched.
+      if (s.status.testMode) return false;
+      s.status.autostart = Boolean(args.enabled);
+      return s.status.autostart;
+    }
+
+    case 'set_extension_loss_grace_seconds': {
+      const raw = Number(args.seconds);
+      const min = s.status.extensionLossGraceMinSeconds;
+      const max = s.status.extensionLossGraceMaxSeconds;
+      if (!Number.isSafeInteger(raw)) throw 'Use a whole number of seconds.';
+      const effective = Math.min(max, Math.max(min, raw));
+      s.status.extensionLossGraceSeconds = effective;
+      return effective;
+    }
 
     case 'start_focus_session': {
       requireDaemon(s);

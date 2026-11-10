@@ -48,7 +48,10 @@ use smartblocker_core::protocol::{
     CompanionBrowser, CompanionMessage, UsageAction, PROTOCOL_VERSION,
 };
 use smartblocker_core::snapshot::{self, BrowserGraceInfo, BrowserInfo};
-use smartblocker_core::store::Store;
+use smartblocker_core::store::{
+    clamp_extension_loss_grace_seconds, Store, MAX_EXTENSION_LOSS_GRACE_SECONDS,
+    MIN_EXTENSION_LOSS_GRACE_SECONDS,
+};
 use smartblocker_core::usage::{self, UsageExport, UsageSummary};
 
 const NOT_RUNNING: &str = "The companion isn't running. Start it, then try again.";
@@ -257,6 +260,10 @@ struct DesktopStatus {
     license: LicenseInfo,
     policy_protected: bool,
     autostart: bool,
+    /// Effective whole-second extension-loss grace from `config.json`.
+    extension_loss_grace_seconds: u64,
+    extension_loss_grace_min_seconds: u64,
+    extension_loss_grace_max_seconds: u64,
 }
 
 fn lock_info(state: &LockState, now: i64) -> LockInfo {
@@ -398,7 +405,66 @@ fn get_status(app: AppHandle, ctx: State<'_, AppCtx>) -> Result<DesktopStatus, S
         app_targets: config.app_targets,
         app_targets_version: config.app_targets_version,
         autostart: !ctx.test_mode && app.autolaunch().is_enabled().unwrap_or(false),
+        extension_loss_grace_seconds: config.extension_loss_grace_seconds,
+        extension_loss_grace_min_seconds: MIN_EXTENSION_LOSS_GRACE_SECONDS,
+        extension_loss_grace_max_seconds: MAX_EXTENSION_LOSS_GRACE_SECONDS,
     })
+}
+
+/// Read the real startup registration. Test mode never inspects the host
+/// registry; the UI keys its explicit "Unchanged" copy off `testMode`.
+#[tauri::command(async)]
+fn get_autostart(app: AppHandle, ctx: State<'_, AppCtx>) -> Result<bool, String> {
+    if ctx.test_mode {
+        return Ok(false);
+    }
+    app.autolaunch()
+        .is_enabled()
+        .map_err(|e| format!("Couldn't read the Start with Windows setting: {e}"))
+}
+
+/// Explicit user intent for startup. This is the only control that turns the
+/// setting OFF; Install/Repair intentionally keeps its historical behavior of
+/// enabling startup for detected browsers. Returns the observed result.
+#[tauri::command(async)]
+fn set_autostart(app: AppHandle, ctx: State<'_, AppCtx>, enabled: bool) -> Result<bool, String> {
+    if ctx.test_mode {
+        // No-op: test mode leaves the host registry untouched.
+        return Ok(false);
+    }
+    let autolaunch = app.autolaunch();
+    let changed = if enabled {
+        autolaunch.enable()
+    } else {
+        autolaunch.disable()
+    };
+    changed.map_err(|e| {
+        format!(
+            "Couldn't turn Start with Windows {}: {e}",
+            if enabled { "on" } else { "off" }
+        )
+    })?;
+    autolaunch
+        .is_enabled()
+        .map_err(|e| format!("Couldn't confirm the Start with Windows setting: {e}"))
+}
+
+/// Persist the whole-second extension-loss grace. The store clamps on load and
+/// save; returning the effective value lets the UI show what was accepted.
+/// `i64` (rather than `u64`) lets a direct negative call clamp to the floor
+/// instead of failing argument deserialization.
+#[tauri::command(async)]
+fn set_extension_loss_grace_seconds(ctx: State<'_, AppCtx>, seconds: i64) -> Result<u64, String> {
+    let store = ctx.store();
+    let mut config = store.load_config();
+    let effective = clamp_extension_loss_grace_seconds(seconds.max(0) as u64);
+    if config.extension_loss_grace_seconds != effective {
+        config.extension_loss_grace_seconds = effective;
+        store
+            .save_config(&config)
+            .map_err(|e| format!("Couldn't save the extension-loss grace: {e}"))?;
+    }
+    Ok(effective)
 }
 
 fn begin_focus_session(ctx: &AppCtx, minutes: u64) -> Result<PendingSession, String> {
@@ -692,6 +758,9 @@ fn main() {
         .manage(AppCtx::resolve())
         .invoke_handler(tauri::generate_handler![
             get_status,
+            get_autostart,
+            set_autostart,
+            set_extension_loss_grace_seconds,
             start_focus_session,
             undo_focus_session,
             start_timer_lock,

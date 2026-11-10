@@ -31,10 +31,20 @@ records what is specific to the desktop surface. Learning note:
 | **Browsers** | Chrome/Edge/Firefox protected or not, and how to fix it ("Repair browser connection"). |
 | **Activity** | Day-grouped sentences from `events.log`; unknown kinds sit behind "Show technical events". |
 | **Usage** | Local foreground-app active time: period totals, Top apps with an aggregate "Other", daily bars, export, and clear. Separate from Activity (what the companion did) — this is what you did. |
-| **Settings** | Lock settings for a time, Pro license, browser connection, Start with Windows (read-only state), About. |
+| **Settings** | Lock settings for a time, Pro license, browser connection (Repair + Start with Windows toggle), extension-loss grace (15–300s, default 60), About. |
 
 The amber lock line shows on every page except Home, whose hero already states
 the lock.
+
+**Start with Windows** is an explicit switch (`#autostart-toggle`) backed by the
+Tauri autostart plugin; `#autostart-status` still reports the effective state.
+Install/Repair keeps its documented side effect of enabling startup for detected
+browsers, so Repair can turn the switch back on. In test mode the switch is
+disabled and reads "Unchanged" because the host registry is never inspected or
+written. **Extension-loss grace** is a whole-second number (default 60, allowed
+15–300) persisted in `config.json`; the Rust command clamps and returns the
+effective value, and the UI reports any clamping. Test mode still persists the
+scratch-store value.
 
 ## Focus session
 

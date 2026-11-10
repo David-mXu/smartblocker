@@ -22,8 +22,65 @@ use std::path::{Path, PathBuf};
 /// lock state). Empty = unset.
 pub const DATA_DIR_ENV: &str = "SMARTBLOCKER_DATA_DIR";
 
+/// Default extension-loss grace: the historical hard-coded 60 seconds.
+pub const DEFAULT_EXTENSION_LOSS_GRACE_SECONDS: u64 = 60;
+/// Floor for the user-facing grace. The enforcer only starts a suspect track
+/// after [`crate::enforcer::HEARTBEAT_GAP_MS`] (45s) without a heartbeat, so
+/// this is 60s from the last heartbeat — enough for a reaped service worker
+/// to be revived by its 30s keepalive alarm and still reconnect. Anything
+/// shorter makes one slow enforcement tick look like a dead extension.
+pub const MIN_EXTENSION_LOSS_GRACE_SECONDS: u64 = 15;
+/// Ceiling for the user-facing grace. Five minutes is already a long
+/// extensionless browsing window during a lock; beyond it the "hard"
+/// enforcement promise gets hard to recognize.
+pub const MAX_EXTENSION_LOSS_GRACE_SECONDS: u64 = 300;
+
+/// Whole seconds only, clamped into the supported range. The store never
+/// writes an out-of-range value (it sanitizes on save) and clamps a hand-edited
+/// value on load, so the UI and every enforcement path see the same effective
+/// duration.
+pub fn clamp_extension_loss_grace_seconds(seconds: u64) -> u64 {
+    seconds.clamp(
+        MIN_EXTENSION_LOSS_GRACE_SECONDS,
+        MAX_EXTENSION_LOSS_GRACE_SECONDS,
+    )
+}
+
+fn default_extension_loss_grace_seconds() -> u64 {
+    DEFAULT_EXTENSION_LOSS_GRACE_SECONDS
+}
+
+/// A hand-edited config must not take the whole file down over one scalar.
+/// Accept integers, numeric floats (rounded), and decimal strings; anything
+/// unrecognizable falls back to the default, then the normal clamp applies.
+fn deserialize_extension_loss_grace_seconds<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let seconds = match raw {
+        Some(serde_json::Value::Number(number)) => number
+            .as_u64()
+            .or_else(|| {
+                number
+                    .as_i64()
+                    .map(|value| if value < 0 { 0 } else { value as u64 })
+            })
+            .or_else(|| {
+                number
+                    .as_f64()
+                    .filter(|value| value.is_finite())
+                    .map(|value| value.round().max(0.0) as u64)
+            }),
+        Some(serde_json::Value::String(value)) => value.trim().parse::<u64>().ok(),
+        _ => None,
+    }
+    .unwrap_or(DEFAULT_EXTENSION_LOSS_GRACE_SECONDS);
+    Ok(clamp_extension_loss_grace_seconds(seconds))
+}
+
 /// Daemon-side configuration (`config.json`), user/e2e-editable.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CompanionConfig {
     /// Legacy list: case-insensitive substrings matched against process exe
@@ -64,6 +121,31 @@ pub struct CompanionConfig {
     /// are only adopted while UNLOCKED — while locked, the pairing set is as
     /// frozen as every other setting. Bounded: oldest evicted past the cap.
     pub pairing_tokens: Vec<String>,
+    /// Whole seconds the watchdog waits after an extension-loss notification
+    /// before closing a supported browser. Persisted so a restart keeps the
+    /// user's intent; sanitized into 15–300 on every load/save.
+    #[serde(
+        default = "default_extension_loss_grace_seconds",
+        deserialize_with = "deserialize_extension_loss_grace_seconds"
+    )]
+    pub extension_loss_grace_seconds: u64,
+}
+
+impl Default for CompanionConfig {
+    fn default() -> Self {
+        Self {
+            app_blocklist: Vec::new(),
+            app_blocklist_updated_at: 0,
+            app_targets_version: 0,
+            app_targets: Vec::new(),
+            policy_enforce: false,
+            extension_update_url: None,
+            extra_incompatible_browsers: Vec::new(),
+            license_key: None,
+            pairing_tokens: Vec::new(),
+            extension_loss_grace_seconds: DEFAULT_EXTENSION_LOSS_GRACE_SECONDS,
+        }
+    }
 }
 
 /// Cap on remembered pairing tokens — one per browser profile is the honest
@@ -72,26 +154,38 @@ pub struct CompanionConfig {
 pub const MAX_PAIRING_TOKENS: usize = 32;
 
 impl CompanionConfig {
-    /// Normalize both app lists in place. Malformed/newer-version targets are
-    /// dropped rather than guessed at; legacy entries are trimmed, deduped
-    /// case-insensitively, and bounded. Returns whether anything changed.
+    /// Normalize both app lists and clamp the extension-loss grace in place.
+    /// Malformed/newer-version targets are dropped rather than guessed at;
+    /// legacy entries are trimmed, deduped case-insensitively, and bounded.
+    /// Returns whether anything changed.
     pub fn sanitize(&mut self) -> bool {
         let legacy_before = self.app_blocklist.clone();
         let targets_before = self.app_targets.clone();
         let version_before = self.app_targets_version;
+        let grace_before = self.extension_loss_grace_seconds;
 
         self.app_blocklist = sanitize_legacy_entries(std::mem::take(&mut self.app_blocklist));
         self.app_targets = sanitize_targets(std::mem::take(&mut self.app_targets));
         self.app_targets_version = version_for(&self.app_targets);
+        self.extension_loss_grace_seconds =
+            clamp_extension_loss_grace_seconds(self.extension_loss_grace_seconds);
 
         legacy_before != self.app_blocklist
             || targets_before != self.app_targets
             || version_before != self.app_targets_version
+            || grace_before != self.extension_loss_grace_seconds
     }
 
     pub fn sanitized(mut self) -> Self {
         self.sanitize();
         self
+    }
+
+    /// The effective enforcer grace in milliseconds. Callers must use this
+    /// rather than the raw field so a hand-edited out-of-range value cannot
+    /// shorten or extend enforcement past the supported bounds.
+    pub fn extension_loss_grace_ms(&self) -> u64 {
+        clamp_extension_loss_grace_seconds(self.extension_loss_grace_seconds) * 1_000
     }
 }
 
@@ -361,6 +455,113 @@ mod tests {
         assert_eq!(loaded.app_targets_version, 0);
         assert!(!loaded.policy_enforce);
         assert!(loaded.extra_incompatible_browsers.is_empty());
+        assert_eq!(
+            loaded.extension_loss_grace_seconds, DEFAULT_EXTENSION_LOSS_GRACE_SECONDS,
+            "an old config with no grace field keeps the 60s default"
+        );
+    }
+
+    #[test]
+    fn extension_loss_grace_defaults_bounds_and_persists() {
+        assert_eq!(CompanionConfig::default().extension_loss_grace_seconds, 60);
+
+        let (dir, store) = temp_store();
+        let config = CompanionConfig {
+            extension_loss_grace_seconds: 120,
+            ..CompanionConfig::default()
+        };
+        store.save_config(&config).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.path().join(CONFIG_FILE)).unwrap()).unwrap();
+        assert_eq!(raw["extensionLossGraceSeconds"], 120);
+        assert_eq!(store.load_config().extension_loss_grace_seconds, 120);
+
+        // Hand-edited values are clamped on read, never persisted as-is.
+        for (raw_value, expected) in [(serde_json::json!(1), 15), (serde_json::json!(15), 15)] {
+            fs::write(
+                dir.path().join(CONFIG_FILE),
+                serde_json::to_vec(&serde_json::json!({
+                    "extensionLossGraceSeconds": raw_value
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(store.load_config().extension_loss_grace_seconds, expected);
+        }
+        for (raw_value, expected) in [
+            (serde_json::json!(300), 300),
+            (serde_json::json!(9999), 300),
+        ] {
+            fs::write(
+                dir.path().join(CONFIG_FILE),
+                serde_json::to_vec(&serde_json::json!({
+                    "extensionLossGraceSeconds": raw_value
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(store.load_config().extension_loss_grace_seconds, expected);
+        }
+
+        // Saving also clamps: the file never carries an unsupported value.
+        let too_small = CompanionConfig {
+            extension_loss_grace_seconds: 0,
+            ..CompanionConfig::default()
+        };
+        store.save_config(&too_small).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.path().join(CONFIG_FILE)).unwrap()).unwrap();
+        assert_eq!(
+            raw["extensionLossGraceSeconds"],
+            MIN_EXTENSION_LOSS_GRACE_SECONDS
+        );
+        assert_eq!(
+            store.load_config().extension_loss_grace_seconds,
+            MIN_EXTENSION_LOSS_GRACE_SECONDS
+        );
+
+        let clamped = CompanionConfig {
+            extension_loss_grace_seconds: 9999,
+            ..CompanionConfig::default()
+        };
+        assert_eq!(clamped.extension_loss_grace_ms(), 300_000);
+        let clamped = CompanionConfig {
+            extension_loss_grace_seconds: 45,
+            ..CompanionConfig::default()
+        };
+        assert_eq!(clamped.extension_loss_grace_ms(), 45_000);
+    }
+
+    #[test]
+    fn extension_loss_grace_hand_edits_are_lenient_and_bounded() {
+        let (dir, store) = temp_store();
+        for (raw_value, expected) in [
+            (serde_json::json!(60.6), 61),
+            (serde_json::json!(-5), MIN_EXTENSION_LOSS_GRACE_SECONDS),
+            (serde_json::json!("120"), 120),
+            (
+                serde_json::json!(true),
+                DEFAULT_EXTENSION_LOSS_GRACE_SECONDS,
+            ),
+            (
+                serde_json::json!(null),
+                DEFAULT_EXTENSION_LOSS_GRACE_SECONDS,
+            ),
+        ] {
+            fs::write(
+                dir.path().join(CONFIG_FILE),
+                serde_json::to_vec(&serde_json::json!({
+                    "appBlocklist": ["steam"],
+                    "extensionLossGraceSeconds": raw_value
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let loaded = store.load_config();
+            assert_eq!(loaded.extension_loss_grace_seconds, expected);
+            // One bad scalar must not wipe the rest of the config.
+            assert_eq!(loaded.app_blocklist, vec!["steam".to_string()]);
+        }
     }
 
     #[test]

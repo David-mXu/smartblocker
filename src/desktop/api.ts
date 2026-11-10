@@ -92,8 +92,12 @@ export interface DesktopStatus {
   appTargetsVersion: number;
   license: LicenseInfo;
   policyProtected: boolean;
-  /** Read from the autostart plugin. Display only: no command turns it off. */
+  /** Read from the autostart plugin; `set_autostart` is the explicit control. */
   autostart: boolean;
+  /** Effective whole-second grace before an extensionless browser is closed. */
+  extensionLossGraceSeconds: number;
+  extensionLossGraceMinSeconds: number;
+  extensionLossGraceMaxSeconds: number;
 }
 
 /** visible: window on screen · open: minimized or on another desktop · background: no window. */
@@ -196,6 +200,12 @@ export interface UsageExport {
 /** Command name → [args, result]. */
 export interface Commands {
   get_status: [undefined, DesktopStatus];
+  /** Reads the OS startup registration; test mode returns false unchanged. */
+  get_autostart: [undefined, boolean];
+  /** Explicit startup intent; returns the observed result (test mode: false). */
+  set_autostart: [{ enabled: boolean }, boolean];
+  /** Clamped to the status-reported min/max; returns the effective seconds. */
+  set_extension_loss_grace_seconds: [{ seconds: number }, number];
   start_focus_session: [{ minutes: number }, PendingSession];
   undo_focus_session: [undefined, boolean];
   start_timer_lock: [{ minutes: number }, void];
