@@ -33,14 +33,19 @@ password lock, Frozen Turkey, or an active schedule window — it:
   Code, is never flagged or killed) — an embedded Electron window is the
   accepted residual for a self-control tool, and killing every Electron
   app would be far out of scope,
-- closes user-blocklisted desktop apps immediately,
+- closes user-blocklisted desktop apps immediately — by **typed identity**
+  (Microsoft Store package family, normalized full exe path, or exact exe
+  stem; `config.json` `appTargets`) with the original case-insensitive
+  substring list (`appBlocklist`) still honored for old configs. Path matches
+  are exact-file equality, never a folder prefix, and legacy contains rules
+  keep their broad semantics until the user removes them,
 - anchors lock/expiry math to a **monotonic clock with wall-clock-jump
   compensation** (the extension's `lock-enforcer.ts` mirrors this) —
   rewinding the system clock does not shorten a lock,
 - **self-heals `config.json` mid-lock**: user edits merge against
   enforcement-critical fields instead of silently weakening them, so editing
-  or truncating the config can't drop the app blocklist or disarm the
-  watchdog mid-lock,
+  or truncating the config can't drop the legacy app blocklist / typed
+  `appTargets` or disarm the watchdog mid-lock,
 - **protects itself precisely**: kill-immunity binds to a **recorded PID
   set** — the daemon's own pid, its supervisor's pid, and every process
   verified at scan time to run a companion executable **from the install

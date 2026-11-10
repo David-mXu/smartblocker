@@ -71,6 +71,7 @@ async function test(name, fn) {
 const {
   allowanceLocalDayKey,
   getLocalAllowanceAuthority,
+  promoteLocalAllowanceAuthorityForConflict,
   submitLocalAllowanceCommand,
 } = await import('../src/shared/allowance-store.ts?store-test=1');
 
@@ -136,6 +137,36 @@ await test('a restarted writer deduplicates from the persisted receipt snapshot'
   const result = await restarted.submitLocalAllowanceCommand(command('opening-close', 5, { grantId: 'open1' }));
   assert.equal(result.duplicate, true);
   assert.equal(result.state.revision, before);
+});
+
+await test('conflict promotion advances above both revisions and preserves history', async () => {
+  const expected = await getLocalAllowanceAuthority();
+  const promoted = await promoteLocalAllowanceAuthorityForConflict(expected, expected.revision + 5);
+  assert.equal(promoted.revision, expected.revision + 6);
+  assert.deepEqual(await getLocalAllowanceAuthority(), promoted);
+  assert.equal(promoted.receipts.length, expected.receipts.length);
+  assert.deepEqual(promoted.categories, expected.categories);
+});
+
+await test('a replaced snapshot wins over a stale promotion request', async () => {
+  const expected = await getLocalAllowanceAuthority();
+  const advanced = await submitLocalAllowanceCommand({ ...configure(), operationId: id(20) });
+  assert.equal(advanced.ok, true);
+  const promoted = await promoteLocalAllowanceAuthorityForConflict(expected, expected.revision + 10);
+  assert.equal(promoted.revision, advanced.state.revision, 'the newer command was not overwritten');
+  assert.equal((await getLocalAllowanceAuthority()).revision, advanced.state.revision);
+});
+
+await test('a promotion write failure rejects, preserves the snapshot, and frees the queue', async () => {
+  const expected = await getLocalAllowanceAuthority();
+  failNextWrite = true;
+  await assert.rejects(
+    promoteLocalAllowanceAuthorityForConflict(expected, expected.revision + 2),
+    /injected persistence failure/,
+  );
+  assert.equal((await getLocalAllowanceAuthority()).revision, expected.revision);
+  const promoted = await promoteLocalAllowanceAuthorityForConflict(expected, expected.revision + 2);
+  assert.equal(promoted.revision, expected.revision + 3);
 });
 
 await test('local day keys are calendar-shaped local dates', () => {

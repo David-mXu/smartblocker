@@ -37,7 +37,11 @@ lock, closes incompatible browsers, private/extensionless launches
 (`--incognito`/`--inprivate`/`--guest`/`--disable-extensions`), and
 blocklisted apps — identifying real browsers **behaviorally** by renderer
 command-line structure (`--type=renderer`, `-contentproc`) rather than by
-filename, so rename-spoofing doesn't inherit trust. It survives extension
+filename, so rename-spoofing doesn't inherit trust. Blocked apps use
+versioned exact targets (`appTargets`: Microsoft Store package family >
+normalized full exe path > exact exe stem) while the legacy
+`appBlocklist` substring list stays honored for existing configs; the app
+picker previews what each choice closes. It survives extension
 wipes (states merge monotonically **and reverse-sync** back into a wiped
 extension), compensates wall-clock jumps with a monotonic anchor, self-heals
 mid-lock `config.json` tampering, protects itself by exact stem + recorded

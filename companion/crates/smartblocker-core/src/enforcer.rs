@@ -20,6 +20,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::app_targets::{matches_process, ProcessIdentity};
 use crate::browsers::{classify_process, BrowserClass};
 use crate::lock_math::LockStatus;
 use crate::procwatch::ProcInfo;
@@ -387,12 +388,19 @@ pub fn tick(state: &EnforcerState, inp: &TickInputs) -> (EnforcerState, Vec<Acti
         ) {
             continue;
         }
-        let matched = inp
-            .config
-            .app_blocklist
-            .iter()
-            .any(|entry| !entry.is_empty() && p.name.contains(&entry.to_lowercase()));
-        if !matched {
+        // Typed targets (package > path > exact stem) take precedence over
+        // legacy contains rules; the process's exe metadata is what matches,
+        // never a parent folder or an arbitrary pid.
+        let identity = ProcessIdentity {
+            stem: &p.name,
+            exe_path: p.exe.as_deref(),
+            package_family: p.package_family.as_deref(),
+        };
+        if !matches_process(
+            &identity,
+            &inp.config.app_blocklist,
+            &inp.config.app_targets,
+        ) {
             continue;
         }
         if next.notified_apps.insert(p.name.clone()) {
@@ -422,6 +430,7 @@ mod tests {
             name: name.into(),
             cmd: Vec::new(),
             exe: None,
+            package_family: None,
         }
     }
 
@@ -431,6 +440,17 @@ mod tests {
             name: name.into(),
             cmd: cmd.iter().map(|s| s.to_string()).collect(),
             exe: None,
+            package_family: None,
+        }
+    }
+
+    fn proc_meta(pid: u32, name: &str, exe: Option<&str>, package: Option<&str>) -> ProcInfo {
+        ProcInfo {
+            pid,
+            name: name.into(),
+            cmd: Vec::new(),
+            exe: exe.map(str::to_string),
+            package_family: package.map(str::to_string),
         }
     }
 
@@ -757,6 +777,136 @@ mod tests {
     }
 
     #[test]
+    fn typed_path_target_closes_only_the_exact_executable() {
+        // A decoy/sibling under the same folder, the same stem at another
+        // install, and the exact path: only the exact path dies.
+        let targets =
+            vec![crate::app_targets::AppTarget::exe_path(r"C:\Games\Steam\steam.exe").unwrap()];
+        let cfg = CompanionConfig {
+            app_targets: targets,
+            ..CompanionConfig::default()
+        };
+        let procs = [
+            proc_meta(30, "steam", Some(r"c:\games\steam\steam.exe"), None),
+            proc_meta(31, "steam", Some(r"d:\games\steam\steam.exe"), None),
+            proc_meta(
+                32,
+                "steamwebhelper",
+                Some(r"c:\games\steam\steamwebhelper.exe"),
+                None,
+            ),
+        ];
+        let (_s, actions) = tick_at(
+            &EnforcerState::default(),
+            1_000,
+            &forced_status(),
+            &procs,
+            &[],
+            &cfg,
+        );
+        assert_eq!(kills(&actions), vec![(30, KillReason::BlockedApp)]);
+        assert_eq!(notifies(&actions), 1);
+    }
+
+    #[test]
+    fn typed_exact_stem_is_not_a_contains_match() {
+        let cfg = CompanionConfig {
+            app_targets: vec![crate::app_targets::AppTarget::exact_stem("steam").unwrap()],
+            ..CompanionConfig::default()
+        };
+        let procs = [
+            proc(30, "steam"),
+            proc(31, "steamwebhelper"),
+            proc(32, "smartblocker-steam"),
+        ];
+        let (_s, actions) = tick_at(
+            &EnforcerState::default(),
+            1_000,
+            &forced_status(),
+            &procs,
+            &[],
+            &cfg,
+        );
+        assert_eq!(kills(&actions), vec![(30, KillReason::BlockedApp)]);
+    }
+
+    #[test]
+    fn typed_package_target_closes_only_that_package() {
+        let cfg = CompanionConfig {
+            app_targets: vec![crate::app_targets::AppTarget::msix_package(
+                "Microsoft.WindowsCalculator_8wekyb3d8bbwe",
+            )
+            .unwrap()],
+            ..CompanionConfig::default()
+        };
+        let procs = [
+            proc_meta(
+                7301,
+                "calculator",
+                Some(r"c:\program files\windowsapps\calc\calculator.exe"),
+                Some("Microsoft.WindowsCalculator_8wekyb3d8bbwe"),
+            ),
+            proc_meta(
+                7302,
+                "calculator",
+                Some(r"c:\apps\other\calculator.exe"),
+                Some("Contoso.Calculator_abc123"),
+            ),
+            proc_meta(
+                7303,
+                "calculator",
+                Some(r"c:\apps\plain\calculator.exe"),
+                None,
+            ),
+        ];
+        let (_s, actions) = tick_at(
+            &EnforcerState::default(),
+            1_000,
+            &forced_status(),
+            &procs,
+            &[],
+            &cfg,
+        );
+        assert_eq!(kills(&actions), vec![(7301, KillReason::BlockedApp)]);
+    }
+
+    #[test]
+    fn typed_targets_cannot_bypass_browser_classification_or_protection() {
+        let cfg = CompanionConfig {
+            app_targets: vec![
+                crate::app_targets::AppTarget::exact_stem("chrome").unwrap(),
+                crate::app_targets::AppTarget::exact_stem("smartblocker-daemon").unwrap(),
+            ],
+            ..CompanionConfig::default()
+        };
+        record_protected_pid(44);
+        let procs = [
+            // A typed target naming a browser must still go through the
+            // watchdog (and here its heartbeat is healthy).
+            proc(10, "chrome"),
+            proc(44, "smartblocker-daemon"),
+            // An unrecorded protected-stem decoy stays a decoy kill.
+            proc(5042, "smartblocker-daemon"),
+        ];
+        let conns = [ConnInfo {
+            browser: CompanionBrowser::Chrome,
+            last_heartbeat_mono_ms: 500,
+        }];
+        let (_s, actions) = tick_at(
+            &EnforcerState::default(),
+            1_000,
+            &forced_status(),
+            &procs,
+            &conns,
+            &cfg,
+        );
+        assert_eq!(
+            kills(&actions),
+            vec![(5042, KillReason::DecoyImpersonation)]
+        );
+    }
+
+    #[test]
     fn blocklist_cannot_bypass_the_watchdog_grace_for_browsers() {
         // "chrome" in the app blocklist must NOT kill chrome instantly — the
         // watchdog owns browser lifecycles (with grace + notification).
@@ -837,24 +987,28 @@ mod tests {
                 pid: 6010,
                 name: "smartblocker-daemon".into(),
                 cmd: Vec::new(),
+                package_family: None,
                 exe: Some("/opt/smartblocker/smartblocker-daemon".into()),
             },
             ProcInfo {
                 pid: 6011,
                 name: "smartblocker-nm-host".into(),
                 cmd: Vec::new(),
+                package_family: None,
                 exe: Some("/opt/smartblocker/smartblocker-nm-host".into()),
             },
             ProcInfo {
                 pid: 6012,
                 name: "smartblocker-daemon".into(),
                 cmd: Vec::new(),
+                package_family: None,
                 exe: Some("/tmp/decoy/smartblocker-daemon".into()),
             },
             ProcInfo {
                 pid: 6013,
                 name: "smartblocker-daemon".into(),
                 cmd: Vec::new(),
+                package_family: None,
                 exe: None,
             },
             proc(6014, "steam"),

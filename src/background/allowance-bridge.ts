@@ -62,11 +62,6 @@ export function createAllowanceBridge(hooks: Hooks) {
     return attempt;
   }
 
-  function stillCurrent(epoch: number): boolean {
-    const live = hooks.getConnection();
-    return Boolean(live && live.epoch === epoch) && !fallbackAfterInitializationTimeout;
-  }
-
   function flushMirror(): Promise<void> {
     const pendingState = pendingMirror;
     if (!pendingState) return Promise.resolve();

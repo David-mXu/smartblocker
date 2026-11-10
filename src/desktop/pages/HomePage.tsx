@@ -5,7 +5,7 @@ import { SettingsGroup, SettingsSection } from '../../components/ui/settings';
 import { cn } from '../../lib/utils';
 import { errorText, invoke, type DesktopStatus, type LockReason } from '../api';
 import { latestVisible } from '../activity';
-import { summarizeApps } from '../apps';
+import { summarizeApps, targetSummaryName } from '../apps';
 import {
   SUPPORTED_BROWSERS,
   connectedBrowser,
@@ -331,7 +331,15 @@ function browserSummary(status: DesktopStatus): { label: string; description: st
 function Overview() {
   const { status, activity, now } = useStatus();
   const browsers = browserSummary(status);
-  const apps = status.appBlocklist;
+  // A typed target and a legacy contains entry can name the same app during
+  // the transition; the overview counts apps, not saved rules.
+  const seenApps = new Set<string>();
+  const apps = [...status.appTargets.map(targetSummaryName), ...status.appBlocklist].filter((name) => {
+    const key = name.toLowerCase();
+    if (seenApps.has(key)) return false;
+    seenApps.add(key);
+    return true;
+  });
   const last = activity ? latestVisible(activity) : null;
 
   return (

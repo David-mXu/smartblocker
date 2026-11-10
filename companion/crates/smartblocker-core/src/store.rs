@@ -5,6 +5,7 @@
 //! toward the EMPTY (unlocked) state rather than take the daemon down.
 
 use crate::allowance::{normalize_allowance_authority_state, AllowanceAuthorityState};
+use crate::app_targets::{sanitize_legacy_entries, sanitize_targets, version_for, AppTarget};
 use crate::lock_math::LockState;
 use crate::partner::PartnerState;
 use crate::protocol::{BlockingState, MAX_JS_SAFE_INTEGER};
@@ -24,13 +25,25 @@ pub const DATA_DIR_ENV: &str = "SMARTBLOCKER_DATA_DIR";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CompanionConfig {
-    /// Case-insensitive substrings matched against process exe stems while a
-    /// forced block is active.
+    /// Legacy list: case-insensitive substrings matched against process exe
+    /// stems while any lock is armed. Kept verbatim (modulo trimming/dedupe)
+    /// so existing configs keep their exact old behavior.
     pub app_blocklist: Vec<String>,
     /// Wall-clock stamp of the last accepted change to `app_blocklist`.
     /// 0 = never synchronized (older config); the extension treats it as
     /// "the daemon has no newer opinion" rather than a wipe.
     pub app_blocklist_updated_at: i64,
+    /// Schema version of `app_targets`. Absent in legacy configs (= 0);
+    /// upgraded to [`APP_TARGETS_VERSION`] as soon as typed targets exist.
+    pub app_targets_version: u32,
+    /// Typed exact identities, preferred over the legacy substring list.
+    /// See `app_targets` for normalization/precedence. Decoded leniently so
+    /// one hand-edited malformed entry cannot wipe the rest of the config.
+    #[serde(
+        default,
+        deserialize_with = "crate::app_targets::deserialize_targets_lenient"
+    )]
+    pub app_targets: Vec<AppTarget>,
     /// Managed-browser policy enforcement. Ships false until the extension
     /// has a store listing (needs an update_url).
     pub policy_enforce: bool,
@@ -56,6 +69,30 @@ pub struct CompanionConfig {
 /// workload; the bound keeps an unlocked-window attacker from growing the
 /// file (or flushing honest tokens) without limit.
 pub const MAX_PAIRING_TOKENS: usize = 32;
+
+impl CompanionConfig {
+    /// Normalize both app lists in place. Malformed/newer-version targets are
+    /// dropped rather than guessed at; legacy entries are trimmed, deduped
+    /// case-insensitively, and bounded. Returns whether anything changed.
+    pub fn sanitize(&mut self) -> bool {
+        let legacy_before = self.app_blocklist.clone();
+        let targets_before = self.app_targets.clone();
+        let version_before = self.app_targets_version;
+
+        self.app_blocklist = sanitize_legacy_entries(std::mem::take(&mut self.app_blocklist));
+        self.app_targets = sanitize_targets(std::mem::take(&mut self.app_targets));
+        self.app_targets_version = version_for(&self.app_targets);
+
+        legacy_before != self.app_blocklist
+            || targets_before != self.app_targets
+            || version_before != self.app_targets_version
+    }
+
+    pub fn sanitized(mut self) -> Self {
+        self.sanitize();
+        self
+    }
+}
 
 const LOCK_STATE_FILE: &str = "lock-state.json";
 const CONFIG_FILE: &str = "config.json";
@@ -108,12 +145,16 @@ impl Store {
         self.save(LOCK_STATE_FILE, state)
     }
 
+    /// Loads and sanitizes. Sanitization is in-memory (no write on every
+    /// read); the next save — or the daemon's mid-lock heal — persists the
+    /// normalized shape.
     pub fn load_config(&self) -> CompanionConfig {
-        self.load_or_default(CONFIG_FILE)
+        self.load_or_default::<CompanionConfig>(CONFIG_FILE)
+            .sanitized()
     }
 
     pub fn save_config(&self, config: &CompanionConfig) -> io::Result<()> {
-        self.save(CONFIG_FILE, config)
+        self.save(CONFIG_FILE, &config.clone().sanitized())
     }
 
     /// Ordinary blocking lives outside `config.json`: mid-lock config healing
@@ -292,8 +333,110 @@ mod tests {
         let loaded = store.load_config();
         assert_eq!(loaded.app_blocklist, vec!["x".to_string()]);
         assert_eq!(loaded.app_blocklist_updated_at, 0);
+        assert!(loaded.app_targets.is_empty());
+        assert_eq!(loaded.app_targets_version, 0);
         assert!(!loaded.policy_enforce);
         assert!(loaded.extra_incompatible_browsers.is_empty());
+    }
+
+    #[test]
+    fn legacy_config_keeps_substring_entries_and_new_targets_are_versioned() {
+        let (dir, store) = temp_store();
+        // An existing install's config has no appTargets fields at all.
+        fs::write(
+            dir.path().join(CONFIG_FILE),
+            br#"{ "appBlocklist": ["steam", "steamwebhelper"] }"#,
+        )
+        .unwrap();
+        let loaded = store.load_config();
+        assert_eq!(
+            loaded.app_blocklist,
+            vec!["steam".to_string(), "steamwebhelper".to_string()]
+        );
+        assert!(loaded.app_targets.is_empty());
+        assert_eq!(loaded.app_targets_version, 0);
+        // Old substring behavior survives the read: steamwebhelper still
+        // matches the legacy "steam" entry with no migration step.
+        assert!(crate::app_targets::matches_process(
+            &crate::app_targets::ProcessIdentity {
+                stem: "steamwebhelper",
+                exe_path: None,
+                package_family: None,
+            },
+            &loaded.app_blocklist,
+            &loaded.app_targets,
+        ));
+
+        // Adding a typed target in a new build writes the version and keeps
+        // the legacy entries untouched.
+        let path = crate::app_targets::AppTarget::exe_path(r"C:\Games\Steam\steam.exe").unwrap();
+        let mut config = loaded;
+        config.app_targets.push(path.clone());
+        store.save_config(&config).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.path().join(CONFIG_FILE)).unwrap()).unwrap();
+        assert_eq!(raw["appTargetsVersion"], 1);
+        assert_eq!(raw["appTargets"][0]["kind"], "exePath");
+        assert_eq!(raw["appTargets"][0]["version"], 1);
+        assert_eq!(
+            raw["appBlocklist"],
+            serde_json::json!(["steam", "steamwebhelper"])
+        );
+        assert_eq!(store.load_config().app_targets, vec![path]);
+    }
+
+    #[test]
+    fn config_load_drops_malformed_targets_and_bounds_hand_edits() {
+        let (dir, store) = temp_store();
+        let many: Vec<serde_json::Value> = (0..300)
+            .map(|n| {
+                serde_json::json!({
+                    "version": 1,
+                    "kind": "exactStem",
+                    "stem": format!("app{n}")
+                })
+            })
+            .collect();
+        let raw = serde_json::json!({
+            "appBlocklist": [" Steam ", "steam", "", "has\nnewline"],
+            "appTargetsVersion": 0,
+            "appTargets": [
+                { "kind": "exactStem", "stem": "steam" },
+                { "kind": "exePath", "path": "relative.exe" },
+                { "kind": "msixPackage", "familyName": "NoPublisher" },
+                { "version": 99, "kind": "exactStem", "stem": "future" },
+                { "kind": "unknownKind", "value": "x" }
+            ]
+        });
+        fs::write(
+            dir.path().join(CONFIG_FILE),
+            serde_json::to_vec(&raw).unwrap(),
+        )
+        .unwrap();
+        let loaded = store.load_config();
+        assert_eq!(loaded.app_blocklist, vec!["Steam".to_string()]);
+        assert_eq!(
+            loaded.app_targets,
+            vec![crate::app_targets::AppTarget::exact_stem("steam").unwrap()]
+        );
+        // Unversioned typed targets are upgraded to the current schema.
+        assert_eq!(loaded.app_targets_version, 1);
+
+        // The whole JSON must stay parseable when an unknown kind is present
+        // in a fresh file; serde drops it at the enum layer. Bounds apply on
+        // save/load through sanitize.
+        let bounded = CompanionConfig {
+            app_targets: many
+                .into_iter()
+                .map(|value| serde_json::from_value(value).unwrap())
+                .collect(),
+            ..CompanionConfig::default()
+        };
+        let bounded = bounded.sanitized();
+        assert_eq!(
+            bounded.app_targets.len(),
+            crate::app_targets::MAX_APP_TARGETS
+        );
     }
 
     #[test]

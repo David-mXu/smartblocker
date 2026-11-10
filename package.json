@@ -9,6 +9,7 @@
     "build:chrome": "vite build -c vite.config.background.ts --mode chrome && vite build -c vite.config.offscreen.ts --mode chrome && vite build -c vite.config.popup.ts --mode chrome && vite build -c vite.config.options.ts --mode chrome && vite build -c vite.config.blocked.ts --mode chrome && node scripts/copy-assets.mjs chrome",
     "build:firefox": "vite build -c vite.config.background.ts --mode firefox && vite build -c vite.config.popup.ts --mode firefox && vite build -c vite.config.options.ts --mode firefox && vite build -c vite.config.blocked.ts --mode firefox && node scripts/copy-assets.mjs firefox",
     "typecheck": "tsc --noEmit",
+    "test:app-targets": "node scripts/app-targets-test.mjs",
     "eval": "node scripts/eval.mjs",
     "build:site": "vite build -c vite.config.site.ts",
     "build:desktop": "vite build -c vite.config.desktop.ts",

@@ -85,7 +85,11 @@ export interface DesktopStatus {
   browserGrace: BrowserGraceInfo[];
   /** Installed-browser + registration evidence; empty means inspection failed. */
   browserIntegrations: BrowserIntegration[];
+  /** Legacy contains entries, still honored verbatim. */
   appBlocklist: string[];
+  /** Versioned typed exact identities (schema version 1). */
+  appTargets: AppTarget[];
+  appTargetsVersion: number;
   license: LicenseInfo;
   policyProtected: boolean;
   /** Read from the autostart plugin. Display only: no command turns it off. */
@@ -101,7 +105,16 @@ export interface RunningApp {
   count: number;
   isBrowser: boolean;
   state: AppState;
+  /** Normalized full exe path when readable. */
+  exePath?: string;
+  /** Microsoft Store package family name when Windows exposes it. */
+  packageFamily?: string;
 }
+
+export type AppTarget =
+  | { version: number; kind: 'exactStem'; stem: string }
+  | { version: number; kind: 'exePath'; path: string }
+  | { version: number; kind: 'msixPackage'; familyName: string };
 
 /** One raw events.log line (`<ms> <kind> <detail>`), newest first. */
 export interface ActivityEvent {
@@ -116,7 +129,8 @@ export interface Commands {
   start_focus_session: [{ minutes: number }, PendingSession];
   undo_focus_session: [undefined, boolean];
   start_timer_lock: [{ minutes: number }, void];
-  set_app_blocklist: [{ apps: string[] }, void];
+  /** `targets` omitted = preserve typed targets for older callers. */
+  set_app_blocklist: [{ apps: string[]; targets?: AppTarget[] }, void];
   list_running_apps: [undefined, RunningApp[]];
   get_recent_activity: [{ limit: number }, ActivityEvent[]];
   set_license_key: [{ key: string }, LicenseInfo];

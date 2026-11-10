@@ -31,6 +31,10 @@ let failNextBreak = false;
 let authorityGate = null;
 const authorityGates = [];
 let stalePending = false;
+const getGates = [];
+const commandGates = [];
+let alarmCreateFailures = 0;
+let alarmWhen = null;
 function deferred() {
   let resolve;
   let reject;
@@ -40,13 +44,26 @@ function deferred() {
 globalThis[HARNESS] = {
   api: {
     storage: { local: {
-      async get(key) { return { [key]: clone(values[key]) }; },
+      async get(key) {
+        // Snapshot before an optional gate so a gated read observes the value
+        // from when it started, not whatever landed while it was parked.
+        const snapshot = clone(values[key]);
+        const gate = getGates.shift();
+        if (gate) await gate.promise;
+        return { [key]: snapshot };
+      },
       async set(items) { Object.assign(values, clone(items)); },
       async remove(key) { delete values[key]; },
     }, onChanged: { addListener() {} } },
     alarms: {
-      async create() {},
-      async clear() {},
+      async create(name, info) {
+        if (alarmCreateFailures > 0) {
+          alarmCreateFailures--;
+          throw new Error('injected alarm failure');
+        }
+        alarmWhen = info?.when ?? null;
+      },
+      async clear() { alarmWhen = null; },
       onAlarm: { addListener: (fn) => alarmListeners.push(fn) },
     },
   },
@@ -57,6 +74,13 @@ globalThis[HARNESS] = {
   },
   submitAllowanceCommand: async (command) => {
     commands.push(structuredClone(command));
+    const gate = commandGates.shift();
+    if (gate) {
+      // An override result models settlement after the session it belongs to
+      // has already been cancelled or replaced.
+      const override = await gate.promise;
+      if (override) return override;
+    }
     if (stalePending) {
       stalePending = false;
       return { ok: false, source: 'daemon', reason: 'clock-rollback' };
@@ -78,6 +102,7 @@ const {
   cancelFocusCycle,
   getFocusCycleResponse,
   initFocusCycleScheduler,
+  __runFocusCycleForTest,
 } = await import('../src/background/focus-cycles.ts?cycle-tests=1');
 initFocusCycleScheduler();
 const flush = () => new Promise((resolve) => setImmediate(resolve));
@@ -227,6 +252,83 @@ await test('cancelled start rejection cannot wipe a newer successful start', asy
   assert.ok(stored);
   assert.equal(stored.id, succeeded.program.id, 'the later start still owns the persisted program');
   await cancelFocusCycle();
+});
+
+await test('a stale program read cannot overwrite a newer start or clear its alarm', async () => {
+  await cancelFocusCycle();
+  for (let n = 0; n < 3; n++) await flush();
+  const gate = deferred();
+  getGates.push(gate);
+  const tick = __runFocusCycleForTest();
+  for (let n = 0; n < 3; n++) await flush();
+  // The tick now holds a read that started before the new program existed.
+  const started = await start('focus');
+  assert.equal(started.ok, true);
+  gate.resolve();
+  await tick;
+  const current = (await getFocusCycleResponse()).program;
+  assert.equal(current?.id, started.program.id, 'the newer start still owns the state');
+  assert.equal(alarmWhen, started.program.stageEndsAtMs, 'the newer alarm was not cleared');
+  await cancelFocusCycle();
+});
+
+await test('a reward rollback settling after a newer start cannot advance that start', async () => {
+  await cancelFocusCycle();
+  const started = await start('pomodoro', 2);
+  assert.equal(started.ok, true);
+  const gate = deferred();
+  commandGates.push(gate);
+  now += 1;
+  const tick = __runFocusCycleForTest();
+  for (let n = 0; n < 3; n++) await flush();
+  assert.equal(commands.at(-1).kind, 'reward');
+  await cancelFocusCycle();
+  const newer = await start('pomodoro', 2);
+  assert.equal(newer.ok, true);
+  gate.resolve({ ok: false, source: 'daemon', reason: 'clock-rollback' });
+  await tick;
+  const current = (await getFocusCycleResponse()).program;
+  assert.equal(current.id, newer.program.id);
+  assert.equal(current.cycle, 1, 'the newer program did not advance a cycle');
+  assert.equal(current.stage, 'work');
+  assert.equal(current.pendingCommand.operationId, newer.program.pendingCommand.operationId);
+  await cancelFocusCycle();
+});
+
+await test('a break-start rollback settling after a newer start cannot advance that start', async () => {
+  await cancelFocusCycle();
+  const pass = deferred();
+  pass.resolve(null);
+  const gate = deferred();
+  commandGates.push(pass, gate);
+  const started = await start('pomodoro', 2);
+  assert.equal(started.ok, true);
+  now += 1;
+  const tick = __runFocusCycleForTest();
+  for (let n = 0; n < 3; n++) await flush();
+  assert.equal(commands.at(-1).kind, 'pomodoro-start');
+  await cancelFocusCycle();
+  const newer = await start('pomodoro', 2);
+  assert.equal(newer.ok, true);
+  gate.resolve({ ok: false, source: 'daemon', reason: 'clock-rollback' });
+  await tick;
+  const current = (await getFocusCycleResponse()).program;
+  assert.equal(current.id, newer.program.id);
+  assert.equal(current.cycle, 1, 'the newer program did not advance a cycle');
+  assert.equal(current.stage, 'work');
+  assert.equal(current.pendingCommand.operationId, newer.program.pendingCommand.operationId);
+  await cancelFocusCycle();
+});
+
+await test('an alarm failure clears only the program installed by that start', async () => {
+  await cancelFocusCycle();
+  alarmCreateFailures = 1;
+  const started = await start('focus');
+  assert.equal(started.ok, false);
+  assert.match(started.error, /injected alarm failure/);
+  assert.equal((await getFocusCycleResponse()).program, null);
+  assert.equal(values.focusCycleProgram, undefined);
+  assert.equal(alarmWhen, null);
 });
 
 await test('clock-rollback makes a stale pending reward terminal without retry spam', async () => {

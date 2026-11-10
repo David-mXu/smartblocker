@@ -12,6 +12,7 @@
 
 import type {
   ActivityEvent,
+  AppTarget,
   BrowserRepairResult,
   DesktopStatus,
   LicenseInfo,
@@ -19,6 +20,7 @@ import type {
   PendingSession,
   RunningApp,
 } from './api';
+import { targetKey } from './apps';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -49,26 +51,161 @@ const EXPIRED_GRACE_MS = 7 * DAY;
 // ---------------------------------------------------------------------------
 
 const RUNNING_APPS: RunningApp[] = [
-  { name: '1password', count: 2, isBrowser: false, state: 'background' },
-  { name: 'brave', count: 7, isBrowser: true, state: 'background' },
-  { name: 'chrome', count: 23, isBrowser: true, state: 'visible' },
-  { name: 'code', count: 11, isBrowser: false, state: 'visible' },
-  { name: 'discord', count: 4, isBrowser: false, state: 'open' },
-  { name: 'epicgameslauncher', count: 1, isBrowser: false, state: 'background' },
-  { name: 'firefox', count: 9, isBrowser: true, state: 'background' },
-  { name: 'leagueclient', count: 3, isBrowser: false, state: 'background' },
-  { name: 'ms-teams', count: 3, isBrowser: false, state: 'background' },
-  { name: 'msedge', count: 14, isBrowser: true, state: 'open' },
-  { name: 'notion', count: 3, isBrowser: false, state: 'open' },
-  { name: 'obs64', count: 1, isBrowser: false, state: 'background' },
-  { name: 'onedrive', count: 1, isBrowser: false, state: 'background' },
-  { name: 'slack', count: 4, isBrowser: false, state: 'open' },
-  { name: 'spotify', count: 5, isBrowser: false, state: 'visible' },
-  { name: 'steam', count: 1, isBrowser: false, state: 'background' },
-  { name: 'steamwebhelper', count: 6, isBrowser: false, state: 'open' },
-  { name: 'whatsapp', count: 2, isBrowser: false, state: 'background' },
-  { name: 'windowsterminal', count: 1, isBrowser: false, state: 'visible' },
-  { name: 'zoom', count: 2, isBrowser: false, state: 'background' },
+  {
+    name: '1password',
+    count: 2,
+    isBrowser: false,
+    state: 'background',
+    exePath: 'c:\\users\\sam\\appdata\\local\\1password\\app\\8\\1password.exe',
+  },
+  {
+    name: 'brave',
+    count: 7,
+    isBrowser: true,
+    state: 'background',
+    exePath: 'c:\\program files\\bravesoftware\\brave-browser\\application\\brave.exe',
+  },
+  {
+    name: 'chrome',
+    count: 23,
+    isBrowser: true,
+    state: 'visible',
+    exePath: 'c:\\program files\\google\\chrome\\application\\chrome.exe',
+  },
+  {
+    name: 'code',
+    count: 11,
+    isBrowser: false,
+    state: 'visible',
+    exePath: 'c:\\users\\sam\\appdata\\local\\programs\\microsoft vs code\\code.exe',
+  },
+  {
+    name: 'discord',
+    count: 4,
+    isBrowser: false,
+    state: 'open',
+    exePath: 'c:\\users\\sam\\appdata\\local\\discord\\app-1.0.9042\\discord.exe',
+  },
+  {
+    name: 'epicgameslauncher',
+    count: 1,
+    isBrowser: false,
+    state: 'background',
+    exePath:
+      'c:\\program files (x86)\\epic games\\launcher\\portal\\binaries\\win64\\epicgameslauncher.exe',
+  },
+  {
+    name: 'firefox',
+    count: 9,
+    isBrowser: true,
+    state: 'background',
+    exePath: 'c:\\program files\\mozilla firefox\\firefox.exe',
+  },
+  {
+    name: 'leagueclient',
+    count: 3,
+    isBrowser: false,
+    state: 'background',
+    exePath: 'c:\\riot games\\league of legends\\leagueclient.exe',
+  },
+  {
+    name: 'ms-teams',
+    count: 3,
+    isBrowser: false,
+    state: 'background',
+    exePath:
+      'c:\\program files\\windowsapps\\msteams_24229.1104.3010.0_x64__8wekyb3d8bbwe\\ms-teams.exe',
+    packageFamily: 'msteams_8wekyb3d8bbwe',
+  },
+  {
+    name: 'msedge',
+    count: 14,
+    isBrowser: true,
+    state: 'open',
+    exePath: 'c:\\program files (x86)\\microsoft\\edge\\application\\msedge.exe',
+  },
+  {
+    name: 'notion',
+    count: 3,
+    isBrowser: false,
+    state: 'open',
+    exePath: 'c:\\users\\sam\\appdata\\local\\programs\\notion\\notion.exe',
+  },
+  {
+    name: 'obs64',
+    count: 1,
+    isBrowser: false,
+    state: 'background',
+    exePath: 'c:\\program files\\obs-studio\\bin\\64bit\\obs64.exe',
+  },
+  {
+    name: 'onedrive',
+    count: 1,
+    isBrowser: false,
+    state: 'background',
+    exePath: 'c:\\program files\\microsoft onedrive\\onedrive.exe',
+  },
+  {
+    name: 'slack',
+    count: 4,
+    isBrowser: false,
+    state: 'open',
+    exePath: 'c:\\users\\sam\\appdata\\local\\slack\\app-4.36\\slack.exe',
+  },
+  {
+    name: 'spotify',
+    count: 5,
+    isBrowser: false,
+    state: 'visible',
+    exePath:
+      'c:\\program files\\windowsapps\\spotifyab.spotifymusic_1.0.0.0_x64__zpdnekdrzrea0\\spotify.exe',
+    packageFamily: 'spotifyab.spotifymusic_zpdnekdrzrea0',
+  },
+  {
+    name: 'steam',
+    count: 1,
+    isBrowser: false,
+    state: 'background',
+    exePath: 'c:\\program files (x86)\\steam\\steam.exe',
+  },
+  // A second install of the same stem: "this exact app" must name one path.
+  {
+    name: 'steam',
+    count: 1,
+    isBrowser: false,
+    state: 'background',
+    exePath: 'd:\\games\\steamlibrary\\steam.exe',
+  },
+  {
+    name: 'steamwebhelper',
+    count: 6,
+    isBrowser: false,
+    state: 'open',
+    exePath: 'c:\\program files (x86)\\steam\\bin\\cef\\cef.win7x64\\steamwebhelper.exe',
+  },
+  {
+    name: 'whatsapp',
+    count: 2,
+    isBrowser: false,
+    state: 'background',
+    exePath: 'c:\\users\\sam\\appdata\\local\\whatsapp\\whatsapp.exe',
+  },
+  {
+    name: 'windowsterminal',
+    count: 1,
+    isBrowser: false,
+    state: 'visible',
+    exePath:
+      'c:\\program files\\windowsapps\\microsoft.windowsterminal_1.0.0.0_x64__8wekyb3d8bbwe\\windowsterminal.exe',
+    packageFamily: 'microsoft.windowsterminal_8wekyb3d8bbwe',
+  },
+  {
+    name: 'zoom',
+    count: 2,
+    isBrowser: false,
+    state: 'background',
+    exePath: 'c:\\users\\sam\\appdata\\roaming\\zoom\\bin\\zoom.exe',
+  },
 ];
 
 function seedEvents(now: number): ActivityEvent[] {
@@ -133,6 +270,17 @@ function baseState(now: number): MockState {
         { browser: 'firefox', installation: 'installed', registration: 'missing' },
       ],
       appBlocklist: ['steam', 'discord', 'epicgameslauncher'],
+      appTargetsVersion: 1,
+      appTargets: [
+        // A Store identity and an exact path, along with legacy contains
+        // entries above, so the preview shows all three shapes at once.
+        { version: 1, kind: 'msixPackage', familyName: 'spotifyab.spotifymusic_zpdnekdrzrea0' },
+        {
+          version: 1,
+          kind: 'exePath',
+          path: 'c:\\users\\sam\\appdata\\local\\programs\\microsoft vs code\\code.exe',
+        },
+      ],
       license: { pro: false, state: 'none', expiresAtMs: null, keyHint: null },
       policyProtected: false,
       autostart: true,
@@ -232,6 +380,8 @@ const SCENARIOS: Record<string, Patch> = {
   },
   empty: (s) => {
     s.status.appBlocklist = [];
+    s.status.appTargets = [];
+    s.status.appTargetsVersion = 0;
     s.events = [];
   },
 };
@@ -411,11 +561,22 @@ export async function mockInvoke(cmd: string, args: Record<string, unknown> = {}
 
     case 'set_app_blocklist': {
       const apps = Array.isArray(args.apps) ? (args.apps as unknown[]).map(String) : [];
+      // Omitted targets = an older caller; preserve the typed list rather
+      // than silently dropping it.
+      const targets = Array.isArray(args.targets)
+        ? (args.targets as AppTarget[]).filter(
+            (target) => target && typeof target === 'object' && typeof target.kind === 'string',
+          )
+        : s.status.appTargets;
       if (s.status.lock.settingsLocked) {
         const keptAll = s.status.appBlocklist.every((old) => apps.some((n) => n.toLowerCase() === old.toLowerCase()));
-        if (!keptAll) throw 'Locked: apps can be added but not removed until the lock ends.';
+        const nextKeys = new Set(targets.map(targetKey));
+        const keptTargets = s.status.appTargets.every((old) => nextKeys.has(targetKey(old)));
+        if (!keptAll || !keptTargets) throw 'Locked: apps can be added but not removed until the lock ends.';
       }
       s.status.appBlocklist = apps;
+      s.status.appTargets = targets;
+      s.status.appTargetsVersion = targets.length ? 1 : 0;
       return undefined;
     }
 

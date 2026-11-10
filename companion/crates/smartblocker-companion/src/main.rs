@@ -29,6 +29,7 @@ use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_notification::NotificationExt;
 
 use smartblocker_core::activity::{self, ActivityEvent};
+use smartblocker_core::app_targets::{sanitize_targets, version_for, AppTarget};
 use smartblocker_core::apps::{self, RunningApp};
 use smartblocker_core::daemon::{run_daemon, DaemonOptions, LogNotifier, Notifier};
 use smartblocker_core::focus_session::{self, PendingSession};
@@ -246,6 +247,8 @@ struct DesktopStatus {
     /// Disk/registry evidence only; an authenticated connection is separate.
     browser_integrations: Vec<BrowserIntegration>,
     app_blocklist: Vec<String>,
+    app_targets: Vec<AppTarget>,
+    app_targets_version: u32,
     license: LicenseInfo,
     policy_protected: bool,
     autostart: bool,
@@ -387,6 +390,8 @@ fn get_status(app: AppHandle, ctx: State<'_, AppCtx>) -> Result<DesktopStatus, S
         license: license::license_info(&config, now),
         policy_protected: config.policy_enforce && config.extension_update_url.is_some(),
         app_blocklist: config.app_blocklist,
+        app_targets: config.app_targets,
+        app_targets_version: config.app_targets_version,
         autostart: !ctx.test_mode && app.autolaunch().is_enabled().unwrap_or(false),
     })
 }
@@ -429,20 +434,43 @@ fn start_timer_lock(ctx: State<'_, AppCtx>, minutes: u64) -> Result<(), String> 
 }
 
 #[tauri::command(async)]
-fn set_app_blocklist(ctx: State<'_, AppCtx>, apps: Vec<String>) -> Result<(), String> {
+fn set_app_blocklist(
+    ctx: State<'_, AppCtx>,
+    apps: Vec<String>,
+    targets: Option<Vec<AppTarget>>,
+) -> Result<(), String> {
     let store = ctx.store();
     let mut config = store.load_config();
     let now = now_ms();
     let status = derive_lock_status(&store.load_lock_state(), now);
     let normalized = apps::normalize_app_blocklist(&apps);
-    // Locked = strictening only: additions are learned, removals wait. Keeping
-    // the current entries (rather than refusing a mixed edit) matches the
-    // extension-side rule and means "add Steam" still works mid-lock.
-    config.app_blocklist = if status.settings_locked {
-        apps::merge_locked_app_blocklist(&config.app_blocklist, &normalized)
-    } else {
-        normalized
+    // `None` is the old UI's command shape: keep the typed list untouched
+    // rather than treating an omitted argument as "remove every exact app".
+    let targets = match targets {
+        Some(targets) => sanitize_targets(targets),
+        None => config.app_targets.clone(),
     };
+    // Locked = strictening only: additions fine, removals refused (the
+    // whole point of the lock is that weakening waits it out). Both the
+    // legacy and typed lists are pinned.
+    if status.settings_locked {
+        let kept_all = config
+            .app_blocklist
+            .iter()
+            .all(|old| normalized.iter().any(|new| new.eq_ignore_ascii_case(old)));
+        let next_keys: std::collections::HashSet<String> =
+            targets.iter().map(AppTarget::key).collect();
+        let kept_targets = config
+            .app_targets
+            .iter()
+            .all(|old| next_keys.contains(&old.key()));
+        if !kept_all || !kept_targets {
+            return Err("Locked: apps can be added but not removed until the lock ends.".into());
+        }
+    }
+    config.app_targets_version = version_for(&targets);
+    config.app_blocklist = normalized;
+    config.app_targets = targets;
     config.app_blocklist_updated_at = now.max(config.app_blocklist_updated_at.saturating_add(1));
     store
         .save_config(&config)

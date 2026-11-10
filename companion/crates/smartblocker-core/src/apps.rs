@@ -23,6 +23,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
+use crate::app_targets::{normalize_exe_path, normalize_package_family};
 use crate::browsers::{classify, BrowserClass};
 use crate::enforcer::PROTECTED_STEMS;
 
@@ -107,13 +108,20 @@ pub enum AppState {
 pub struct RunningApp {
     /// Lowercase exe stem, no `.exe`.
     pub name: String,
-    /// Number of running processes with this stem.
+    /// Number of running processes with this identity.
     pub count: u32,
     /// Supported or incompatible browser (closed by browser protection, not
     /// the app blocklist).
     pub is_browser: bool,
     /// The most present state across this app's processes.
     pub state: AppState,
+    /// Normalized full exe path when readable. Two installs of the same stem
+    /// stay separate rows so "this exact app" is unambiguous.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exe_path: Option<String>,
+    /// Microsoft Store package family name when Windows exposes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_family: Option<String>,
 }
 
 /// Exact stems of OS / desktop-session plumbing (Windows + Linux).
@@ -242,6 +250,8 @@ const SYSTEM_PREFIXES: &[&str] = &[
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppProc {
     pub stem: String,
+    pub exe_path: Option<String>,
+    pub package_family: Option<String>,
     pub has_exe: bool,
     pub state: AppState,
 }
@@ -284,9 +294,12 @@ pub fn is_system_stem(stem: &str) -> bool {
 }
 
 /// Pure core: filter, dedupe with counts, tag browsers, sort by state then
-/// name.
+/// name. The identity is (stem, exe path, package family), not the stem
+/// alone: two installs of `steam.exe` are separate picker rows so "this exact
+/// app" can name one path without silently covering the other.
 pub fn summarize_apps(procs: &[AppProc]) -> Vec<RunningApp> {
-    let mut seen: BTreeMap<String, (u32, AppState)> = BTreeMap::new();
+    type Key = (String, Option<String>, Option<String>);
+    let mut seen: BTreeMap<Key, (u32, AppState)> = BTreeMap::new();
     for p in procs {
         if !p.has_exe {
             continue;
@@ -295,20 +308,31 @@ pub fn summarize_apps(procs: &[AppProc]) -> Vec<RunningApp> {
         if stem.is_empty() || PROTECTED_STEMS.contains(&stem.as_str()) || is_system_stem(&stem) {
             continue;
         }
-        let entry = seen.entry(stem).or_insert((0, AppState::Background));
+        let exe_path = p.exe_path.as_deref().and_then(normalize_exe_path);
+        let package_family = p
+            .package_family
+            .as_deref()
+            .and_then(normalize_package_family);
+        let entry = seen
+            .entry((stem, exe_path, package_family))
+            .or_insert((0, AppState::Background));
         entry.0 += 1;
         entry.1 = entry.1.min(p.state);
     }
     let mut apps: Vec<RunningApp> = seen
         .into_iter()
-        .map(|(name, (count, state))| RunningApp {
-            is_browser: classify(&name, &[]) != BrowserClass::Unrelated,
-            name,
-            count,
-            state,
-        })
+        .map(
+            |((name, exe_path, package_family), (count, state))| RunningApp {
+                is_browser: classify(&name, &[]) != BrowserClass::Unrelated,
+                name,
+                count,
+                state,
+                exe_path,
+                package_family,
+            },
+        )
         .collect();
-    // Stable, so each state keeps the map's name order.
+    // Stable, so each state keeps the map's name/path order.
     apps.sort_by_key(|a| a.state);
     apps
 }
@@ -438,14 +462,21 @@ pub fn list_running_apps() -> Vec<RunningApp> {
                 .get(&pid.as_u32())
                 .copied()
                 .unwrap_or(AppState::Background);
-            match p.exe().and_then(|path| path.file_stem()) {
-                Some(stem) => AppProc {
+            match p
+                .exe()
+                .and_then(|path| path.file_stem().map(|stem| (path, stem)))
+            {
+                Some((path, stem)) => AppProc {
                     stem: stem.to_string_lossy().into_owned(),
+                    exe_path: normalize_exe_path(&path.to_string_lossy()),
+                    package_family: crate::win_meta::process_package_family(pid.as_u32()),
                     has_exe: true,
                     state,
                 },
                 None => AppProc {
                     stem: p.name().to_string_lossy().into_owned(),
+                    exe_path: None,
+                    package_family: None,
                     has_exe: false,
                     state,
                 },
@@ -462,8 +493,21 @@ mod tests {
     fn p(stem: &str) -> AppProc {
         AppProc {
             stem: stem.into(),
+            exe_path: None,
+            package_family: None,
             has_exe: true,
             state: AppState::Background,
+        }
+    }
+
+    fn app(name: &str, count: u32, is_browser: bool, state: AppState) -> RunningApp {
+        RunningApp {
+            name: name.into(),
+            count,
+            is_browser,
+            state,
+            exe_path: None,
+            package_family: None,
         }
     }
 
@@ -495,36 +539,11 @@ mod tests {
         assert_eq!(
             apps,
             vec![
-                RunningApp {
-                    name: "brave".into(),
-                    count: 1,
-                    is_browser: true,
-                    state: AppState::Background,
-                },
-                RunningApp {
-                    name: "discord".into(),
-                    count: 1,
-                    is_browser: false,
-                    state: AppState::Background,
-                },
-                RunningApp {
-                    name: "msedge".into(),
-                    count: 2,
-                    is_browser: true,
-                    state: AppState::Background,
-                },
-                RunningApp {
-                    name: "steam".into(),
-                    count: 2,
-                    is_browser: false,
-                    state: AppState::Background,
-                },
-                RunningApp {
-                    name: "steamwebhelper".into(),
-                    count: 1,
-                    is_browser: false,
-                    state: AppState::Background,
-                },
+                app("brave", 1, true, AppState::Background),
+                app("discord", 1, false, AppState::Background),
+                app("msedge", 2, true, AppState::Background),
+                app("steam", 2, false, AppState::Background),
+                app("steamwebhelper", 1, false, AppState::Background),
             ]
         );
     }
@@ -623,6 +642,8 @@ mod tests {
             p(""),
             AppProc {
                 stem: "ghostapp".into(),
+                exe_path: None,
+                package_family: None,
                 has_exe: false,
                 state: AppState::Background,
             },
@@ -686,18 +707,80 @@ mod tests {
     }
 
     #[test]
-    fn json_shape_is_camel_case() {
-        let v = serde_json::to_value(RunningApp {
-            name: "x".into(),
-            count: 1,
-            is_browser: true,
-            state: AppState::Open,
-        })
-        .unwrap();
+    fn json_shape_is_camel_case_and_path_package_are_optional() {
+        let v = serde_json::to_value(app("x", 1, true, AppState::Open)).unwrap();
         assert_eq!(
             v,
             serde_json::json!({ "name": "x", "count": 1, "isBrowser": true, "state": "open" })
         );
+
+        let v = serde_json::to_value(RunningApp {
+            exe_path: Some(r"c:\games\steam\steam.exe".into()),
+            package_family: Some("Microsoft.WindowsCalculator_8wekyb3d8bbwe".into()),
+            ..app("calculator", 1, false, AppState::Visible)
+        })
+        .unwrap();
+        assert_eq!(v["exePath"], r"c:\games\steam\steam.exe");
+        assert_eq!(
+            v["packageFamily"],
+            "Microsoft.WindowsCalculator_8wekyb3d8bbwe"
+        );
+    }
+
+    #[test]
+    fn same_stem_installs_are_separate_rows_and_paths_are_normalized() {
+        let apps = summarize_apps(&[
+            AppProc {
+                stem: "Steam".into(),
+                exe_path: Some(r"C:\Program Files (x86)\Steam\steam.exe".into()),
+                package_family: None,
+                has_exe: true,
+                state: AppState::Background,
+            },
+            AppProc {
+                stem: "steam".into(),
+                exe_path: Some(r"D:\Games\STEAM.EXE".into()),
+                package_family: None,
+                has_exe: true,
+                state: AppState::Open,
+            },
+            // Same install again: one row, count 2.
+            AppProc {
+                stem: "steam".into(),
+                exe_path: Some(r"c:/program files (x86)/steam/STEAM.exe".into()),
+                package_family: None,
+                has_exe: true,
+                state: AppState::Background,
+            },
+        ]);
+        assert_eq!(apps.len(), 2);
+        assert_eq!(apps[0].state, AppState::Open);
+        assert_eq!(apps[0].exe_path.as_deref(), Some(r"d:\games\steam.exe"));
+        assert_eq!(
+            apps[1].exe_path.as_deref(),
+            Some(r"c:\program files (x86)\steam\steam.exe")
+        );
+        assert_eq!(apps[1].count, 2);
+    }
+
+    #[test]
+    fn packaged_app_rows_carry_package_identity_but_still_classify_by_stem() {
+        let apps = summarize_apps(&[AppProc {
+            stem: "windowsterminal".into(),
+            exe_path: Some(
+                r"C:\Program Files\WindowsApps\Microsoft.WindowsTerminal_1.0_x64__8wekyb3d8bbwe\WindowsTerminal.exe"
+                    .into(),
+            ),
+            package_family: Some("Microsoft.WindowsTerminal_8wekyb3d8bbwe".into()),
+            has_exe: true,
+            state: AppState::Visible,
+        }]);
+        assert_eq!(apps.len(), 1);
+        assert_eq!(
+            apps[0].package_family.as_deref(),
+            Some("microsoft.windowsterminal_8wekyb3d8bbwe")
+        );
+        assert!(!apps[0].is_browser, "a Store app is not a browser");
     }
 
     #[test]

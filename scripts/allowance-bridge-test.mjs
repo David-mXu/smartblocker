@@ -28,9 +28,24 @@ const values = {};
 const clone = (value) => value === undefined ? undefined : structuredClone(value);
 let writeGate = null;
 let writeFailure = null;
+let readGate = null;
+let readFailure = null;
+let connected = true;
 globalThis[HARNESS] = {
   api: { storage: { local: {
-    async get(key) { return { [key]: clone(values[key]) }; },
+    async get(key) {
+      if (readGate) {
+        const gate = readGate;
+        readGate = null;
+        await gate.promise;
+      }
+      if (readFailure) {
+        const message = readFailure;
+        readFailure = null;
+        throw new Error(message);
+      }
+      return { [key]: clone(values[key]) };
+    },
     async set(items) {
       if (writeGate) await writeGate.promise;
       if (writeFailure) {
@@ -68,7 +83,7 @@ const sent = [];
 const heldReplies = new Set();
 const results = [];
 let bridge = createAllowanceBridge({
-  getConnection: () => ({ epoch, send }),
+  getConnection: () => connected ? ({ epoch, send }) : null,
   onAuthority: (state) => results.push(state.revision),
 });
 function send(message) {
@@ -204,7 +219,7 @@ await test('first configure waits for actual bootstrap instead of falling back i
   values.allowanceAuthority = {};
   sent.length = 0;
   bridge = createAllowanceBridge({
-    getConnection: () => ({ epoch, send }),
+    getConnection: () => connected ? ({ epoch, send }) : null,
     onAuthority: (state) => results.push(state.revision),
   });
   bridge.onStatus(undefined, epoch);
@@ -228,7 +243,7 @@ await test('a late bootstrap reply cannot overwrite fallback commands written af
   server = emptyAllowanceAuthorityState();
   values.allowanceAuthority = {};
   bridge = createAllowanceBridge({
-    getConnection: () => ({ epoch, send }),
+    getConnection: () => connected ? ({ epoch, send }) : null,
     onAuthority: (state) => results.push(state.revision),
     initializationTimeoutMs: 0,
   });
@@ -337,6 +352,155 @@ await test('equal-revision divergent fallback usage is promoted instead of overw
   const bootstrap = sent.filter((message) => message.type === 'allowanceBootstrap').at(-1);
   assert.equal(bootstrap.allowance.revision, baseRevision + 2);
   assert.equal(bootstrap.allowance.categories[conflictCategory].ledger.openingsUsed, 1);
+});
+
+await test('a local read failure rejects its command instead of orphaning it', async () => {
+  const operation = configure(80);
+  heldReplies.add(operation.operationId);
+  const pending = bridge.submit(operation);
+  for (let n = 0; n < 4; n++) await flush();
+  assert.equal(sent.at(-1).command.operationId, operation.operationId);
+  readFailure = 'injected local read failure';
+  heldReplies.delete(operation.operationId);
+  send(sent.at(-1));
+  await assert.rejects(pending, /injected local read failure/);
+  // The daemon still applied it; adopt the snapshot so later checks include it.
+  bridge.onMessage({ type: 'allowanceStateSync', allowance: server }, epoch);
+  for (let n = 0; n < 8; n++) await flush();
+  assert.equal(bridge.current().revision, server.revision);
+  assert.equal(values.allowanceAuthority.revision, server.revision);
+});
+
+await test('a daemon revision lead preserves local-only receipts above both revisions', async () => {
+  bridge.reset();
+  epoch++;
+  connected = true;
+  values.allowanceAuthority = {};
+  server = emptyAllowanceAuthorityState();
+  const scope = 'news';
+  const config = {
+    dailyAllowanceMs: 600_000, dailyOpenings: 2, waitingBaseMs: 0, waitingStepMs: 0,
+    waitingMaxMs: 0, rewardCapMs: 60_000,
+  };
+  const configured = await submitLocalAllowanceCommand({
+    kind: 'configure', operationId: id(81), category: scope, config,
+  });
+  assert.equal(configured.ok, true);
+  server = structuredClone(configured.state);
+  bridge = createAllowanceBridge({
+    getConnection: () => connected ? ({ epoch, send }) : null,
+    onAuthority: (state) => results.push(state.revision),
+  });
+  bridge.onMessage({ type: 'allowanceStateSync', allowance: server }, epoch);
+  for (let n = 0; n < 8; n++) await flush();
+  const base = server.revision;
+  assert.equal(bridge.current().revision, base);
+
+  // The browser mints one opening while offline.
+  const opened = await submitLocalAllowanceCommand({
+    kind: 'opening-start', operationId: id(82), category: scope, grantId: 'offline-lead', ...at,
+  });
+  assert.equal(opened.ok, true);
+  assert.equal(opened.state.revision, base + 1);
+  assert.equal(opened.state.categories[scope].ledger.openingsUsed, 1);
+
+  // Independently, the daemon commits two unrelated rewards (a revision lead)
+  // that do not include the browser's opening receipt.
+  for (const n of [83, 84]) {
+    const command = { ...reward(n), category: scope };
+    const applied = applyAllowanceCommand(server, command, server.revision);
+    assert.equal(applied.ok, true);
+    server = commitAllowanceCommandRevision(applied.state, server.revision + 1, command);
+  }
+  assert.equal(server.revision, base + 2);
+  assert.equal(server.categories[scope].ledger.openingsUsed, 0);
+
+  bridge.onMessage({ type: 'allowanceStateSync', allowance: server }, epoch);
+  for (let n = 0; n < 10; n++) await flush();
+
+  const settled = values.allowanceAuthority;
+  assert.equal(settled.revision, base + 3, 'promotion clears the daemon lead too');
+  assert.equal(settled.categories[scope].ledger.openingsUsed, 1, 'offline opening survives');
+  assert.equal(server.revision, base + 3, 'the daemon adopted the promoted snapshot');
+  assert.equal(server.categories[scope].ledger.openingsUsed, 1);
+  assert.equal(bridge.current().revision, base + 3);
+});
+
+await test('a retired epoch observation cannot latch over the new connection', async () => {
+  bridge.reset();
+  epoch++;
+  connected = true;
+  values.allowanceAuthority = structuredClone(server);
+  bridge = createAllowanceBridge({
+    getConnection: () => connected ? ({ epoch, send }) : null,
+    onAuthority: (state) => results.push(state.revision),
+  });
+  bridge.onMessage({ type: 'allowanceStateSync', allowance: server }, epoch);
+  for (let n = 0; n < 8; n++) await flush();
+  const base = server.revision;
+  assert.equal(bridge.current().revision, base);
+
+  const stale = structuredClone(server);
+  stale.revision = base + 5;
+  stale.categories['news'].ledger.openingsUsed = 0;
+  const gate = deferred();
+  readGate = gate;
+  bridge.onMessage({ type: 'allowanceStateSync', allowance: stale }, epoch);
+  for (let n = 0; n < 3; n++) await flush();
+  // Retire the connection while the observation is parked in its local read.
+  bridge.reset();
+  epoch++;
+  const fresh = structuredClone(server);
+  fresh.revision = base + 1;
+  bridge.onMessage({ type: 'allowanceStateSync', allowance: fresh }, epoch);
+  for (let n = 0; n < 3; n++) await flush();
+  gate.resolve();
+  for (let n = 0; n < 10; n++) await flush();
+
+  assert.equal(bridge.current().revision, base + 1, 'the stale epoch did not win');
+  assert.equal(values.allowanceAuthority.revision, base + 1);
+  assert.equal(values.allowanceAuthority.categories['news'].ledger.openingsUsed, 1);
+});
+
+await test('a committed daemon snapshot is mirrored before an offline fallback extends it', async () => {
+  bridge.reset();
+  epoch++;
+  connected = true;
+  values.allowanceAuthority = structuredClone(server);
+  bridge = createAllowanceBridge({
+    getConnection: () => connected ? ({ epoch, send }) : null,
+    onAuthority: (state) => results.push(state.revision),
+  });
+  bridge.onMessage({ type: 'allowanceStateSync', allowance: server }, epoch);
+  for (let n = 0; n < 8; n++) await flush();
+  const base = server.revision;
+  const config = {
+    dailyAllowanceMs: 600_000, dailyOpenings: 1, waitingBaseMs: 0, waitingStepMs: 0,
+    waitingMaxMs: 0, rewardCapMs: 60_000,
+  };
+
+  const daemonCommand = { kind: 'configure', operationId: id(90), category: 'daemon-only', config };
+  heldReplies.add(daemonCommand.operationId);
+  const pending = bridge.submit(daemonCommand);
+  for (let n = 0; n < 4; n++) await flush();
+  writeFailure = 'injected mirror failure';
+  heldReplies.delete(daemonCommand.operationId);
+  send(sent.at(-1));
+  await assert.rejects(pending, /injected mirror failure/);
+  assert.equal(server.revision, base + 1, 'the daemon committed the command');
+  assert.equal(values.allowanceAuthority.revision, base, 'the local mirror did not');
+  assert.equal(bridge.current().revision, base + 1, 'the accepted snapshot is in memory');
+
+  connected = false;
+  const response = await dispatch({
+    kind: 'configure', operationId: id(91), category: 'fallback-only', config,
+  });
+  assert.equal(response.source, 'fallback');
+  const local = values.allowanceAuthority;
+  assert.equal(local.revision, base + 2, 'fallback extended the flushed daemon revision');
+  assert.ok(local.categories['daemon-only'], 'the daemon-committed command was not lost');
+  assert.ok(local.categories['fallback-only']);
+  connected = true;
 });
 
 console.log(`\n${passed} passed, 0 failed`);

@@ -1909,15 +1909,27 @@ fn compensate_clock_tamper(
     Some(skew)
 }
 
+/// App identity pinned while a lock is active: both the legacy contains
+/// entries and the typed targets the lock began with (or learned since).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct PinnedApps {
+    legacy: Vec<String>,
+    targets: Vec<crate::app_targets::AppTarget>,
+}
+
 /// Mid-lock `config.json` self-healing. While locked, the data dir is the
-/// user's last tamper surface: if the blocklist on disk lost any entry the
+/// user's last tamper surface: if the app list on disk lost any entry the
 /// daemon saw when the lock began, put it back and persist. New entries the
 /// user ADDS are learned (locks are strictening-only). Returns the config
 /// the tick should use.
-fn heal_config(shared: &Shared, locked_apps: &mut Vec<String>) -> CompanionConfig {
+///
+/// Typed targets compare by canonical key, so re-ordering or case/separator
+/// respellings of the same identity are not mistaken for a removal. A target
+/// swapped for a DIFFERENT identity is restored exactly like a dropped one.
+fn heal_config(shared: &Shared, pinned: &mut PinnedApps) -> CompanionConfig {
     let mut config = shared.store.load_config();
     let mut restored: Vec<String> = Vec::new();
-    for entry in locked_apps.iter() {
+    for entry in pinned.legacy.iter() {
         if !config
             .app_blocklist
             .iter()
@@ -1927,17 +1939,42 @@ fn heal_config(shared: &Shared, locked_apps: &mut Vec<String>) -> CompanionConfi
             restored.push(entry.clone());
         }
     }
-    if !restored.is_empty() {
+    let mut restored_targets: Vec<String> = Vec::new();
+    for target in pinned.targets.iter() {
+        if !config
+            .app_targets
+            .iter()
+            .any(|present| present.key() == target.key())
+        {
+            config.app_targets.push(target.clone());
+            restored_targets.push(target.key());
+        }
+    }
+    if !restored.is_empty() || !restored_targets.is_empty() {
         if let Err(e) = shared.store.save_config(&config) {
             eprintln!("[daemon] failed to restore tampered config: {e}");
         }
-        shared.log_event("config-tamper-restored", &restored.join(", "));
+        let mut detail = restored;
+        detail.extend(restored_targets);
+        shared.log_event("config-tamper-restored", &detail.join(", "));
     }
     for entry in &config.app_blocklist {
-        if !locked_apps.iter().any(|e| e.eq_ignore_ascii_case(entry)) {
-            locked_apps.push(entry.clone());
+        if !pinned.legacy.iter().any(|e| e.eq_ignore_ascii_case(entry)) {
+            pinned.legacy.push(entry.clone());
         }
     }
+    for target in &config.app_targets {
+        if !pinned
+            .targets
+            .iter()
+            .any(|known| known.key() == target.key())
+        {
+            pinned.targets.push(target.clone());
+        }
+    }
+    // A healed config may have appended targets after load; keep the version
+    // truthful for anything that reads the in-memory value this tick.
+    config.app_targets_version = crate::app_targets::version_for(&config.app_targets);
     config
 }
 
@@ -2096,9 +2133,9 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
             // ratchet (+55s every few seconds — invisible to the per-tick
             // guard) still catches up. None while unlocked.
             let mut clock_anchor: Option<ClockAnchor> = load_clock_anchor(&shared.store);
-            // Blocklist entries observed while the current lock session has
+            // App identities observed while the current lock session has
             // been active; the reference for config-tamper restoration.
-            let mut locked_apps: Vec<String> = Vec::new();
+            let mut pinned_apps = PinnedApps::default();
             // License key pinned at lock start (red-team #24): None = not
             // pinned yet, Some = the key (or no-key posture) the lock began
             // with. Restored by the heal below if edited mid-lock.
@@ -2130,7 +2167,7 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
                         clock_anchor = None;
                         clear_clock_anchor(&shared.store);
                     }
-                    locked_apps.clear();
+                    pinned_apps = PinnedApps::default();
                     license_pin = None;
                     shared.set_enforcer_state(EnforcerState::default());
                     write_status_snapshot(&shared, now_wall, now_mono);
@@ -2190,7 +2227,7 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
                 // Self-healing runs whenever locked (armed or enforcing):
                 // the data dir must not be a mid-lock tamper surface.
                 heal_lock_file(&shared, now_wall);
-                let mut config = heal_config(&shared, &mut locked_apps);
+                let mut config = heal_config(&shared, &mut pinned_apps);
                 heal_license_key(&shared, &mut license_pin, &mut config);
                 // Armed-phase enforcement (red-team #25): the enforcer runs
                 // for EVERY armed phase (timer, password, frozen, schedule
@@ -2878,6 +2915,7 @@ mod tests {
             name: "chrome".into(),
             cmd: vec![],
             exe: None,
+            package_family: None,
         }];
         let (state, _) = enforcer::tick(
             &EnforcerState::default(),
@@ -3535,17 +3573,17 @@ mod tests {
         shared.store.save_config(&config).unwrap();
 
         // First locked tick: nothing to restore, learning happens.
-        let mut locked_apps = Vec::new();
-        let healed = heal_config(&shared, &mut locked_apps);
+        let mut pinned = PinnedApps::default();
+        let healed = heal_config(&shared, &mut pinned);
         assert_eq!(healed.app_blocklist, vec!["steam".to_string()]);
-        assert_eq!(locked_apps, vec!["steam".to_string()]);
+        assert_eq!(pinned.legacy, vec!["steam".to_string()]);
 
         // User wipes the blocklist on disk mid-lock: restored immediately.
         shared
             .store
             .save_config(&CompanionConfig::default())
             .unwrap();
-        let healed = heal_config(&shared, &mut locked_apps);
+        let healed = heal_config(&shared, &mut pinned);
         assert_eq!(healed.app_blocklist, vec!["steam".to_string()]);
         assert_eq!(
             shared.store.load_config().app_blocklist,
@@ -3558,9 +3596,9 @@ mod tests {
             ..CompanionConfig::default()
         };
         shared.store.save_config(&added).unwrap();
-        heal_config(&shared, &mut locked_apps);
+        heal_config(&shared, &mut pinned);
         assert_eq!(
-            locked_apps,
+            pinned.legacy,
             vec!["steam".to_string(), "epicgames".to_string()]
         );
 
@@ -3570,7 +3608,7 @@ mod tests {
             ..CompanionConfig::default()
         };
         shared.store.save_config(&swapped).unwrap();
-        let healed = heal_config(&shared, &mut locked_apps);
+        let healed = heal_config(&shared, &mut pinned);
         assert_eq!(
             healed.app_blocklist,
             vec!["epicgames".to_string(), "steam".to_string()]
@@ -3666,6 +3704,57 @@ mod tests {
                 "notion".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn config_heal_restores_and_learns_typed_targets() {
+        let (_dir, shared) = test_shared();
+        let path = crate::app_targets::AppTarget::exe_path(r"C:\Games\Steam\steam.exe").unwrap();
+        let package = crate::app_targets::AppTarget::msix_package(
+            "Microsoft.WindowsCalculator_8wekyb3d8bbwe",
+        )
+        .unwrap();
+        let config = CompanionConfig {
+            app_targets: vec![path.clone()],
+            ..CompanionConfig::default()
+        };
+        shared.store.save_config(&config).unwrap();
+
+        // First locked tick learns the target and persists the version.
+        let mut pinned = PinnedApps::default();
+        let healed = heal_config(&shared, &mut pinned);
+        assert_eq!(healed.app_targets, vec![path.clone()]);
+        assert_eq!(healed.app_targets_version, 1);
+        assert_eq!(pinned.targets, vec![path.clone()]);
+
+        // Mid-lock wipe: the exact target comes back.
+        shared
+            .store
+            .save_config(&CompanionConfig::default())
+            .unwrap();
+        let healed = heal_config(&shared, &mut pinned);
+        assert_eq!(healed.app_targets, vec![path.clone()]);
+        assert_eq!(shared.store.load_config().app_targets, vec![path.clone()]);
+
+        // A new target is learned...
+        let added = CompanionConfig {
+            app_targets: vec![path.clone(), package.clone()],
+            ..CompanionConfig::default()
+        };
+        shared.store.save_config(&added).unwrap();
+        heal_config(&shared, &mut pinned);
+        assert_eq!(pinned.targets, vec![path.clone(), package.clone()]);
+
+        // ...and swapping it away restores the previously pinned identity.
+        let swapped = CompanionConfig {
+            app_blocklist: vec!["steam".into()],
+            app_targets: vec![package.clone()],
+            ..CompanionConfig::default()
+        };
+        shared.store.save_config(&swapped).unwrap();
+        let healed = heal_config(&shared, &mut pinned);
+        assert_eq!(healed.app_targets, vec![package, path]);
+        assert_eq!(healed.app_blocklist, vec!["steam".to_string()]);
     }
 
     #[test]
@@ -3854,7 +3943,7 @@ mod tests {
 
         let mut pin = None;
         // First locked tick pins the key, nothing to restore.
-        let mut config = heal_config(&shared, &mut Vec::new());
+        let mut config = heal_config(&shared, &mut PinnedApps::default());
         heal_license_key(&shared, &mut pin, &mut config);
         assert_eq!(pin, Some(Some(key.clone())));
 
@@ -3863,7 +3952,7 @@ mod tests {
             .store
             .save_config(&CompanionConfig::default())
             .unwrap();
-        let mut config = heal_config(&shared, &mut Vec::new());
+        let mut config = heal_config(&shared, &mut PinnedApps::default());
         heal_license_key(&shared, &mut pin, &mut config);
         assert_eq!(config.license_key.as_deref(), Some(key.as_str()));
         assert_eq!(
@@ -3886,7 +3975,7 @@ mod tests {
                 ..CompanionConfig::default()
             })
             .unwrap();
-        let mut config = heal_config(&shared, &mut Vec::new());
+        let mut config = heal_config(&shared, &mut PinnedApps::default());
         heal_license_key(&shared, &mut pin, &mut config);
         assert_eq!(config.license_key.as_deref(), Some(key.as_str()));
     }
@@ -3897,7 +3986,7 @@ mod tests {
         // strictening and learned (mirrors blocklist additions).
         let (_dir, shared) = test_shared();
         let mut pin = None;
-        let mut config = heal_config(&shared, &mut Vec::new());
+        let mut config = heal_config(&shared, &mut PinnedApps::default());
         heal_license_key(&shared, &mut pin, &mut config);
         assert_eq!(pin, Some(None));
 
@@ -3909,7 +3998,7 @@ mod tests {
                 ..CompanionConfig::default()
             })
             .unwrap();
-        let mut config = heal_config(&shared, &mut Vec::new());
+        let mut config = heal_config(&shared, &mut PinnedApps::default());
         heal_license_key(&shared, &mut pin, &mut config);
         assert_eq!(pin, Some(Some(key.clone())));
         assert_eq!(config.license_key.as_deref(), Some(key.as_str()));

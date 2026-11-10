@@ -21,6 +21,9 @@ pub struct ProcInfo {
     /// immunity binds to this (exe under the companion's install dir), so a
     /// process merely RENAMED to a protected stem can't inherit trust.
     pub exe: Option<String>,
+    /// Microsoft Store package family name when Windows exposes it. `None`
+    /// for unpackaged processes (and on every non-Windows platform).
+    pub package_family: Option<String>,
 }
 
 pub trait ProcessSource {
@@ -73,6 +76,7 @@ impl ProcessSource for SysinfoSource {
                     .map(|s| s.to_string_lossy().to_lowercase())
                     .collect(),
                 exe: p.exe().map(|path| path.to_string_lossy().to_lowercase()),
+                package_family: crate::win_meta::process_package_family(pid.as_u32()),
             })
             .collect();
         // Keep kill-immunity fresh from the same data the enforcer tick will
@@ -184,12 +188,14 @@ mod tests {
             name: "chrome".into(),
             cmd: Vec::new(),
             exe: None,
+            package_family: None,
         }];
         let b = vec![ProcInfo {
             pid: 2,
             name: "steam".into(),
             cmd: Vec::new(),
             exe: None,
+            package_family: None,
         }];
         let mut src = FakeSource::new(vec![a.clone(), b.clone()]);
         assert_eq!(src.snapshot(), a);

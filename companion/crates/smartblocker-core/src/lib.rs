@@ -9,6 +9,7 @@
 
 pub mod activity;
 pub mod allowance;
+pub mod app_targets;
 pub mod apps;
 pub mod browsers;
 pub mod daemon;
@@ -28,3 +29,4 @@ pub mod registration;
 pub mod snapshot;
 pub mod store;
 pub mod supervisor;
+pub mod win_meta;

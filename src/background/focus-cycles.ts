@@ -17,6 +17,13 @@ let ticking: Promise<void> | null = null;
 let startingEpoch: number | null = null;
 let operationEpoch = 0;
 let lastIssue: string | null = null;
+// Incremented synchronously whenever `program` is replaced. A storage read
+// that began before the replacement holds stale data and must not assign it
+// over the newer in-memory state.
+let stateGeneration = 0;
+// Persistence is serialized so a slow write for an older snapshot can never
+// land after (and resurrect) a newer clear or replacement.
+let storeQueue: Promise<void> = Promise.resolve();
 
 function id(): string { return crypto.randomUUID().replaceAll('-', ''); }
 function clone(state: FocusCycleProgram): FocusCycleProgram {
@@ -26,21 +33,45 @@ function clone(state: FocusCycleProgram): FocusCycleProgram {
 function currentProgramId(): string | null {
   return program ? program.id : null;
 }
+function persist(task: () => Promise<void>): Promise<void> {
+  const attempt = storeQueue.then(task);
+  storeQueue = attempt.then(
+    () => undefined,
+    () => undefined,
+  );
+  return attempt;
+}
 async function store(next: FocusCycleProgram | null): Promise<void> {
   if (next) {
     if (!parseFocusCycleProgram(next)) throw new Error('Invalid focus cycle state.');
-    program = clone(next);
-    await api.storage.local.set({ [STORAGE_KEY]: clone(next) });
+    const snapshot = clone(next);
+    program = snapshot;
+    stateGeneration++;
+    await persist(() => api.storage.local.set({ [STORAGE_KEY]: snapshot }));
   } else {
     program = null;
-    await api.storage.local.remove(STORAGE_KEY);
+    stateGeneration++;
+    await persist(() => api.storage.local.remove(STORAGE_KEY));
   }
 }
 async function getProgram(): Promise<FocusCycleProgram | null> {
   if (program) return clone(program);
+  // Let an already-queued clear/replacement reach storage first; otherwise
+  // this read can observe a snapshot that the in-memory state already left.
+  await storeQueue;
+  if (program) return clone(program);
+  const generation = stateGeneration;
   const stored = await api.storage.local.get(STORAGE_KEY);
-  program = parseFocusCycleProgram(stored[STORAGE_KEY]);
+  if (generation === stateGeneration) {
+    // Only adopt the read if nothing replaced the in-memory state while it was
+    // in flight; otherwise `program` already holds the newer truth.
+    program = parseFocusCycleProgram(stored[STORAGE_KEY]);
+  }
   return program ? clone(program) : null;
+}
+/** True while the captured session still owns the module's current program. */
+function owns(epoch: number, programId: string): boolean {
+  return epoch === operationEpoch && program?.id === programId;
 }
 function issue(error: unknown): void {
   lastIssue = error instanceof Error ? error.message : String(error);
@@ -138,11 +169,14 @@ async function rewardWork(): Promise<void> {
   if (!result.ok && (result.reason === 'clock-rollback' || result.reason === 'day-rollback')) {
     // This stage ended without our command having reached authority. A later
     // observation makes replay illegal: abandon the reward, do not invent one.
+    // A newer start/cancel now owns the program, so only the issuing session
+    // may advance it.
+    if (!owns(epoch, current.id)) return;
     await advanceAfterBreak(Date.now());
     return;
   }
   if (!result.ok) throw new Error(result.error ?? result.reason ?? 'Reward was refused.');
-  if (epoch !== operationEpoch || program?.id !== current.id) return;
+  if (!owns(epoch, current.id)) return;
   await store({ ...current, pendingCommand: null });
 }
 
@@ -173,12 +207,14 @@ async function startBreak(now: number): Promise<void> {
   if (!result.ok && (result.reason === 'clock-rollback' || result.reason === 'day-rollback')) {
     // The opportunity had already ended/rolled back before command settlement.
     // Skip this fixed break; do not compound it into a later legal overlap.
+    // Only the issuing session may advance; a newer start must stay untouched.
+    if (!owns(epoch, current.id)) return;
     await advanceAfterBreak(now);
     return;
   }
   if (!result.ok) throw new Error(result.error ?? result.reason ?? 'Pomodoro relief was refused.');
-  if (epoch !== operationEpoch || program?.id !== current.id) return;
-  await store({ ...(program as FocusCycleProgram), pendingCommand: null });
+  if (!owns(epoch, current.id) || !program) return;
+  await store({ ...program, pendingCommand: null });
 }
 
 async function advanceAfterBreak(now: number): Promise<void> {
@@ -202,6 +238,9 @@ async function advanceAfterBreak(now: number): Promise<void> {
 async function runTick(): Promise<void> {
   const epoch = operationEpoch;
   const current = await getProgram();
+  // A start or cancel that began during the read owns scheduling now. Arming
+  // from this pass could otherwise clear the alarm it just installed.
+  if (epoch !== operationEpoch) return;
   if (!current) {
     await arm(null);
     return;
@@ -216,6 +255,7 @@ async function runTick(): Promise<void> {
     if (epoch !== operationEpoch || !program || program.id !== current.id) return;
     if (current.mode === 'focus') {
       await store(null);
+      if (epoch !== operationEpoch) return;
       await arm(null, now);
       return;
     }

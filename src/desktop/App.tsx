@@ -144,8 +144,12 @@ function Sidebar({ activeId }: { activeId: string }) {
             const active = p.id === activeId;
             const PageIcon = p.icon;
             let meta: React.ReactNode = null;
-            if (status && p.id === 'apps' && status.appBlocklist.length > 0) {
-              meta = <span className="font-mono text-[11px] tabular-nums text-faint">{status.appBlocklist.length}</span>;
+            if (status && p.id === 'apps' && status.appBlocklist.length + status.appTargets.length > 0) {
+              meta = (
+                <span className="font-mono text-[11px] tabular-nums text-faint">
+                  {status.appBlocklist.length + status.appTargets.length}
+                </span>
+              );
             }
             if (status && p.id === 'browsers' && status.daemon.running) {
               meta = noBrowsers ? (
