@@ -40,6 +40,7 @@ import {
   sanitizeBlockMessage,
 } from './display-prefs.ts';
 import {
+  MAX_SCHEDULE_LABEL_LENGTH,
   validateCategoryScheduleRule,
   validateScheduleRule,
   type CategoryScheduleRule,
@@ -358,6 +359,7 @@ function canonicalRule(rule: ScheduleRule): ScheduleRule {
     startMinutes: rule.startMinutes,
     endMinutes: rule.endMinutes,
   };
+  if (typeof rule.label === 'string' && rule.label) out.label = rule.label;
   if (typeof rule.leadMinutes === 'number' && rule.leadMinutes > 0) {
     out.leadMinutes = rule.leadMinutes;
   }
@@ -444,6 +446,20 @@ function sanitizeRule(raw: unknown, warnings: string[], label: string): Schedule
     startMinutes,
     endMinutes,
   };
+  if (raw.label !== undefined && raw.label !== null) {
+    if (typeof raw.label === 'string') {
+      // Display-only; flatten control characters and cap it rather than
+      // dropping an otherwise valid enforcement window.
+      const cleaned = raw.label
+        .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, MAX_SCHEDULE_LABEL_LENGTH);
+      if (cleaned) rule.label = cleaned;
+    } else {
+      warnings.push(`Ignored a malformed name on ${label} rule “${id}”.`);
+    }
+  }
   if (raw.leadMinutes !== undefined && raw.leadMinutes !== null) {
     if (typeof raw.leadMinutes === 'number' && Number.isInteger(raw.leadMinutes)) {
       if (raw.leadMinutes > 0) rule.leadMinutes = raw.leadMinutes;

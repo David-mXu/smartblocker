@@ -7,6 +7,10 @@
 
 export interface ScheduleRule {
   id: string;
+  /** Optional user-facing name. Display-only: evaluation never reads it.
+   *  Bounded by `MAX_SCHEDULE_LABEL_LENGTH`; the companion mirror keeps it
+   *  so a daemon round-trip cannot strip the editor's duplicate label. */
+  label?: string;
   /** Days the window STARTS on: 0–6, Sunday = 0 (matches Date.getDay()). */
   days: number[];
   /** Minutes since local midnight, 0..1439. */
@@ -56,6 +60,9 @@ export const MAX_RANDOM_TEXT_LOCK_LENGTH = 5_000;
 /** Per-schedule settings-lock lead time. 0/absent means OFF. */
 export const MIN_SCHEDULE_LEAD_MINUTES = 1;
 export const MAX_SCHEDULE_LEAD_MINUTES = 1_440;
+/** Display-only rule-name cap; mirrors `MAX_SCHEDULE_LABEL_LENGTH` in the
+ *  Rust companion. Labels do not affect schedule evaluation. */
+export const MAX_SCHEDULE_LABEL_LENGTH = 80;
 
 export interface LockState {
   /** When this break operation was requested. All three nullable break
@@ -515,7 +522,10 @@ function compareUtf8(a: string, b: string): number {
 function scheduleCanon(r: ScheduleRule): string {
   return (
     `${r.startMinutes}|${r.endMinutes}|${[...r.days].sort((x, y) => x - y).join(',')}|` +
-    `${r.tzOffsetMinutes ?? ''}|${utf8Hex(r.tzName ?? '')}|${ruleLeadMinutes(r) || ''}`
+    `${r.tzOffsetMinutes ?? ''}|${utf8Hex(r.tzName ?? '')}|${ruleLeadMinutes(r) || ''}|` +
+    // Display-only, but two peers can hold the same rule with different
+    // labels; including it keeps the tie-breaker commutative.
+    `${utf8Hex(r.label ?? '')}`
   );
 }
 

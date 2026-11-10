@@ -51,8 +51,11 @@ fn canon(r: &ScheduleRule) -> String {
         .filter(|m| (1..=1_440).contains(m))
         .map(|m| m.to_string())
         .unwrap_or_default();
+    // The label is display-only, but two peers can hold the same rule with
+    // different labels; including it keeps the tie-breaker commutative.
+    let label = utf8_hex(r.label.as_deref().unwrap_or_default());
     format!(
-        "{}|{}|{days}|{tz_off}|{tz_name}|{lead}",
+        "{}|{}|{days}|{tz_off}|{tz_name}|{lead}|{label}",
         r.start_minutes, r.end_minutes
     )
 }

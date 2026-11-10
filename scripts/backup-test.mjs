@@ -188,7 +188,13 @@ await test('a valid backup round-trips byte-for-byte', () => {
       defaultAppBlocklistUpdatedAt: 12,
     },
     schedules: [
-      { id: 's_one', days: [1, 2, 3, 4, 5], startMinutes: 540, endMinutes: 1020 },
+      {
+        id: 's_one',
+        label: 'Deep work',
+        days: [1, 2, 3, 4, 5],
+        startMinutes: 540,
+        endMinutes: 1020,
+      },
     ],
     schedulesUpdatedAt: 5,
   });
@@ -197,6 +203,7 @@ await test('a valid backup round-trips byte-for-byte', () => {
   assert.equal(parsed.ok, true, JSON.stringify(parsed.errors));
   assert.equal(parsed.document.schema, BACKUP_SCHEMA_ID);
   assert.equal(parsed.document.version, BACKUP_SCHEMA_VERSION);
+  assert.equal(parsed.document.schedules.rules[0].label, 'Deep work');
   assert.equal(serializeBackup(parsed.document), text);
 });
 
@@ -256,9 +263,22 @@ await test('sanitize repairs bounds, duplicates and invalid schedule rules', () 
     profiles: profileList,
     schedules: {
       rules: [
-        { id: 's_ok', days: [1, 1, 2], startMinutes: 540, endMinutes: 600 },
+        {
+          id: 's_ok',
+          label: '  Deep\n work\t',
+          days: [1, 1, 2],
+          startMinutes: 540,
+          endMinutes: 600,
+        },
         { id: 's_bad', days: [9], startMinutes: 540, endMinutes: 600 },
         { id: 's_equal', days: [1], startMinutes: 600, endMinutes: 600 },
+        {
+          id: 's_label',
+          label: 'L'.repeat(200),
+          days: [4],
+          startMinutes: 700,
+          endMinutes: 800,
+        },
         { id: 's_ok', days: [3], startMinutes: 700, endMinutes: 800 },
       ],
     },
@@ -274,8 +294,10 @@ await test('sanitize repairs bounds, duplicates and invalid schedule rules', () 
   assert.equal(new Set(document.profiles.map((profile) => profile.id)).size, 12);
   assert.equal(new Set(document.profiles.map((profile) => profile.name.toLowerCase())).size, 12);
   assert.equal(document.profiles[0].policy.whitelist.length, 1000);
-  assert.deepEqual(document.schedules.rules.map((rule) => rule.id), ['s_ok']);
+  assert.deepEqual(document.schedules.rules.map((rule) => rule.id), ['s_ok', 's_label']);
   assert.deepEqual(document.schedules.rules[0].days, [1, 2]);
+  assert.equal(document.schedules.rules[0].label, 'Deep work');
+  assert.equal(document.schedules.rules[1].label.length, 80);
   assert.deepEqual(document.categorySchedules.rules.map((rule) => rule.id), ['c_ok']);
   assert.ok(warnings.length > 0);
 });

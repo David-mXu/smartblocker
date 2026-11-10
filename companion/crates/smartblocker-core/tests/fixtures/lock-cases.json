@@ -349,6 +349,70 @@
       "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [{ "id": "lead", "days": [1], "startMinutes": 540, "endMinutes": 1020, "leadMinutes": 60, "tzOffsetMinutes": 0, "tzName": "UTC" }], "schedulesUpdatedAt": 0 }
     },
     {
+      "name": "equal timestamps same-id schedule conflict includes the display label in the canonical tiebreak",
+      "a": {
+        "timerUntil": null,
+        "passwordHash": null,
+        "frozenUntil": null,
+        "schedules": [
+          {
+            "id": "label-tie",
+            "days": [
+              1
+            ],
+            "startMinutes": 540,
+            "endMinutes": 1020,
+            "tzOffsetMinutes": 0,
+            "tzName": "UTC",
+            "label": "Zulu block"
+          }
+        ]
+      },
+      "b": {
+        "timerUntil": null,
+        "passwordHash": null,
+        "frozenUntil": null,
+        "schedules": [
+          {
+            "id": "label-tie",
+            "days": [
+              1
+            ],
+            "startMinutes": 540,
+            "endMinutes": 1020,
+            "tzOffsetMinutes": 0,
+            "tzName": "UTC",
+            "label": "Alpha block"
+          }
+        ]
+      },
+      "now": 0,
+      "expect": {
+        "timerUntil": null,
+        "passwordHash": null,
+        "frozenUntil": null,
+        "schedules": [
+          {
+            "id": "label-tie",
+            "days": [
+              1
+            ],
+            "startMinutes": 540,
+            "endMinutes": 1020,
+            "tzOffsetMinutes": 0,
+            "tzName": "UTC",
+            "label": "Alpha block"
+          }
+        ],
+        "breakStartedAt": null,
+        "breakNotBefore": null,
+        "breakEndsAt": null,
+        "breakUpdatedAt": 0,
+        "passwordTs": 0,
+        "schedulesUpdatedAt": 0
+      }
+    },
+    {
       "name": "a settings-lock lead protects the locked side's schedule list from an unlocked newer write",
       "a": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [{ "id": "lead", "days": [1], "startMinutes": 540, "endMinutes": 1020, "leadMinutes": 30, "tzOffsetMinutes": 0, "tzName": "UTC" }], "schedulesUpdatedAt": 1000 },
       "b": { "timerUntil": null, "passwordHash": null, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 9999 },
