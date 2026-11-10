@@ -485,6 +485,26 @@ await test('merge updates by id, adds new profiles, keeps local-only profiles an
   assert.equal(applied.schedules[0].tzName, 'America/Toronto');
 });
 
+await test('merge updates a display-only schedule label and bumps the sync stamp', () => {
+  const base = makeState({
+    schedules: [
+      { id: 's_named', label: 'Old name', days: [1], startMinutes: 540, endMinutes: 600 },
+    ],
+    schedulesUpdatedAt: 10,
+  });
+  const renamed = makeDoc(
+    makeState({
+      schedules: [
+        { id: 's_named', label: 'New name', days: [1], startMinutes: 540, endMinutes: 600 },
+      ],
+      schedulesUpdatedAt: 20,
+    }),
+  );
+  const applied = mergeBackupState(base, renamed, options);
+  assert.equal(applied.schedules[0].label, 'New name');
+  assert.equal(applied.schedulesUpdatedAt, options.now);
+});
+
 await test('merge matches by normalized name when the stable id differs', () => {
   const named = makeDoc(
     makeState({

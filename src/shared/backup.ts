@@ -1119,6 +1119,7 @@ function ruleKey(rule: ScheduleRule | CategoryScheduleRule): string {
   const category = 'categories' in rule ? rule.categories : [];
   return JSON.stringify([
     rule.id,
+    rule.label ?? '',
     [...rule.days].sort((a, b) => a - b),
     rule.startMinutes,
     rule.endMinutes,
@@ -1135,6 +1136,7 @@ function rulesEqual<T extends ScheduleRule>(a: readonly T[], b: readonly T[]): b
 
 function sameRuleCore(a: ScheduleRule, b: ScheduleRule): boolean {
   return (
+    (a.label ?? '') === (b.label ?? '') &&
     a.startMinutes === b.startMinutes &&
     a.endMinutes === b.endMinutes &&
     (a.leadMinutes ?? 0) === (b.leadMinutes ?? 0) &&
