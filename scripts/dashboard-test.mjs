@@ -238,6 +238,29 @@ if (DST_CHILD) {
     assert.equal(result.blocking.forced, true);
   });
 
+  await test('focus-hours lead-in locks settings without forcing blocking early', () => {
+    const start = localMs(2026, 11, 9, 16, 0);
+    const end = localMs(2026, 11, 9, 18, 0);
+    const leadRule = rule({ startMinutes: 16 * 60, endMinutes: 18 * 60, leadMinutes: 30 });
+    const duringLead = model({ lockState: { schedules: [leadRule] } });
+    assert.deepEqual(duringLead.lock.reasons.map((reason) => reason.reason), ['schedule-lead']);
+    assert.equal(duringLead.lock.reasons[0].name, 'Focus-hours lead-in');
+    assert.match(duringLead.lock.reasons[0].detail, /blocking starts at 4:00 PM/);
+    assert.equal(duringLead.lock.reasons[0].endsAt, end);
+    assert.equal(duringLead.lock.reasons[0].countdown.remainingMs, end - NOW);
+    assert.equal(duringLead.globalWindow.active, false);
+    assert.equal(duringLead.blocking.forced, false);
+    assert.equal(duringLead.blocking.title, 'Blocking on');
+
+    const atStart = model({
+      now: start,
+      lockState: { schedules: [leadRule] },
+    });
+    assert.deepEqual(atStart.lock.reasons.map((reason) => reason.reason), ['schedule']);
+    assert.equal(atStart.globalWindow.active, true);
+    assert.equal(atStart.blocking.forced, true);
+  });
+
   await test('countdown boundaries: exact end removes the source; sub-minute stays positive', () => {
     const end = NOW + MINUTE;
     const justBefore = model({ now: end - 1, lockState: { timerUntil: end } });

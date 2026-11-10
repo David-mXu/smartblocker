@@ -18,6 +18,7 @@ import {
   currentWindowEnd,
   deriveLockStatus,
   nextBoundary,
+  nextWindowStart,
   type CategoryScheduleRule,
   type LockState,
   type LockStatus,
@@ -371,6 +372,7 @@ const REASON_NAMES: Record<LockStatus['reasons'][number], string> = {
   'random-text': 'Random-text lock',
   frozen: 'Focus session',
   schedule: 'Focus hours',
+  'schedule-lead': 'Focus-hours lead-in',
   partner: 'Accountability partner',
 };
 
@@ -452,6 +454,18 @@ function buildLock(
           reason,
           'Focus hours are active; blocking is forced on and settings are frozen.',
           end,
+          true,
+        );
+        break;
+      }
+      case 'schedule-lead': {
+        const start = nextWindowStart(state.schedules, now);
+        push(
+          reason,
+          start !== null
+            ? `Settings are locked early; blocking starts at ${clockAt(start, now, locale)}.`
+            : 'Settings are locked before the next focus-hours window.',
+          status.until,
           true,
         );
         break;

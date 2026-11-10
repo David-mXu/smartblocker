@@ -13,7 +13,7 @@
 // `allowImportingTsExtensions` for exactly this; Vite resolves both forms).
 // Only PUBLIC lock-math exports are consumed — the schedule evaluation
 // (overnight windows, timezone pins) stays single-sourced in lock-math.ts.
-import { nextWindowStart } from './lock-math.ts';
+import { currentWindowEnd, nextWindowStart } from './lock-math.ts';
 import type { ScheduleRule } from './lock-math.ts';
 
 /** How an armed resume fires when the master toggle is off. */
@@ -56,9 +56,23 @@ export function clampResumeAt(value: unknown, now: number): number | null {
  *  Deliberately ignores a rule's settings-lock lead time: "resume when
  *  focus hours begin" means the real window start, not the earlier lead
  *  freeze (which does not force blocking). `nextWindowStart` shares the
- *  exact overnight/timezone-pin evaluation with lock-math. */
+ *  exact overnight/timezone-pin evaluation with lock-math.
+ *
+ *  A start that falls inside an already-active window (overlapping rules) is
+ *  not a transition — the user is blocked continuously across it. Hop past
+ *  the whole contiguous stack first, exactly as the pre-lead implementation
+ *  did. The hop cap is unreachable in practice (each hop advances strictly);
+ *  it exists so a pathological ruleset degrades to "inert" instead of a
+ *  loop. */
 export function nextScheduleStart(rules: ScheduleRule[], now: number): number | null {
-  return nextWindowStart(rules, now);
+  const maxHops = 16 + 8 * rules.length;
+  let t = now;
+  for (let i = 0; i < maxHops; i++) {
+    const end = currentWindowEnd(rules, new Date(t));
+    if (end === null) return nextWindowStart(rules, t);
+    t = end;
+  }
+  return null;
 }
 
 /** The epoch ms at which an armed resume plan should fire, or null when the
