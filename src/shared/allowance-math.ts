@@ -13,6 +13,10 @@ export const MAX_ALLOWANCE_DURATION_MS = 24 * 60 * 60 * 1000;
 export const MAX_DAILY_OPENINGS = 10_000;
 export const DEFAULT_OPENING_INACTIVITY_MS = 120_000;
 export const DEFAULT_OPENING_MAX_LIFETIME_MS = 30 * 60 * 1000;
+/** Bounded productive-work reward defaults: 5 focused minutes -> 1 minute. */
+export const DEFAULT_REWARD_WORK_MS = 5 * 60 * 1000;
+export const DEFAULT_REWARD_AWARD_MS = 60 * 1000;
+export const MIN_REWARD_RATIO_MS = 60 * 1000;
 const EMPTY_DAY_KEY = '1970-01-01';
 
 export type AllowanceGrantKind = 'allowance' | 'opening' | 'pomodoro';
@@ -32,6 +36,12 @@ export interface AllowanceConfig {
   waitingStepMs: number;
   waitingMaxMs: number;
   rewardCapMs: number;
+  /** Opt-in: productive work earns this category's daily reward pool. */
+  rewardEarning?: boolean;
+  /** Productive work that completes one reward unit. */
+  rewardWorkMs?: number;
+  /** Reward credited per completed work unit; normalized to <= rewardWorkMs. */
+  rewardAwardMs?: number;
   /** Optional so existing settings get the specified two-minute default. */
   openingInactivityMs?: number;
   /** Optional fail-closed ceiling, independent of continuing activity. */
@@ -39,6 +49,9 @@ export interface AllowanceConfig {
 }
 
 export interface NormalizedAllowanceConfig extends AllowanceConfig {
+  rewardEarning: boolean;
+  rewardWorkMs: number;
+  rewardAwardMs: number;
   openingInactivityMs: number;
   openingMaxLifetimeMs: number;
 }
@@ -142,6 +155,9 @@ export const DEFAULT_ALLOWANCE_CONFIG: NormalizedAllowanceConfig = {
   waitingStepMs: 0,
   waitingMaxMs: 0,
   rewardCapMs: 0,
+  rewardEarning: false,
+  rewardWorkMs: DEFAULT_REWARD_WORK_MS,
+  rewardAwardMs: DEFAULT_REWARD_AWARD_MS,
   openingInactivityMs: DEFAULT_OPENING_INACTIVITY_MS,
   openingMaxLifetimeMs: DEFAULT_OPENING_MAX_LIFETIME_MS,
 };
@@ -171,6 +187,15 @@ function cleanDuration(value: unknown, fallback = 0): number {
 function cleanOpeningDuration(value: unknown, fallback: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return fallback;
   return Math.max(1, cleanDuration(value));
+}
+
+/** Whole milliseconds within [1 minute, 24 hours]; invalid/zero -> default. */
+function cleanRewardDuration(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return fallback;
+  return Math.min(
+    MAX_ALLOWANCE_DURATION_MS,
+    Math.max(MIN_REWARD_RATIO_MS, Math.floor(value)),
+  );
 }
 
 function saturatingAdd(left: number, right: number): number {
@@ -216,6 +241,11 @@ function validEndReason(value: unknown): value is AllowanceGrantEndReason {
 
 export function normalizeAllowanceConfig(raw: unknown): NormalizedAllowanceConfig {
   const value = isRecord(raw) ? raw : {};
+  const rewardWorkMs = cleanRewardDuration(value.rewardWorkMs, DEFAULT_REWARD_WORK_MS);
+  const rewardAwardMs = Math.min(
+    rewardWorkMs,
+    cleanRewardDuration(value.rewardAwardMs, DEFAULT_REWARD_AWARD_MS),
+  );
   return {
     dailyAllowanceMs: cleanDuration(value.dailyAllowanceMs),
     dailyOpenings: boundedInteger(value.dailyOpenings, MAX_DAILY_OPENINGS),
@@ -223,6 +253,9 @@ export function normalizeAllowanceConfig(raw: unknown): NormalizedAllowanceConfi
     waitingStepMs: cleanDuration(value.waitingStepMs),
     waitingMaxMs: cleanDuration(value.waitingMaxMs),
     rewardCapMs: cleanDuration(value.rewardCapMs),
+    rewardEarning: value.rewardEarning === true,
+    rewardWorkMs,
+    rewardAwardMs,
     openingInactivityMs: cleanOpeningDuration(
       value.openingInactivityMs,
       DEFAULT_OPENING_INACTIVITY_MS,

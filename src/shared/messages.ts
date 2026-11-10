@@ -5,6 +5,7 @@ import type { BreakMode } from './breaks';
 import type { LockStatus } from './lock-math';
 import type { SubItemEvalRequest, SubItemEvalResult } from '../content/sanitize-page';
 import type { AllowanceAuthorityState, AllowanceCommand } from './allowance-state';
+import type { RewardAccrualStatus } from './reward-accrual';
 import type { FocusCycleMode, FocusCycleProgram } from './focus-cycle-types';
 
 /** Classifier input. Phase 2 widens it from a bare title to richer page
@@ -80,6 +81,8 @@ export type Request =
   // balance and revision. The options page never uploads a replacement ledger.
   | { type: 'GET_ALLOWANCE_AUTHORITY' }
   | { type: 'ALLOWANCE_COMMAND'; command: AllowanceCommand }
+  /** Live, read-only productivity-earning status. No balance is uploaded. */
+  | { type: 'GET_REWARD_STATUS' }
   // Immediate focus timer or a timed Pomodoro program. These never create
   // Frozen locks; only completed work earns reward and fixed breaks.
   | { type: 'GET_FOCUS_CYCLE' }
@@ -132,6 +135,12 @@ export interface AllowanceResponse {
   state?: AllowanceAuthorityState;
   reason?: string;
   duplicate?: boolean;
+  error?: string;
+}
+
+export interface RewardStatusResponse {
+  ok: boolean;
+  status?: RewardAccrualStatus;
   error?: string;
 }
 

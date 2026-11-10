@@ -198,3 +198,47 @@ instead. The product behavior was correct.
   inert by design.
 - The Rust mirror still uses fixed timezone offsets; the lead math inherits the
   documented DST residual.
+
+## Integration follow-up: one boundary, two consumers
+
+Merging the lead work onto the combined tree exposed two cross-feature defects
+that the branch's own tests could not see. Both came from the same mistake:
+assuming every consumer wanted the *start* of the next configured window.
+
+1. **Dashboard reason map** — `dashboard.ts` keeps an exhaustive
+   `Record<LockReason, string>` label map. `schedule-lead` was a new reason,
+   so TypeScript correctly rejected the stale map. The fix adds a
+   “Focus-hours lead-in” label and a dedicated reason branch that says when
+   blocking actually begins, while using `status.until` (the window end) for
+   the countdown. A regression test now pins both sides of the handover: one
+   minute inside the lead window shows the lead reason and leaves
+   `forceBlocking` false; the exact start switches to the ordinary
+   `schedule` reason and forces blocking.
+
+2. **Auto-resume / notification starts** — `nextScheduleStart` had been
+   simplified to `nextWindowStart(rules, now)`. That is correct while the
+   user is outside every window, but wrong for overlapping rules: with an
+   08:00–20:00 window already active and a 09:00 start inside it, the planner
+   treated 09:00 as a new transition. Notifications would arm a reminder for a
+   start the user was already blocked through, and auto-resume could fire
+   mid-window. The fix walks past the contiguous active stack first
+   (`currentWindowEnd` hop, bounded), then asks `nextWindowStart` for the next
+   real onset. This preserves the pre-lead “starts inside a stack are not
+   transitions” contract while still ignoring the lead itself.
+
+Evidence on the combined tree:
+
+```text
+npm run typecheck                         → pass
+node scripts/dashboard-test.mjs           → 18 passed
+node scripts/lock-math-test.mjs           → 179 passed
+node scripts/resume-test.mjs              → 25 passed
+node scripts/notifications-test.mjs       → 33 passed
+node scripts/preferences-test.mjs         → 6 passed
+cargo test -p smartblocker-core           → 269 passed (3 suites)
+```
+
+The durable lesson is to test a new time concept at every consumer boundary,
+not only in its owning module. The shared lock-math fixtures proved the lead
+math, but the dashboard map and resume helper were separate contracts that
+TypeScript and the notification suite caught only after integration.

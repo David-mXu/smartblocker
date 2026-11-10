@@ -17,6 +17,7 @@ import type {
   LockTypeResponse,
   PartnerCommandResponse,
   Request,
+  RewardStatusResponse,
   SharedFeedbackInfoResponse,
   SubItemsResponse,
   TestPairResponse,
@@ -42,6 +43,10 @@ import { initResumeEnforcer } from './resume-enforcer';
 import { initNotificationScheduler } from './notifications';
 import { getAllowanceResponse, submitAllowanceCommand } from './allowance';
 import { cancelFocusCycle, getFocusCycleResponse, initFocusCycleScheduler, startFocusCycle } from './focus-cycles';
+import {
+  getRewardAccrualStatus,
+  initRewardAccrual,
+} from './reward-accrual';
 import { scanHistory } from './history-ingester';
 import { initFocusSessionCommitter } from '../shared/focus-session';
 import { recordTabStatus } from '../shared/tab-status';
@@ -75,6 +80,7 @@ initCompanionBridge();
 initFocusSessionCommitter();
 initUsageStats();
 initFocusCycleScheduler();
+initRewardAccrual();
 
 // First-run onboarding: open the 3-step welcome wizard (options.html#welcome)
 // so the user picks what to block. Plain options.html never forces the
@@ -101,7 +107,8 @@ api.runtime.onMessage.addListener(
         | UsageStatsResponse
         | VerifyProtectionResponse
         | CompleteOnboardingResponse
-        | FocusCycleResponse,
+        | FocusCycleResponse
+        | RewardStatusResponse,
     ) => void,
   ) => {
     // Defense-in-depth (red-team #34): only this extension's own contexts
@@ -130,6 +137,12 @@ api.runtime.onMessage.addListener(
     if (msg?.type === 'ALLOWANCE_COMMAND') {
       submitAllowanceCommand(msg.command)
         .then((response) => sendResponse(response))
+        .catch((error) => sendResponse({ ok: false, error: String(error) }));
+      return true;
+    }
+    if (msg?.type === 'GET_REWARD_STATUS') {
+      getRewardAccrualStatus()
+        .then((status) => sendResponse({ ok: true, status }))
         .catch((error) => sendResponse({ ok: false, error: String(error) }));
       return true;
     }

@@ -23,6 +23,10 @@ pub const MAX_ALLOWANCE_CATEGORIES: usize = 64;
 pub const MAX_ALLOWANCE_RECEIPTS: usize = 64;
 pub const DEFAULT_OPENING_INACTIVITY_MS: u64 = 120_000;
 pub const DEFAULT_OPENING_MAX_LIFETIME_MS: u64 = 30 * 60 * 1_000;
+/// Bounded productive-work reward defaults: 5 focused minutes -> 1 minute.
+pub const DEFAULT_REWARD_WORK_MS: u64 = 5 * 60 * 1_000;
+pub const DEFAULT_REWARD_AWARD_MS: u64 = 60 * 1_000;
+pub const MIN_REWARD_RATIO_MS: u64 = 60 * 1_000;
 const EMPTY_DAY_KEY: &str = "1970-01-01";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +68,9 @@ pub struct AllowanceConfig {
     pub waiting_step_ms: f64,
     pub waiting_max_ms: f64,
     pub reward_cap_ms: f64,
+    pub reward_earning: bool,
+    pub reward_work_ms: f64,
+    pub reward_award_ms: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub opening_inactivity_ms: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -79,6 +86,9 @@ impl Default for AllowanceConfig {
             waiting_step_ms: 0.0,
             waiting_max_ms: 0.0,
             reward_cap_ms: 0.0,
+            reward_earning: false,
+            reward_work_ms: DEFAULT_REWARD_WORK_MS as f64,
+            reward_award_ms: DEFAULT_REWARD_AWARD_MS as f64,
             opening_inactivity_ms: None,
             opening_max_lifetime_ms: None,
         }
@@ -94,6 +104,9 @@ pub struct NormalizedAllowanceConfig {
     pub waiting_step_ms: u64,
     pub waiting_max_ms: u64,
     pub reward_cap_ms: u64,
+    pub reward_earning: bool,
+    pub reward_work_ms: u64,
+    pub reward_award_ms: u64,
     pub opening_inactivity_ms: u64,
     pub opening_max_lifetime_ms: u64,
 }
@@ -105,6 +118,9 @@ pub const DEFAULT_ALLOWANCE_CONFIG: NormalizedAllowanceConfig = NormalizedAllowa
     waiting_step_ms: 0,
     waiting_max_ms: 0,
     reward_cap_ms: 0,
+    reward_earning: false,
+    reward_work_ms: DEFAULT_REWARD_WORK_MS,
+    reward_award_ms: DEFAULT_REWARD_AWARD_MS,
     opening_inactivity_ms: DEFAULT_OPENING_INACTIVITY_MS,
     opening_max_lifetime_ms: DEFAULT_OPENING_MAX_LIFETIME_MS,
 };
@@ -313,7 +329,23 @@ fn clean_opening_duration(value: Option<f64>, fallback: u64) -> u64 {
     }
 }
 
-fn normalize_config_numbers(values: [Option<f64>; 8]) -> NormalizedAllowanceConfig {
+fn clean_reward_duration(value: Option<f64>, fallback: u64) -> u64 {
+    match value {
+        Some(value) if value.is_finite() && value > 0.0 => {
+            bounded_integer(Some(value), MAX_ALLOWANCE_DURATION_MS, fallback)
+                .max(MIN_REWARD_RATIO_MS)
+        }
+        _ => fallback,
+    }
+}
+
+fn normalize_config_values(
+    values: [Option<f64>; 10],
+    reward_earning: bool,
+) -> NormalizedAllowanceConfig {
+    let reward_work_ms = clean_reward_duration(values[6], DEFAULT_REWARD_WORK_MS);
+    let reward_award_ms =
+        clean_reward_duration(values[7], DEFAULT_REWARD_AWARD_MS).min(reward_work_ms);
     NormalizedAllowanceConfig {
         daily_allowance_ms: clean_duration(values[0], 0),
         daily_openings: bounded_integer(values[1], MAX_DAILY_OPENINGS, 0),
@@ -321,8 +353,11 @@ fn normalize_config_numbers(values: [Option<f64>; 8]) -> NormalizedAllowanceConf
         waiting_step_ms: clean_duration(values[3], 0),
         waiting_max_ms: clean_duration(values[4], 0),
         reward_cap_ms: clean_duration(values[5], 0),
-        opening_inactivity_ms: clean_opening_duration(values[6], DEFAULT_OPENING_INACTIVITY_MS),
-        opening_max_lifetime_ms: clean_opening_duration(values[7], DEFAULT_OPENING_MAX_LIFETIME_MS),
+        reward_earning,
+        reward_work_ms,
+        reward_award_ms,
+        opening_inactivity_ms: clean_opening_duration(values[8], DEFAULT_OPENING_INACTIVITY_MS),
+        opening_max_lifetime_ms: clean_opening_duration(values[9], DEFAULT_OPENING_MAX_LIFETIME_MS),
     }
 }
 
@@ -335,49 +370,65 @@ pub trait AllowanceConfigSource {
 
 impl AllowanceConfigSource for Value {
     fn normalized(&self) -> NormalizedAllowanceConfig {
-        const KEYS: [&str; 8] = [
+        const KEYS: [&str; 10] = [
             "dailyAllowanceMs",
             "dailyOpenings",
             "waitingBaseMs",
             "waitingStepMs",
             "waitingMaxMs",
             "rewardCapMs",
+            "rewardWorkMs",
+            "rewardAwardMs",
             "openingInactivityMs",
             "openingMaxLifetimeMs",
         ];
         let object = self.as_object();
         let values = KEYS.map(|key| object.and_then(|record| finite_number(record.get(key))));
-        normalize_config_numbers(values)
+        let reward_earning = object
+            .and_then(|record| record.get("rewardEarning"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        normalize_config_values(values, reward_earning)
     }
 }
 
 impl AllowanceConfigSource for AllowanceConfig {
     fn normalized(&self) -> NormalizedAllowanceConfig {
-        normalize_config_numbers([
-            Some(self.daily_allowance_ms),
-            Some(self.daily_openings),
-            Some(self.waiting_base_ms),
-            Some(self.waiting_step_ms),
-            Some(self.waiting_max_ms),
-            Some(self.reward_cap_ms),
-            self.opening_inactivity_ms,
-            self.opening_max_lifetime_ms,
-        ])
+        normalize_config_values(
+            [
+                Some(self.daily_allowance_ms),
+                Some(self.daily_openings),
+                Some(self.waiting_base_ms),
+                Some(self.waiting_step_ms),
+                Some(self.waiting_max_ms),
+                Some(self.reward_cap_ms),
+                Some(self.reward_work_ms),
+                Some(self.reward_award_ms),
+                self.opening_inactivity_ms,
+                self.opening_max_lifetime_ms,
+            ],
+            self.reward_earning,
+        )
     }
 }
 
 impl AllowanceConfigSource for NormalizedAllowanceConfig {
     fn normalized(&self) -> NormalizedAllowanceConfig {
-        normalize_config_numbers([
-            Some(self.daily_allowance_ms as f64),
-            Some(self.daily_openings as f64),
-            Some(self.waiting_base_ms as f64),
-            Some(self.waiting_step_ms as f64),
-            Some(self.waiting_max_ms as f64),
-            Some(self.reward_cap_ms as f64),
-            Some(self.opening_inactivity_ms as f64),
-            Some(self.opening_max_lifetime_ms as f64),
-        ])
+        normalize_config_values(
+            [
+                Some(self.daily_allowance_ms as f64),
+                Some(self.daily_openings as f64),
+                Some(self.waiting_base_ms as f64),
+                Some(self.waiting_step_ms as f64),
+                Some(self.waiting_max_ms as f64),
+                Some(self.reward_cap_ms as f64),
+                Some(self.reward_work_ms as f64),
+                Some(self.reward_award_ms as f64),
+                Some(self.opening_inactivity_ms as f64),
+                Some(self.opening_max_lifetime_ms as f64),
+            ],
+            self.reward_earning,
+        )
     }
 }
 
@@ -2016,6 +2067,9 @@ mod tests {
                 waiting_step_ms: 0,
                 waiting_max_ms: MAX_ALLOWANCE_DURATION_MS,
                 reward_cap_ms: 0,
+                reward_earning: false,
+                reward_work_ms: DEFAULT_REWARD_WORK_MS,
+                reward_award_ms: DEFAULT_REWARD_AWARD_MS,
                 opening_inactivity_ms: DEFAULT_OPENING_INACTIVITY_MS,
                 opening_max_lifetime_ms: DEFAULT_OPENING_MAX_LIFETIME_MS,
             }
@@ -2028,6 +2082,33 @@ mod tests {
             normalize_allowance_config(&json!({"openingMaxLifetimeMs": f64::MAX}))
                 .opening_max_lifetime_ms,
             MAX_ALLOWANCE_DURATION_MS
+        );
+        assert!(
+            !normalize_allowance_config(&json!({"rewardEarning": "true"})).reward_earning,
+            "only a real boolean opts into reward earning"
+        );
+        let reward = normalize_allowance_config(&json!({
+            "rewardEarning": true,
+            "rewardWorkMs": 30_000,
+            "rewardAwardMs": 10 * MINUTE,
+        }));
+        assert!(reward.reward_earning);
+        assert_eq!(
+            reward.reward_work_ms, MIN_REWARD_RATIO_MS,
+            "work below one minute clamps up"
+        );
+        assert_eq!(
+            reward.reward_award_ms, MIN_REWARD_RATIO_MS,
+            "award never exceeds work"
+        );
+        let bounded_reward = normalize_allowance_config(&json!({
+            "rewardWorkMs": f64::MAX,
+            "rewardAwardMs": 0,
+        }));
+        assert_eq!(bounded_reward.reward_work_ms, MAX_ALLOWANCE_DURATION_MS);
+        assert_eq!(
+            bounded_reward.reward_award_ms, DEFAULT_REWARD_AWARD_MS,
+            "an invalid award uses its default and then clamps to work"
         );
         assert!(valid_day_key("2024-02-29"));
         assert!(!valid_day_key("2023-02-29"));
@@ -2739,6 +2820,9 @@ mod tests {
             waiting_step_ms: 0.0,
             waiting_max_ms: 0.0,
             reward_cap_ms: (3 * MINUTE) as f64,
+            reward_earning: false,
+            reward_work_ms: DEFAULT_REWARD_WORK_MS as f64,
+            reward_award_ms: DEFAULT_REWARD_AWARD_MS as f64,
             opening_inactivity_ms: None,
             opening_max_lifetime_ms: None,
         }
@@ -3022,6 +3106,34 @@ mod tests {
     }
 
     #[test]
+    fn authority_accepts_reward_earning_config_and_reward_commands() {
+        let mut config = authority_config();
+        config.daily_allowance_ms = 0.0;
+        config.daily_openings = 0.0;
+        config.reward_cap_ms = MINUTE as f64;
+        config.reward_earning = true;
+        config.reward_work_ms = (5 * MINUTE) as f64;
+        config.reward_award_ms = (2 * MINUTE) as f64;
+        let configure = AllowanceCommand::Configure {
+            operation_id: operation_id(2),
+            category: CATEGORY.to_owned(),
+            config,
+        };
+        let mut state = accepted(&empty_allowance_authority_state(), &configure);
+        let stored = &state.categories.get(CATEGORY).expect("category").config;
+        assert!(stored.reward_earning);
+        assert_eq!(stored.reward_work_ms, 5 * MINUTE);
+        assert_eq!(stored.reward_award_ms, 2 * MINUTE);
+
+        state = accepted(&state, &reward_command_at(3, T0, DAY, 2 * MINUTE));
+        assert_eq!(
+            current_ledger(&state, CATEGORY).earned_reward_ms,
+            MINUTE,
+            "the authority's daily reward cap still bounds the credit"
+        );
+    }
+
+    #[test]
     fn authority_opening_commands_use_count_and_monotonic_activity() {
         let mut state = configured();
         state = accepted(
@@ -3276,7 +3388,7 @@ mod tests {
         let configure = configure_command(1);
         assert_eq!(
             fingerprint_allowance_command(&configure),
-            "[\"configure\",\"00000000000000000000000000000001\",\"video games\",null,null,null,null,null,{\"dailyAllowanceMs\":600000,\"dailyOpenings\":1,\"waitingBaseMs\":0,\"waitingStepMs\":0,\"waitingMaxMs\":0,\"rewardCapMs\":180000,\"openingInactivityMs\":120000,\"openingMaxLifetimeMs\":1800000}]"
+            "[\"configure\",\"00000000000000000000000000000001\",\"video games\",null,null,null,null,null,{\"dailyAllowanceMs\":600000,\"dailyOpenings\":1,\"waitingBaseMs\":0,\"waitingStepMs\":0,\"waitingMaxMs\":0,\"rewardCapMs\":180000,\"rewardEarning\":false,\"rewardWorkMs\":300000,\"rewardAwardMs\":60000,\"openingInactivityMs\":120000,\"openingMaxLifetimeMs\":1800000}]"
         );
         let applied = command_ok(apply_allowance_command(
             &empty_allowance_authority_state(),
@@ -3298,6 +3410,9 @@ mod tests {
                             "waitingStepMs": 0,
                             "waitingMaxMs": 0,
                             "rewardCapMs": 180000,
+                            "rewardEarning": false,
+                            "rewardWorkMs": 300000,
+                            "rewardAwardMs": 60000,
                             "openingInactivityMs": 120000,
                             "openingMaxLifetimeMs": 1800000
                         },

@@ -90,9 +90,30 @@ await test('configuration is clamped and invalid opening lifetimes use safe defa
     waitingStepMs: 0,
     waitingMaxMs: MAX_ALLOWANCE_DURATION_MS,
     rewardCapMs: 0,
+    rewardEarning: false,
+    rewardWorkMs: 5 * 60 * 1000,
+    rewardAwardMs: 60 * 1000,
     openingInactivityMs: DEFAULT_OPENING_INACTIVITY_MS,
     openingMaxLifetimeMs: DEFAULT_OPENING_MAX_LIFETIME_MS,
   });
+  assert.equal(
+    normalizeAllowanceConfig({ ...CONFIG, rewardEarning: 'yes' }).rewardEarning,
+    false,
+  );
+  const ratio = normalizeAllowanceConfig({
+    ...CONFIG,
+    rewardWorkMs: 30_000,
+    rewardAwardMs: 10 * 60 * 1000,
+  });
+  assert.equal(ratio.rewardWorkMs, 60_000, 'work below one minute clamps up');
+  assert.equal(ratio.rewardAwardMs, 60_000, 'award never exceeds work');
+  const bounded = normalizeAllowanceConfig({
+    ...CONFIG,
+    rewardWorkMs: Number.MAX_VALUE,
+    rewardAwardMs: 0,
+  });
+  assert.equal(bounded.rewardWorkMs, MAX_ALLOWANCE_DURATION_MS);
+  assert.equal(bounded.rewardAwardMs, 60_000, 'invalid award uses its default then clamps');
   assert.equal(
     normalizeAllowanceConfig({ ...CONFIG, openingInactivityMs: 0.5 }).openingInactivityMs,
     1,

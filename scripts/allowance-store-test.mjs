@@ -169,6 +169,42 @@ await test('a promotion write failure rejects, preserves the snapshot, and frees
   assert.equal(promoted.revision, expected.revision + 3);
 });
 
+await test('fallback reward commands honor the opt-in reward config and daily cap', async () => {
+  const category = 'social media and networking';
+  const configured = await submitLocalAllowanceCommand({
+    ...command('configure', 20, {
+      category,
+      config: {
+        ...CONFIG,
+        dailyAllowanceMs: 0,
+        dailyOpenings: 0,
+        rewardEarning: true,
+        rewardWorkMs: 300_000,
+        rewardAwardMs: 60_000,
+        rewardCapMs: 60_000,
+      },
+    }),
+  });
+  assert.equal(configured.ok, true);
+  const first = await submitLocalAllowanceCommand(
+    command('reward', 21, { category, earnedMs: 60_000 }),
+  );
+  assert.equal(first.ok, true);
+  assert.equal(first.state.categories[category].ledger.earnedRewardMs, 60_000);
+  assert.equal(first.state.categories[category].config.rewardEarning, true);
+  assert.equal(first.state.categories[category].config.rewardWorkMs, 300_000);
+  assert.equal(first.state.categories[category].config.rewardAwardMs, 60_000);
+  const second = await submitLocalAllowanceCommand(
+    command('reward', 22, { category, earnedMs: 60_000 }),
+  );
+  assert.equal(second.ok, true);
+  assert.equal(
+    second.state.categories[category].ledger.earnedRewardMs,
+    60_000,
+    'authority still enforces the daily reward cap',
+  );
+});
+
 await test('local day keys are calendar-shaped local dates', () => {
   assert.equal(allowanceLocalDayKey(new Date(2026, 10, 9)), '2026-11-09');
   assert.equal(allowanceLocalDayKey(new Date(2026, 0, 1)), '2026-01-01');
