@@ -8,8 +8,9 @@
 export interface ScheduleRule {
   id: string;
   /** Optional user-facing name. Display-only: evaluation never reads it.
-   *  Bounded by `MAX_SCHEDULE_LABEL_LENGTH`; the companion mirror keeps it
-   *  so a daemon round-trip cannot strip the editor's duplicate label. */
+   *  Duplicating fills this with a "(copy)" suffix so two otherwise identical
+   *  windows stay distinguishable. Bounded by `MAX_SCHEDULE_LABEL_LENGTH`;
+   *  the companion mirror keeps it so a daemon round-trip cannot strip it. */
   label?: string;
   /** Days the window STARTS on: 0–6, Sunday = 0 (matches Date.getDay()). */
   days: number[];
@@ -270,10 +271,17 @@ function armedPartnerGeneration(state: LockState): string | null {
     : null;
 }
 
-/** Window length in ms; end < start wraps overnight. start === end is an
- *  invalid (empty) rule and yields 0. */
+/** Minutes in one occurrence of the window; end < start wraps overnight.
+ *  start === end is an invalid (empty) rule and yields 0. Exported so the
+ *  overlap detector reuses this exact definition instead of growing a second
+ *  scheduler. */
+export function scheduleWindowMinutes(r: ScheduleRule): number {
+  return (r.endMinutes - r.startMinutes + 1440) % 1440;
+}
+
+/** Window length in ms; see scheduleWindowMinutes. */
 function windowDurationMs(r: ScheduleRule): number {
-  return ((r.endMinutes - r.startMinutes + 1440) % 1440) * 60_000;
+  return scheduleWindowMinutes(r) * 60_000;
 }
 
 /** Local midnight of `date` shifted by whole days (DST-safe via Date math). */
@@ -973,6 +981,12 @@ export function validateScheduleRule(r: ScheduleRule): string | null {
     return 'Times must fall within one day.';
   }
   if (r.startMinutes === r.endMinutes) return 'Start and end times must differ.';
+  if (
+    r.label !== undefined &&
+    (typeof r.label !== 'string' || r.label.length > MAX_SCHEDULE_LABEL_LENGTH)
+  ) {
+    return `Name must be at most ${MAX_SCHEDULE_LABEL_LENGTH} characters.`;
+  }
   if (
     r.leadMinutes !== undefined &&
     r.leadMinutes !== null &&

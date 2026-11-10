@@ -108,6 +108,15 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   erasable-syntax-only constraint): lead windows, overnight/category
   schedules, overlapping-rule dedupe, DST edge days, disabled defaults,
   no-fire when inactive, and the bounded duplicate-suppression ledger.
+- `node scripts/schedule-overlaps-test.mjs` — pure weekly overlap reporting
+  (`src/shared/schedule-overlaps.ts`) and duplicate semantics
+  (`src/shared/schedule-edit.ts`): partial/containment/identical windows,
+  overnight and week-wrap cases, timezone pins, category rules, deterministic
+  pair order, no-overlap output, and "(copy)" labels with fresh ids.
+- `node scripts/e2e-schedule-ux.mjs` — focused schedule editing e2e (run after
+  `npm run build:chrome`): overlap warning visibility/silence/live updates,
+  global and category duplication, saved labels/ids, lock-disabled duplicate
+  controls, and a mobile-width screenshot.
 - `node scripts/usage-stats-test.mjs` — idle-aware usage local-midnight/DST,
   counter-deduplication, protection/lock/break subset accounting, block-reason
   partition, v1→v2 migration, retention/export, batched persistence/restart
@@ -439,7 +448,10 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   `backup-store.ts` layers storage, lock refusal, and the one-slot pre-restore
   snapshot on top, also Node-tested with mocked storage), `display-prefs.ts` (pure
   first-day/weekday ordering, 12/24-hour formatting, and block-message
-  sanitization; tested by `scripts/preferences-test.mjs`), `lock-math.ts`
+  sanitization; tested by `scripts/preferences-test.mjs`), `schedule-overlaps.ts`
+  (pure weekly overlap pairs/summaries for the schedule editor; reuses
+  lock-math's window duration and never evaluates active state), `schedule-edit.ts`
+  (pure fresh-id/"(copy)" duplication), `lock-math.ts`
   (pure lock/schedule time math — no browser APIs, Node-testable; per-rule
   `leadMinutes` freezes settings before a window without forcing blocking;
   also

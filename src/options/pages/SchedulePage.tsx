@@ -1,10 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, X, MoonStars } from '@phosphor-icons/react';
+import { Copy, Plus, X, MoonStars } from '@phosphor-icons/react';
 import { getLockState, setSchedules } from '../../shared/lock';
 import { isInScheduleWindow, validateScheduleRule, type ScheduleRule } from '../../shared/lock-math';
+import { findScheduleOverlaps, formatScheduleDays } from '../../shared/schedule-overlaps';
+import { duplicateScheduleRule } from '../../shared/schedule-edit';
 import { sortDaysForDisplay } from '../../shared/display-prefs';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
+import { ScheduleOverlapNotice } from '../../components/ScheduleOverlapNotice';
 import { SettingsGroup, SettingsSection } from '../../components/ui/settings';
 import { cn } from '../../lib/utils';
 import type { OptionsState } from '../useOptionsState';
@@ -13,24 +16,12 @@ import { LockedNote, Page } from './Page';
 import { CategoryScheduleSection } from './CategoryScheduleSection';
 
 const DAY_LETTERS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
-const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DAY_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 const PRESETS: { name: string; days: number[]; start: number; end: number }[] = [
   { name: 'Weekdays 9–5', days: [1, 2, 3, 4, 5], start: 9 * 60, end: 17 * 60 },
   { name: 'Every evening 7–10 PM', days: [0, 1, 2, 3, 4, 5, 6], start: 19 * 60, end: 22 * 60 },
 ];
-
-function daysSummary(days: number[], firstDay: 0 | 1): string {
-  const set = [...days].sort((a, b) => a - b).join(',');
-  if (set === '') return 'No days picked';
-  if (set === '0,1,2,3,4,5,6') return 'Every day';
-  if (set === '1,2,3,4,5') return 'Weekdays';
-  if (set === '0,6') return 'Weekends';
-  return sortDaysForDisplay(days, firstDay)
-    .map((d) => DAY_SHORT[d])
-    .join(', ');
-}
 
 function leadBadgeText(leadMinutes: number | null | undefined): string {
   const lead = typeof leadMinutes === 'number' ? leadMinutes : 0;
@@ -40,10 +31,10 @@ function leadBadgeText(leadMinutes: number | null | undefined): string {
 
 function ruleSummary(r: ScheduleRule, firstDay: 0 | 1, hour24: boolean): string {
   const lead = leadBadgeText(r.leadMinutes);
-  return `${daysSummary(r.days, firstDay)} · ${minutesToClock(r.startMinutes, hour24)} – ${minutesToClock(
-    r.endMinutes,
+  return `${formatScheduleDays(r.days, firstDay)} · ${minutesToClock(
+    r.startMinutes,
     hour24,
-  )}${lead ? ` · ${lead}` : ''}`;
+  )} – ${minutesToClock(r.endMinutes, hour24)}${lead ? ` · ${lead}` : ''}`;
 }
 
 function cloneRules(rules: ScheduleRule[]): ScheduleRule[] {
@@ -55,6 +46,7 @@ function sameRules(a: ScheduleRule[], b: ScheduleRule[]): boolean {
     JSON.stringify(
       rs.map((r) => [
         r.id,
+        r.label ?? '',
         [...r.days].sort(),
         r.startMinutes,
         r.endMinutes,
@@ -85,6 +77,14 @@ export function SchedulePage({ state }: { state: OptionsState }) {
   }, []);
 
   const dirty = loaded && !sameRules(rules, saved);
+  const overlaps = findScheduleOverlaps(
+    rules.map((rule) => ({ rule, kind: 'global' as const })),
+    {
+      firstDay,
+      hour24,
+      deviceOffsetMinutes: -new Date(now).getTimezoneOffset(),
+    },
+  );
 
   const update = (id: string, fn: (r: ScheduleRule) => ScheduleRule) => {
     if (locked) return;
@@ -102,6 +102,17 @@ export function SchedulePage({ state }: { state: OptionsState }) {
     if (locked) return;
     setScheduleMsg('');
     setRules((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const duplicateRule = (id: string) => {
+    if (locked) return;
+    setScheduleMsg('');
+    setRules((prev) => {
+      const index = prev.findIndex((r) => r.id === id);
+      if (index === -1) return prev;
+      const copy = duplicateScheduleRule(prev[index], { fallbackLabel: 'Focus hours' });
+      return [...prev.slice(0, index + 1), copy, ...prev.slice(index + 1)];
+    });
   };
 
   const handleSave = async () => {
@@ -134,6 +145,8 @@ export function SchedulePage({ state }: { state: OptionsState }) {
       >
         {locked && <LockedNote reason={lock.reason} className="px-1" />}
 
+        <ScheduleOverlapNotice id="schedule-overlap-warning" pairs={overlaps} className="mx-1" />
+
         <div id="schedule-list" className="flex flex-col gap-3">
           {loaded && rules.length === 0 && (
             <p className="m-0 rounded-xl border border-dashed border-border px-4 py-5 text-center text-[13px] text-faint">
@@ -149,9 +162,21 @@ export function SchedulePage({ state }: { state: OptionsState }) {
             return (
               <SettingsGroup key={rule.id} className="schedule-row">
                 <div className="flex items-center justify-between gap-3 px-4 py-3">
-                  <span className="min-w-0 text-sm font-medium text-foreground">
-                    {ruleSummary(rule, firstDay, hour24)}
-                  </span>
+                  <div className="min-w-0">
+                    {rule.label && (
+                      <p className="m-0 text-[13px] font-medium text-foreground">{rule.label}</p>
+                    )}
+                    <span
+                      className={cn(
+                        'block min-w-0',
+                        rule.label
+                          ? 'text-xs text-muted-foreground'
+                          : 'text-sm font-medium text-foreground',
+                      )}
+                    >
+                      {ruleSummary(rule, firstDay, hour24)}
+                    </span>
+                  </div>
                   <div className="flex shrink-0 items-center gap-2">
                     {leadLabel && (
                       <Badge variant="outline" className="schedule-lead-badge">
@@ -163,6 +188,18 @@ export function SchedulePage({ state }: { state: OptionsState }) {
                         On now
                       </Badge>
                     )}
+                    <Button
+                      id={`schedule-duplicate-${rule.id}`}
+                      variant="ghost"
+                      size="icon"
+                      disabled={locked || Boolean(problem)}
+                      onClick={() => duplicateRule(rule.id)}
+                      title={problem ?? (locked ? lock.reason : 'Duplicate these focus hours')}
+                      aria-label={`Duplicate focus hours: ${ruleSummary(rule, firstDay, hour24)}`}
+                      className="schedule-duplicate"
+                    >
+                      <Copy className="size-3.5" />
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"

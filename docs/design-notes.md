@@ -229,7 +229,9 @@ Tint recipe for callouts: `bg-<hue>/10 border-<hue>/30 text-<hue>-soft`.
   gates, incognito warning; break settings disable while locked) · Focus hours `#schedule` (summary cards, S–M–T–W–T–F–S
   day chips in the preferred order, optional per-rule settings-lock lead with
   a badge + "settings lock at … / blocking still starts at …" explanation,
-  overnight note, presets "Weekdays 9–5" / "Every evening 7–10 PM")
+  overnight note, Duplicate per rule, a quiet overlap notice that says
+  overlapping is allowed and blocking is the union, presets "Weekdays 9–5" /
+  "Every evening 7–10 PM")
   · Notifications `#notifications` (three independent, silent, off-by-default
   reminders — focus hours starting soon, break ending soon, allowance nearly
   used up — each with a 1–60 minute lead; controls disable while locked)
@@ -435,7 +437,16 @@ longer exists.
   `#break-delay-minutes`, `#break-duration-minutes`, `#break-text-length`,
   `#incognito-warning`.
 - `#schedule`: `#schedule-list` (`.schedule-row`, `.day-label`,
-  `.schedule-remove`), `#schedule-add`, `#schedule-save`, `#schedule-msg`.
+  `.schedule-remove`, `.schedule-duplicate` with
+  `#schedule-duplicate-<rule id>`), `#schedule-add`, `#schedule-save`,
+  `#schedule-msg`, `#schedule-overlap-warning` (present only while at least
+  two global windows overlap; `role="status"`, `aria-live="polite"`, carries
+  `data-overlap-count`). `#category-schedule-list` (`.category-schedule-row`,
+  `.category-schedule-remove`, `.category-schedule-duplicate` with
+  `#category-schedule-duplicate-<rule id>`), `#category-schedule-add`,
+  `#category-schedule-save`, `#category-schedule-msg`,
+  `#category-schedule-overlap-warning` (same visibility and accessibility
+  contract for category rules).
 - `#notifications`: `#notify-schedule-toggle`, `#notify-schedule-lead`,
   `#notify-break-toggle`, `#notify-break-lead`, `#notify-allowance-toggle`,
   `#notify-allowance-threshold` (minute inputs are `1–60`; switches and

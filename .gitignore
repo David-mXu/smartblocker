@@ -9,6 +9,7 @@ dist-site/
 .e2e-profile-p2/
 .e2e-profile-security/
 .e2e-profile-prefs/
+.e2e-profile-schedule-ux/
 .e2e-companion-profile/
 .e2e-notifications-profile/
 *.local

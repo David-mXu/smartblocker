@@ -1,21 +1,23 @@
 import React, { useEffect, useState } from 'react';
-import { MoonStars, Plus, X } from '@phosphor-icons/react';
+import { Copy, MoonStars, Plus, X } from '@phosphor-icons/react';
 import { getLockState, setCategorySchedules } from '../../shared/lock';
 import {
   isInScheduleWindow,
   validateCategoryScheduleRule,
   type CategoryScheduleRule,
 } from '../../shared/lock-math';
+import { findScheduleOverlaps, formatScheduleDays } from '../../shared/schedule-overlaps';
+import { duplicateScheduleRule } from '../../shared/schedule-edit';
 import { sortDaysForDisplay } from '../../shared/display-prefs';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
+import { ScheduleOverlapNotice } from '../../components/ScheduleOverlapNotice';
 import { SettingsGroup, SettingsSection } from '../../components/ui/settings';
 import { cn } from '../../lib/utils';
 import { hhmmToMinutes, minutesToClock, minutesToHHMM } from '../format';
 import { LockedNote } from './Page';
 
 const DAY_LETTERS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
-const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DAY_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 function cloneRules(rules: CategoryScheduleRule[]): CategoryScheduleRule[] {
@@ -27,6 +29,7 @@ function sameRules(a: CategoryScheduleRule[], b: CategoryScheduleRule[]): boolea
     JSON.stringify(
       rules.map((rule) => [
         rule.id,
+        rule.label ?? '',
         [...rule.days].sort(),
         rule.startMinutes,
         rule.endMinutes,
@@ -37,19 +40,10 @@ function sameRules(a: CategoryScheduleRule[], b: CategoryScheduleRule[]): boolea
 }
 
 function ruleSummary(rule: CategoryScheduleRule, firstDay: 0 | 1, hour24: boolean): string {
-  const days = [...rule.days].sort((a, b) => a - b);
-  const dayText =
-    days.join(',') === '0,1,2,3,4,5,6'
-      ? 'Every day'
-      : days.join(',') === '1,2,3,4,5'
-        ? 'Weekdays'
-        : sortDaysForDisplay(days, firstDay)
-            .map((day) => DAY_SHORT[day])
-            .join(', ') || 'No days picked';
-  return `${dayText} · ${minutesToClock(rule.startMinutes, hour24)} – ${minutesToClock(
-    rule.endMinutes,
+  return `${formatScheduleDays(rule.days, firstDay)} · ${minutesToClock(
+    rule.startMinutes,
     hour24,
-  )}`;
+  )} – ${minutesToClock(rule.endMinutes, hour24)}`;
 }
 
 interface Props {
@@ -98,6 +92,14 @@ export function CategoryScheduleSection({
     ? lockReason
     : 'Wait for the active category window to end before editing it.';
   const dirty = loaded && !sameRules(rules, saved);
+  const overlaps = findScheduleOverlaps(
+    rules.map((rule) => ({ rule, kind: 'category' as const })),
+    {
+      firstDay,
+      hour24,
+      deviceOffsetMinutes: -new Date(now).getTimezoneOffset(),
+    },
+  );
 
   const update = (id: string, fn: (rule: CategoryScheduleRule) => CategoryScheduleRule) => {
     if (readOnly) return;
@@ -118,6 +120,19 @@ export function CategoryScheduleSection({
         categories: [labels[0]],
       },
     ]);
+  };
+
+  const duplicateRule = (id: string) => {
+    if (!loaded || readOnly) return;
+    setMessage('');
+    setRules((current) => {
+      const index = current.findIndex((rule) => rule.id === id);
+      if (index === -1) return current;
+      const copy = duplicateScheduleRule(current[index], {
+        fallbackLabel: 'Category schedule',
+      });
+      return [...current.slice(0, index + 1), copy, ...current.slice(index + 1)];
+    });
   };
 
   const handleSave = async () => {
@@ -155,6 +170,12 @@ export function CategoryScheduleSection({
         </p>
       )}
 
+      <ScheduleOverlapNotice
+        id="category-schedule-overlap-warning"
+        pairs={overlaps}
+        className="mx-1"
+      />
+
       <div id="category-schedule-list" className="flex flex-col gap-3">
         {loaded && rules.length === 0 && (
           <p className="m-0 rounded-xl border border-dashed border-border px-4 py-5 text-center text-[13px] text-faint">
@@ -169,7 +190,19 @@ export function CategoryScheduleSection({
             <SettingsGroup key={rule.id} className="category-schedule-row">
               <div className="flex items-start justify-between gap-3 px-4 py-3">
                 <div className="min-w-0">
-                  <p className="m-0 text-sm font-medium text-foreground">{ruleSummary(rule, firstDay, hour24)}</p>
+                  {rule.label && (
+                    <p className="m-0 text-[13px] font-medium text-foreground">{rule.label}</p>
+                  )}
+                  <p
+                    className={cn(
+                      'm-0',
+                      rule.label
+                        ? 'text-xs text-muted-foreground'
+                        : 'text-sm font-medium text-foreground',
+                    )}
+                  >
+                    {ruleSummary(rule, firstDay, hour24)}
+                  </p>
                   <div className="mt-1.5 flex flex-wrap gap-1">
                     {rule.categories.map((category) => (
                       <Badge key={category} variant="outline">
@@ -184,6 +217,18 @@ export function CategoryScheduleSection({
                       On now
                     </Badge>
                   )}
+                  <Button
+                    id={`category-schedule-duplicate-${rule.id}`}
+                    variant="ghost"
+                    size="icon"
+                    disabled={readOnly || Boolean(problem)}
+                    title={problem ?? (readOnly ? disabledReason : 'Duplicate this category schedule')}
+                    aria-label={`Duplicate category schedule: ${ruleSummary(rule, firstDay, hour24)}`}
+                    className="category-schedule-duplicate"
+                    onClick={() => duplicateRule(rule.id)}
+                  >
+                    <Copy className="size-3.5" />
+                  </Button>
                   <Button
                     variant="ghost"
                     size="icon"

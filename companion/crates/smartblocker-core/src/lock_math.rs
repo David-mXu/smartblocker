@@ -68,9 +68,10 @@ fn is_zero(value: &u64) -> bool {
 pub struct ScheduleRule {
     pub id: String,
     /// Optional user-facing name. Display-only: evaluation never reads it.
-    /// Kept on this struct so a daemon merge/broadcast round-trip cannot
-    /// silently strip the extension's duplicate-rule label. Bounded and
-    /// control-character-collapsed by [`sanitize_schedule_label`].
+    /// The extension fills this with a "(copy)" suffix when duplicating. Kept
+    /// on this struct so a daemon merge/broadcast round-trip cannot silently
+    /// strip it; bounded and control-character-collapsed by
+    /// [`sanitize_schedule_label`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// Days the window STARTS on: 0–6, Sunday = 0 (matches JS `Date.getDay()`).
@@ -854,6 +855,12 @@ pub fn validate_schedule_rule(r: &ScheduleRule) -> Option<&'static str> {
     if r.start_minutes == r.end_minutes {
         return Some("Start and end times must differ.");
     }
+    if r.label
+        .as_deref()
+        .is_some_and(|label| label.encode_utf16().count() > MAX_SCHEDULE_LABEL_LENGTH)
+    {
+        return Some("Name must be at most 80 characters.");
+    }
     if r.lead_minutes
         .is_some_and(|m| m > MAX_SCHEDULE_LEAD_MINUTES)
     {
@@ -1398,6 +1405,12 @@ mod tests {
         assert!(validate_schedule_rule(&rule("x", &[7], 540, 1020)).is_some());
         assert!(validate_schedule_rule(&rule("x", &[1], 600, 600)).is_some());
         assert!(validate_schedule_rule(&rule("x", &[1], 540, 1440)).is_some());
+        // Optional display-only label: 80 UTF-16 units accepted, 81 rejected.
+        let mut named = workdays();
+        named.label = Some("x".repeat(80));
+        assert_eq!(validate_schedule_rule(&named), None);
+        named.label = Some("x".repeat(81));
+        assert!(validate_schedule_rule(&named).is_some());
         // tz pins: real-world extrema accepted, beyond rejected (mirrors TS).
         assert_eq!(
             validate_schedule_rule(&pinned("x", &[1], 540, 1020, -720)),
@@ -1614,6 +1627,39 @@ mod tests {
         );
         assert_eq!(state.schedules.len(), 1);
         assert_eq!(state.schedules[0].id, "ok");
+    }
+
+    #[test]
+    fn sanitize_preserves_display_label_for_global_and_category_rules() {
+        let state = sanitize_lock_state(
+            &json!({
+                "schedules": [
+                    { "id": "g", "label": "Focus hours (copy)", "days": [1], "startMinutes": 540, "endMinutes": 1020 }
+                ],
+                "categorySchedules": [
+                    { "id": "c", "label": "Category schedule (copy)", "days": [1], "startMinutes": 540, "endMinutes": 1020, "categories": ["video games"] }
+                ]
+            }),
+            1_000_000,
+            2_592_000_000,
+        );
+        assert_eq!(
+            state.schedules[0].label.as_deref(),
+            Some("Focus hours (copy)")
+        );
+        assert_eq!(
+            state.category_schedules.as_ref().unwrap()[0]
+                .schedule
+                .label
+                .as_deref(),
+            Some("Category schedule (copy)")
+        );
+        let round = serde_json::to_value(&state).unwrap();
+        assert_eq!(round["schedules"][0]["label"], "Focus hours (copy)");
+        assert_eq!(
+            round["categorySchedules"][0]["label"],
+            "Category schedule (copy)"
+        );
     }
 
     fn scoped(schedule: ScheduleRule, categories: &[&str]) -> CategoryScheduleRule {
