@@ -75,7 +75,11 @@ api.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && (changes[STORAGE_KEY] || changes[PARTNER_ARM_KEY])) cache = null;
 });
 
-export async function getLockState(): Promise<LockState> {
+/** Read the effective lock state. `seedInline` is true only inside the merge
+ *  queue: the merge already owns the slot, so seeding must not enqueue behind
+ *  itself. A public read queues the seed so it cannot land after a newer
+ *  daemon release. */
+async function readLockState(seedInline: boolean): Promise<LockState> {
   if (cache) return cache;
   const stored = await api.storage.local.get([STORAGE_KEY, PARTNER_ARM_KEY]);
   const state: LockState = { ...EMPTY_LOCK_STATE, ...(stored[STORAGE_KEY] as Partial<LockState> | undefined) };
@@ -86,21 +90,33 @@ export async function getLockState(): Promise<LockState> {
   } else if (typeof state.partnerArmGeneration === 'string') {
     // Upgrade path: an older installation can have a valid armed raw state
     // with no pin yet. Seed it on the first read so a later raw clear cannot
-    // release the arm before an authenticated daemon frame arrives.
+    // release the arm before an authenticated daemon frame arrives. Clamp a
+    // future raw stamp so it cannot outrank later legitimate releases.
     const seeded = parsePartnerArmPin({
       generation: state.partnerArmGeneration,
-      updatedAt: state.partnerArmUpdatedAt ?? 0,
+      updatedAt: Math.min(state.partnerArmUpdatedAt ?? 0, Date.now()),
     });
     if (seeded) {
       state.partnerArmGeneration = seeded.generation;
       state.partnerArmUpdatedAt = seeded.updatedAt;
-      void api.storage.local.set({ [PARTNER_ARM_KEY]: seeded }).catch((error) => {
+      try {
+        if (seedInline) await writeSeedIfAbsent(seeded);
+        else await seedPartnerArmPin(seeded);
+      } catch (error) {
         console.warn('[SmartBlocker] partner arm pin was not seeded:', error);
-      });
+      }
     }
   }
-  cache = state;
+  // Do not clobber a newer snapshot installed by a merge or a lock write that
+  // completed while this read was parked. The storage listener will clear the
+  // cache on the next external change; keeping the newer value here avoids
+  // briefly reverting a pinned partner arm.
+  if (!cache) cache = state;
   return cache;
+}
+
+export function getLockState(): Promise<LockState> {
+  return readLockState(false);
 }
 
 async function writeLockState(next: LockState): Promise<void> {
@@ -512,10 +528,28 @@ function canonicalJson(value: unknown): string {
 
 let mergeQueue: Promise<void> = Promise.resolve();
 
+async function writeSeedIfAbsent(pin: PartnerArmPin): Promise<void> {
+  const existing = await getPartnerArmPin();
+  if (existing) return;
+  await api.storage.local.set({ [PARTNER_ARM_KEY]: pin });
+}
+
+/** Seed an upgrade pin on the merge queue, so a late seed cannot land after
+ * a newer daemon release. The merge path calls `readLockState(true)` while it
+ * already holds the queue slot. */
+async function seedPartnerArmPin(pin: PartnerArmPin): Promise<void> {
+  const attempt = mergeQueue.then(() => writeSeedIfAbsent(pin));
+  mergeQueue = attempt.then(
+    () => undefined,
+    () => undefined,
+  );
+  await attempt;
+}
+
 /** Serialize daemon-frame merges. Two independent status/pairing promises
  * otherwise read the same snapshot and land their writes out of order. */
 export function mergeRemoteLockState(remote: unknown): Promise<boolean> {
-  const attempt = mergeQueue.then(() => mergeRemoteLockStateNow(remote));
+  const attempt = mergeQueue.then(() => mergeRemoteLockStateLocked(remote));
   mergeQueue = attempt.then(
     () => undefined,
     () => undefined,
@@ -523,9 +557,9 @@ export function mergeRemoteLockState(remote: unknown): Promise<boolean> {
   return attempt;
 }
 
-async function mergeRemoteLockStateNow(remote: unknown): Promise<boolean> {
+async function mergeRemoteLockStateLocked(remote: unknown): Promise<boolean> {
   const now = Date.now();
-  const current = { ...EMPTY_LOCK_STATE, ...(await getLockState()) };
+  const current = { ...EMPTY_LOCK_STATE, ...(await readLockState(true)) };
   const sanitizedRemote = sanitizeLockState(remote, now, MAX_LOCK_MS);
   const merged = mergeLockStates(current, sanitizedRemote, now);
   // The daemon originates every partner arm/release, so its fields win over a
@@ -537,10 +571,17 @@ async function mergeRemoteLockStateNow(remote: unknown): Promise<boolean> {
   // upward, so only an equal-or-newer stamp may replace the pin.
   const remotePartnerTs = sanitizedRemote.partnerArmUpdatedAt ?? 0;
   const currentPartnerTs = current.partnerArmUpdatedAt ?? 0;
+  const remoteArmed = typeof sanitizedRemote.partnerArmGeneration === 'string';
+  const currentArmed = typeof current.partnerArmGeneration === 'string';
   const hasPartner =
     (sanitizedRemote.partnerArmGeneration !== undefined ||
       sanitizedRemote.partnerArmUpdatedAt !== undefined) &&
-    remotePartnerTs >= currentPartnerTs;
+    // A real release is stamped strictly above the prior arm, so an equal
+    // stamp may be an arm installed in the same millisecond or a stale release
+    // frame from just before it. Prefer the armed side on equality; only a
+    // strictly newer release (or an unarmed baseline) may unlock.
+    (remotePartnerTs > currentPartnerTs ||
+      (remotePartnerTs === currentPartnerTs && (remoteArmed || !currentArmed)));
   if (hasPartner) {
     merged.partnerArmGeneration = sanitizedRemote.partnerArmGeneration ?? null;
     merged.partnerArmUpdatedAt = sanitizedRemote.partnerArmUpdatedAt ?? 0;

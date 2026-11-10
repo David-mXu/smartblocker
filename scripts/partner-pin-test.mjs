@@ -81,6 +81,23 @@ await test('an armed raw state seeds the pin on upgrade', async () => {
   assert.equal(storage.get('partnerArmState')?.generation, upgradeArm.partnerArmGeneration);
 });
 
+await test('a cold merge seeds an armed raw state without a queue deadlock', async () => {
+  storage.delete('partnerArmState');
+  storage.set('lockState', structuredClone(upgradeArm));
+  invalidate({ lockState: {}, partnerArmState: {} });
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('merge deadlocked on its own seed')), 2_000);
+  });
+  try {
+    await Promise.race([mergeRemoteLockState(upgradeArm), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+  assert.equal(storage.get('partnerArmState')?.generation, upgradeArm.partnerArmGeneration);
+  assert.equal((await getLockStatus(now)).settingsLocked, true);
+});
+
 await test('the daemon arm is pinned and locks settings', async () => {
   assert.equal(await mergeRemoteLockState(armed), true);
   const state = await getLockState();
@@ -125,6 +142,14 @@ await test('a raw arm swap cannot replace the daemon generation', async () => {
 await test('a stale release frame cannot outrank a newer arm', async () => {
   const staleRelease = { ...released, partnerArmUpdatedAt: now - 3_000 };
   assert.equal(await mergeRemoteLockState(staleRelease), false);
+  assert.equal((await getLockState()).partnerArmGeneration, arm);
+  assert.equal((await getLockStatus(now)).settingsLocked, true);
+  assert.equal(storage.get('partnerArmState')?.generation, arm);
+});
+
+await test('an equal-stamp stale release cannot unlock a same-millisecond arm', async () => {
+  const equalRelease = { ...released, partnerArmUpdatedAt: now - 2_000 };
+  assert.equal(await mergeRemoteLockState(equalRelease), false);
   assert.equal((await getLockState()).partnerArmGeneration, arm);
   assert.equal((await getLockStatus(now)).settingsLocked, true);
   assert.equal(storage.get('partnerArmState')?.generation, arm);

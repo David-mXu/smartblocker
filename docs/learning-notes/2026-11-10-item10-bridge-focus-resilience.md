@@ -136,17 +136,29 @@ be edited while the daemon remained armed and its file unchanged.
 partner fields as authoritative, repairs a forged raw field, and updates the
 pin atomically with the lock state. A partner-bearing frame older than the
 current stamp is ignored, so a stale release cannot regress a newer arm;
-daemon merges are serialized so two frames cannot interleave their writes.
-An absent pin still falls back to the raw armed `lockState`; on upgrade, the
-first read of an armed raw state seeds the pin so a later raw clear cannot
-release it before the daemon connects.
+equal stamps prefer the armed side, because a release is always stamped
+strictly higher. Daemon merges are serialized so two frames cannot interleave
+their writes.
 
-Tests: `scripts/partner-pin-test.mjs` covers cold-read pin creation,
-upgrade seeding, raw clear, raw arm swap, a stale release frame, and a real
-daemon release. The test invalidates the cache as a storage event would, so
-deleting the overlay fails the cold-read assertions. The partner E2E now
-reloads the options page after the raw clear and asserts `#break-mode` stays
-disabled.
+An absent pin still falls back to the raw armed `lockState`; on upgrade, the
+first read of an armed raw state seeds the pin, with a future raw stamp
+clamped to now, so a later raw clear cannot release it before the daemon
+connects. Seeding is the one read that writes, so it distinguishes two call
+sites: a public `getLockState` queues the seed on the merge queue (a late seed
+must not land after a newer release), while the merge path calls a private
+`readLockState(seedInline = true)` that seeds inline because it already holds
+the queue slot. Without that split, a cold merge that found an armed raw state
+with no pin would await the queue slot it was itself holding. A read that
+started before a merge also keeps the newer cache instead of overwriting it
+with its pre-merge snapshot.
+
+Tests: `scripts/partner-pin-test.mjs` covers cold-read pin creation, upgrade
+seeding, a cold merge seeding without a queue deadlock, raw clear, raw arm
+swap, stale and equal-stamp release frames, and a real daemon release (8
+checks). The test fires the captured storage-change listener as a real
+storage event would, so deleting the overlay fails the cold-read assertions.
+The partner E2E now reloads the options page after the raw clear and asserts
+`#break-mode` stays disabled.
 
 ### 6. Replay tombstones
 
@@ -190,7 +202,7 @@ signed expiry passes.
 | Check | Result |
 | --- | --- |
 | `npm run typecheck` | clean |
-| 12 focused suites | 133 passed, 0 failed (allowance math/state/store/bridge/boundary/relief/activity, focus cycles, category schedules/relief guard, partner protocol/pin) |
+| 12 focused suites | 135 passed, 0 failed (allowance math/state/store/bridge/boundary/relief/activity, focus cycles, category schedules/relief guard, partner protocol/pin) |
 | Adjacent storage/lock/break suites | 283 passed, 0 failed (backup 18, profiles 17, lock-math 180, lock-types 24, preferences 6, breaks 14, reward accrual 16, app targets 8) |
 | `cargo test -p smartblocker-core` | 320 passed |
 | `cargo clippy -p smartblocker-core --all-targets -- -D warnings` | no issues |
@@ -210,6 +222,10 @@ outside this evidence.
   unreleasable, and a forward wall jump followed by a correction fails closed
   until wall catches up.
 - Pre-mutex clock capture can produce a spurious, retryable `ClockRollback`.
+- A stale accepted status arriving after a disconnect can briefly set the
+  in-memory authority below a kept pending mirror, causing one retryable
+  daemon `revision` refusal before the higher snapshot resyncs; no durable
+  state is lost.
 - The partner E2E replay assertion is weaker than the Rust
   `replay_cannot_release_a_later_arm`; the durable replay proof is the Rust
   test.

@@ -87,7 +87,7 @@ The native message bridge in [`companion.ts`](../../src/background/companion.ts)
 | Shared lock semantics | 155 TS lock-math cases, including scoped active overlays, Unicode conflicts, duplicates, partner LWW/release/sanitization and compound locks |
 | Lock storage transitions | 24 focused store/gate tests, including category duplicate refusal/clock guards |
 | Pure category gate | 17 tests: precedence, thresholds, confidence, top-2 mass, overnight and pinned zones |
-| Partner protocol and browser bridge | 5 protocol groups (including real `partnerOperationFromResult` selection/refusal) + 6 browser-pin tests + all 12 actual-background tests for ordinary sync and partner single-flight/reconnect behavior |
+| Partner protocol and browser bridge | 5 protocol groups (including real `partnerOperationFromResult` selection/refusal) + 8 browser-pin tests + all 12 actual-background tests for ordinary sync and partner single-flight/reconnect behavior |
 | Companion core/daemon/relay | 255 Rust tests across six suites at implementation; **320** after the 2026-11-10 review fixes; clippy and rustfmt passed |
 | Scoped browser lifecycle | Real lazy-card/embed active/inactive transition tests without navigation, plus deterministic ownership preservation |
 | Full partner browser flow | `PARTNER E2E: ALL PASSED` (15 checks): aged active public key, new delayed key, real UI arm, forged raw-release refusal, reloaded-UI settings lock, wrong-key rejection, correct offline signing, exact release, other-gate preservation and replay failure |
