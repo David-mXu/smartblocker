@@ -358,14 +358,18 @@ try {
   );
   if (!optionsLocked) process.exitCode = 1;
 
-  // 7. Companion bridge: this profile has no Native Messaging host, so the
-  // snapshot must settle on 'not-installed' and the section must say so.
+  // 7. Companion bridge: the status must be honest for this machine. CI has
+  // no Native Messaging host ("coming with the pro release"); a developer
+  // machine with the host installed but the daemon stopped truthfully says
+  // "Installed but not running". Both are valid; a blank/wrong state is not.
   await opts.goto(`chrome-extension://${extensionId}/options.html#companion`);
   await opts.waitForSelector('#companion-status');
   const companionText = (await opts.locator('#companion-status').textContent()) ?? '';
-  const companionOk = /coming with the pro release/i.test(companionText);
+  const companionOk =
+    /coming with the pro release/i.test(companionText) ||
+    /Installed but not running \(companion v/i.test(companionText);
   console.log(
-    `${companionOk ? 'PASS' : 'FAIL'} companion section shows not-installed state ` +
+    `${companionOk ? 'PASS' : 'FAIL'} companion section shows an honest install state ` +
       `("${companionText.trim()}")`,
   );
   if (!companionOk) process.exitCode = 1;
