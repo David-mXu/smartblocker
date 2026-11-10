@@ -43,7 +43,20 @@ pub fn sanitize_schedule_label(label: Option<String>) -> Option<String> {
     if collapsed.is_empty() {
         return None;
     }
-    Some(collapsed.chars().take(MAX_SCHEDULE_LABEL_LENGTH).collect())
+    // JavaScript's `.length` counts UTF-16 code units, not scalar values.
+    // Truncate on the same unit so a daemon round-trip cannot turn a label
+    // the extension accepted into one its validator rejects.
+    let mut units = 0;
+    let mut out = String::new();
+    for ch in collapsed.chars() {
+        let width = ch.len_utf16();
+        if units + width > MAX_SCHEDULE_LABEL_LENGTH {
+            break;
+        }
+        out.push(ch);
+        units += width;
+    }
+    Some(out)
 }
 
 fn is_zero(value: &u64) -> bool {
@@ -1453,6 +1466,14 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(parsed.schedules_updated_at, 0);
+    }
+
+    #[test]
+    fn label_truncation_counts_utf16_units_like_javascript() {
+        let emoji = sanitize_schedule_label(Some("😀".repeat(50))).unwrap();
+        assert_eq!(emoji.encode_utf16().count(), MAX_SCHEDULE_LABEL_LENGTH);
+        assert_eq!(emoji.chars().count(), MAX_SCHEDULE_LABEL_LENGTH / 2);
+        assert_eq!(sanitize_schedule_label(Some("\u{0000}\n\t".into())), None);
     }
 
     #[test]
