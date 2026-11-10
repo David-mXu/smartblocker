@@ -38,7 +38,9 @@ registerHooks({
       return {
         format: 'module',
         shortCircuit: true,
-        source: 'export const getLockState = async () => ({}); export const mergeRemoteLockState = async () => {};',
+        source: `export const getLockState = async () => ({});
+          export const mergeRemoteLockState = async () => {};
+          export const getLockStatus = async () => ({ settingsLocked: false });`,
       };
     }
     return nextLoad(url, context);
