@@ -91,6 +91,41 @@ Rust mirror gained the same optional field (`label: Option<String>`) so a
 companion merge/reverse-sync does not silently drop it. Evaluation never reads
 it.
 
+### Follow-up: the cross-language label contract
+
+Merging the feature exposed four places where a display-only field can still
+change behavior. The guiding rule: **a bad label must never drop or alter the
+enforcement window**, but the two implementations must agree on what a valid
+label is.
+
+1. **UTF-16 cap.** JavaScript's `.length` counts UTF-16 code units; Rust's
+   `chars().take(80)` counts scalar values. A label of 80 emoji was 160 JS
+   units, so the extension could reject a label its own daemon had just
+   produced. [`sanitize_schedule_label`](../../companion/crates/smartblocker-core/src/lock_math.rs)
+   now truncates on `len_utf16()`.
+2. **Canonical tie-breaker.** At equal `schedulesUpdatedAt`, the merge picks
+   the canonically smaller same-id rule. The canonical key omitted the label,
+   so two peers holding the same window with different names could each keep
+   their own rule depending on argument order. Both
+   [`scheduleCanon`](../../src/shared/lock-math.ts) and
+   [`canon`](../../companion/crates/smartblocker-core/src/merge.rs) now include
+   the label, and a shared fixture
+   (`equal timestamps same-id schedule conflict includes the display label…`)
+   asserts convergence.
+3. **Backup merge/change detection.** `canonicalRule` dropped the label, and
+   `ruleKey` / `sameRuleCore` ignored it. A restored rename was silently
+   discarded, and because `rulesEqual` saw no change, the schedule sync stamp
+   never bumped. Both now include the label, with 18 backup checks covering
+   sanitize, round-trip, and rename propagation.
+4. **Sanitizer parity.** Rust now collapses control characters and whitespace
+   and treats an all-whitespace label as absent, matching the TS sanitizer;
+   the rule itself is retained either way.
+
+Observed on the merged tree: `lock-math-test` **180 passed** (the new fixture
+fails without fix 2), `backup-test` **18 passed**, `cargo test -p
+smartblocker-core` **320 passed** (316 unit + 4 fixtures). Older companion
+builds still drop the optional label on reverse-sync; new builds preserve it.
+
 ### UI
 
 `SchedulePage.tsx` now computes overlaps from the in-memory `rules` array, so

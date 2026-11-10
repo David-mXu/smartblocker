@@ -515,7 +515,7 @@ without giving up our architectural ones.
 > daemon-authenticated revision intents, one durable writer for daemon
 > mirrors and fallback commands, and receipt-window reconciliation. Item 14
 > adds additive scoped schedules and offline-signed partner codes with a
-> browser-side authority pin. Final gates: typecheck, **133** focused checks
+> browser-side authority pin. Final gates: typecheck, **135** focused checks
 > plus **283** adjacent storage/lock/break checks, **320** Rust core tests, clippy,
 > and all three real Linux E2Es (`PARTNER`, `ALLOWANCE DAEMON`,
 > `ALLOWANCE FALLBACK`) pass. Linux Chromium only; native Windows and a real
@@ -545,7 +545,7 @@ without giving up our architectural ones.
     outside the peer's retained 64-command window is treated as ambiguous
     rather than as proof of divergence. Focus/Pomodoro state is generation-
     and ownership-guarded, so stale reads and late rollbacks cannot advance a
-    newer session or skip a fixed break. Gates: typecheck, 133 focused checks,
+    newer session or skip a fixed break. Gates: typecheck, 135 focused checks,
     283 adjacent storage/lock/break checks, **320** Rust tests, clippy, and the real
     Linux daemon/fallback E2Es. See
     `docs/learning-notes/2026-11-10-item10-bridge-focus-resilience.md`.
@@ -604,7 +604,12 @@ without giving up our architectural ones.
     `categorySchedules` fields, so an older peer cannot strip scoped windows;
     active scoped rules overlay the merged LWW result (a timer or other active
     window cannot discard enforcement); validation, ownership and epoch
-    guards prevent duplicate, ambiguous or stale windows. Partner keys are
+    guards prevent duplicate, ambiguous or stale windows. The editor reports
+    overlapping weekly windows as a legal union (half-open, overnight/week-wrap
+    and timezone-pin aware) and offers one-click duplication with a fresh id.
+    Its optional display-only label is preserved through TS/Rust sanitize, the
+    merge tie-breaker and backup, capped at 80 UTF-16 units on both sides.
+    Partner keys are
     partner-held Ed25519 with a full wall + monotonic 24-hour activation
     delay. `SBP1` codes bind the exact installation, arm, operation, nonce and
     expiry; replay tombstones are durable and every unexpired tombstone is
@@ -612,11 +617,34 @@ without giving up our architectural ones.
     `enabled`, timer, Frozen, password, delay or random-text gates. The
     browser pins daemon-confirmed partner fields in `partnerArmState`, so a
     raw or stale `lockState` write cannot unlock settings while the daemon
-    stays armed. Gates: 17 schedule-math checks, 8 relief-guard checks, 5
-    partner-protocol groups, 6 browser-pin tests, **320** Rust tests, clippy,
-    and the 15-check real Linux partner E2E. See
+    stays armed; the pin is seeded from an armed raw state on upgrade, ignores
+    older partner frames, and merges daemon frames serially. Gates: 17
+    schedule-math checks, 8 relief-guard checks, 5 partner-protocol groups, 8
+    browser-pin tests, **320** Rust tests, clippy, and the 15-check real Linux
+    partner E2E. See
     `docs/learning-notes/2026-11-09-scoped-schedules-and-partner-codes.md` and
     `docs/learning-notes/2026-11-10-item10-bridge-focus-resilience.md`.
+
+### Parity closeout — 2026-11-10
+
+> ✅ **SHIPPED on `main` at `8ea446e` (local, not pushed).** The seven primary
+> gaps from the 2026-11-07 audit plus the follow-on schedule, backup and
+> desktop-control work are merged: Now/Next/Relief dashboard, quiet
+> reminders, schedule preferences and per-rule lead, named profiles,
+> protection/usage analytics, desktop app usage, typed app identity, opt-in
+> productive-work rewards, versioned backup/restore, startup + configurable
+> extension-loss grace, and schedule overlap/duplicate UX. One profile is
+> active at a time; `settings` remains Default; globals stay global.
+>
+> Final gates on the merged tree: typecheck; **35 pure suites / 721 checks**;
+> Chrome, Firefox and desktop-frontend builds; the **15,874-case** eval
+> **PASS: no regressions** with all metrics unchanged; **322** Rust tests
+> (316 core unit + 4 fixtures + 2 nm-host/daemon), clippy, fmt and the
+> Windows-target compile check; **13 real-Chromium suites / 353 checks**.
+> Linux/WSL evidence only: the Tauri shell was not compiled, and Windows
+> registry autostart, Store identity, foreground usage, close boundaries and
+> native-messaging registration remain manual. Full matrix, rerun history and
+> residuals: `docs/audits/2026-11-10-cold-turkey-parity-verification.md`.
 
 ---
 

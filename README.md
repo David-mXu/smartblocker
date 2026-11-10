@@ -62,6 +62,18 @@ plan is in [`ROADMAP.md`](ROADMAP.md). What works today:
    during focus hours and rescue its classifier blocks outside them. Offline
    Ed25519 accountability-partner codes, with a 24-hour public-key activation
    delay, release only their exact arm — without lifting other locks.
+9. **Cold Turkey parity, kept local.** A Now/Next/Relief dashboard states the
+   exact aggregate lock end, next schedule transition and relief scope; quiet
+   reminders are off by default. Named profiles overlay scoped policy on
+   Default (blocking, reminders and display preferences stay global). Usage
+   analytics track idle-aware per-site/category protection and override rates,
+   and configuration exports to a versioned JSON file with previewed
+   merge/replace and a pre-restore slot. On desktop, startup is a switch,
+   extension-loss grace is configurable (15–300 s), app targets can be exact
+   stems, full paths or Store package family names, and foreground usage stays
+   on the machine. See [`docs/profiles.md`](docs/profiles.md),
+   [`docs/backup.md`](docs/backup.md) and the
+   [parity verification audit](docs/audits/2026-11-10-cold-turkey-parity-verification.md).
 
 Nothing ever leaves your machine (the model, ~35MB one-time, is downloaded
 from the Hugging Face Hub and cached; all inference and history analysis are
@@ -176,6 +188,10 @@ npm run typecheck && npm run build                           # typecheck + build
 npm run eval                                                # regression gate — fails on any regression
 node scripts/benchmark.mjs embed:Xenova/bge-small-en-v1.5   # model bake-off (compare candidates)
 node scripts/e2e-test.mjs                                   # full extension e2e in a real Chromium
+SB_SKIP_BUILD=1 node scripts/e2e-dashboard-test.mjs         # Now/Next/Relief + profile chip
+SB_SKIP_BUILD=1 node scripts/e2e-profiles.mjs               # named-profile create/switch/delete
+SB_SKIP_BUILD=1 node scripts/e2e-backup.mjs                 # export/import/preview/restore
+node scripts/e2e-schedule-ux.mjs                            # overlap notice + duplicate windows
 node scripts/e2e-protection-verification.mjs                # cold-profile Chromium onboarding + recovery
 SB_FIREFOX=/path/to/firefox node scripts/e2e-firefox-onboarding.mjs  # packed-XPI Firefox runtime suite
 SB_FIREFOX=/path/to/firefox node scripts/verify-firefox-dnr.mjs      # packed-XPI Firefox force redirect
