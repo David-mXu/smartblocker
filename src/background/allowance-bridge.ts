@@ -60,6 +60,14 @@ export function createAllowanceBridge(hooks: Hooks) {
     return attempt;
   }
 
+  function latchMirror(state: AllowanceAuthorityState): void {
+    // A stale status reply must never replace a higher committed snapshot that
+    // is still waiting to be persisted.
+    if (!pendingMirror || state.revision >= pendingMirror.revision) {
+      pendingMirror = state;
+    }
+  }
+
   function flushMirror(): Promise<void> {
     const pendingState = pendingMirror;
     if (!pendingState) return Promise.resolve();
@@ -129,14 +137,24 @@ export function createAllowanceBridge(hooks: Hooks) {
         // command must not disappear merely because the reply arrived late.
         const liveNow = hooks.getConnection();
         if (fallbackAfterInitializationTimeout || !liveNow || liveNow.epoch !== epoch) {
+          let mirrorError: Error | null = null;
           try {
             const mirrored = await reconcileLocalAllowanceSnapshot(incoming);
-            if (mirrored.error) pendingMirror = incoming;
+            if (mirrored.error) {
+              latchMirror(incoming);
+              mirrorError = mirrored.error;
+            }
           } catch (error) {
-            pendingMirror = incoming;
+            latchMirror(incoming);
+            mirrorError = error instanceof Error ? error : new Error(String(error));
             console.warn('[SmartBlocker] late allowance snapshot was not mirrored:', error);
           }
           if (fallbackAfterInitializationTimeout) {
+            if (mirrorError) {
+              // `ok:true` must mean the acknowledged state is durable.
+              completion?.call.reject(mirrorError);
+              return;
+            }
             completion?.call.resolve({
               ok: completion.ok,
               source: 'fallback',
@@ -154,6 +172,18 @@ export function createAllowanceBridge(hooks: Hooks) {
           return Boolean(live && live.epoch === epoch) && !fallbackAfterInitializationTimeout;
         });
         if (reconciliation.decision === 'retired') {
+          // The connection retired while this snapshot was parked in its local
+          // read. Mirror it best-effort anyway: a daemon commit must not
+          // disappear just because its reply lost the epoch race. A newer
+          // fallback snapshot wins inside reconcile, so this cannot overwrite
+          // a later browser decision.
+          try {
+            const mirrored = await reconcileLocalAllowanceSnapshot(incoming);
+            if (mirrored.error) latchMirror(incoming);
+          } catch (error) {
+            latchMirror(incoming);
+            console.warn('[SmartBlocker] retired allowance snapshot was not mirrored:', error);
+          }
           completion?.call.reject(new Error('The allowance authority disconnected before persistence.'));
           return;
         }
@@ -161,6 +191,11 @@ export function createAllowanceBridge(hooks: Hooks) {
           // This connection deliberately chose fallback after the bounded wait.
           // The queued mirror above preserved the daemon snapshot only when no
           // newer fallback command won, so it cannot replace later choices.
+          if (reconciliation.error) {
+            latchMirror(incoming);
+            completion?.call.reject(reconciliation.error);
+            return;
+          }
           completion?.call.resolve({
             ok: completion.ok,
             source: 'fallback',
@@ -172,7 +207,7 @@ export function createAllowanceBridge(hooks: Hooks) {
         }
         const live = hooks.getConnection();
         if (!live || live.epoch !== epoch) {
-          if (reconciliation.error) pendingMirror = incoming;
+          if (reconciliation.error) latchMirror(incoming);
           completion?.call.reject(new Error('The allowance authority disconnected before persistence.'));
           return;
         }
@@ -180,7 +215,7 @@ export function createAllowanceBridge(hooks: Hooks) {
           // The durable local snapshot is newer or holds a transition the
           // daemon did not include. Offer it and stay in reconciliation;
           // `current()` must not claim a revision the daemon has not adopted.
-          pendingMirror = null;
+          if (!pendingMirror || incoming.revision >= pendingMirror.revision) pendingMirror = null;
           if (reconciliation.error) {
             completion?.call.reject(reconciliation.error);
             authority = null;
@@ -205,7 +240,7 @@ export function createAllowanceBridge(hooks: Hooks) {
           // The daemon accepted the snapshot, but the local mirror did not.
           // Latch it for the next authenticated base revision and keep it
           // pending so a fallback command flushes it first.
-          pendingMirror = incoming;
+          latchMirror(incoming);
           if (!authority || authorityEpoch !== epoch || incoming.revision >= authority.revision) {
             authority = incoming;
             authorityEpoch = epoch;
@@ -215,7 +250,7 @@ export function createAllowanceBridge(hooks: Hooks) {
           completion?.call.reject(reconciliation.error);
           return;
         }
-        pendingMirror = null;
+        if (!pendingMirror || incoming.revision >= pendingMirror.revision) pendingMirror = null;
         if (!authority || authorityEpoch !== epoch || incoming.revision >= authority.revision) {
           authority = incoming;
           authorityEpoch = epoch;

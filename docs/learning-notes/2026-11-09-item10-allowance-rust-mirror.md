@@ -1,5 +1,9 @@
 # Item 10 allowance pure Rust mirror
 
+> 2026-11-10 follow-up: daemon/browser integration, the reconciliation
+> bridge, focus-cycle races, and the review fixes are documented in
+> [Item 10 bridge/focus resilience](2026-11-10-item10-bridge-focus-resilience.md).
+
 ## Goal and context
 
 Mirror the final TypeScript allowance/accounting and authority-command behavior in the companion core without adding storage, daemon, IPC, time, or timezone dependencies. The source of truth was [`src/shared/allowance-math.ts`](../../src/shared/allowance-math.ts), [`src/shared/allowance-state.ts`](../../src/shared/allowance-state.ts), and their two Node test scripts.

@@ -25,6 +25,7 @@ registerHooks({
 });
 
 const storage = new Map();
+const changeListeners = [];
 const clone = (value) => value === undefined ? undefined : structuredClone(value);
 globalThis[HARNESS] = {
   api: {
@@ -42,10 +43,13 @@ globalThis[HARNESS] = {
           for (const key of Array.isArray(keys) ? keys : [keys]) storage.delete(key);
         },
       },
-      onChanged: { addListener() {} },
+      onChanged: { addListener(fn) { changeListeners.push(fn); } },
     },
   },
 };
+function invalidate(changes) {
+  for (const fn of changeListeners) fn(changes, 'local');
+}
 
 const { getLockState, getLockStatus, mergeRemoteLockState } = await import('../src/shared/lock.ts?partner-pin=1');
 const arm = 'a'.repeat(64);
@@ -58,6 +62,7 @@ const armed = {
   partnerArmGeneration: arm, partnerArmUpdatedAt: now - 2_000,
 };
 const released = { ...armed, partnerArmGeneration: null, partnerArmUpdatedAt: now - 1_000 };
+const upgradeArm = { ...armed, partnerArmGeneration: 'c'.repeat(64), partnerArmUpdatedAt: now - 5_000 };
 
 let passed = 0;
 async function test(name, fn) {
@@ -67,6 +72,15 @@ async function test(name, fn) {
 }
 
 console.log('partner browser authority pin tests');
+await test('an armed raw state seeds the pin on upgrade', async () => {
+  storage.set('lockState', structuredClone(upgradeArm));
+  invalidate({ lockState: {} });
+  const state = await getLockState();
+  assert.equal(state.partnerArmGeneration, upgradeArm.partnerArmGeneration);
+  assert.equal((await getLockStatus(now)).settingsLocked, true);
+  assert.equal(storage.get('partnerArmState')?.generation, upgradeArm.partnerArmGeneration);
+});
+
 await test('the daemon arm is pinned and locks settings', async () => {
   assert.equal(await mergeRemoteLockState(armed), true);
   const state = await getLockState();
@@ -83,8 +97,12 @@ await test('a raw lockState clear cannot release the pinned arm', async () => {
     partnerArmGeneration: null,
     partnerArmUpdatedAt: now + 60_000,
   });
-  // The storage event in a real worker would invalidate this; the test imports
-  // once, so reset by merging the daemon's unchanged state.
+  // A storage change invalidates any in-memory cache in the real worker.
+  // The cold read must still see the separate pin, before any merge repairs it.
+  invalidate({ lockState: {} });
+  const cold = await getLockState();
+  assert.equal(cold.partnerArmGeneration, arm, 'the cold read is pinned');
+  assert.equal((await getLockStatus(now)).settingsLocked, true);
   const changed = await mergeRemoteLockState(armed);
   assert.equal(changed, true, 'the raw clear is repaired');
   assert.equal((await getLockState()).partnerArmGeneration, arm);
@@ -98,8 +116,18 @@ await test('a raw arm swap cannot replace the daemon generation', async () => {
     partnerArmGeneration: otherArm,
     partnerArmUpdatedAt: now + 60_000,
   });
+  invalidate({ lockState: {} });
+  assert.equal((await getLockState()).partnerArmGeneration, arm, 'the cold read ignores the swap');
   await mergeRemoteLockState(armed);
   assert.equal((await getLockState()).partnerArmGeneration, arm);
+});
+
+await test('a stale release frame cannot outrank a newer arm', async () => {
+  const staleRelease = { ...released, partnerArmUpdatedAt: now - 3_000 };
+  assert.equal(await mergeRemoteLockState(staleRelease), false);
+  assert.equal((await getLockState()).partnerArmGeneration, arm);
+  assert.equal((await getLockStatus(now)).settingsLocked, true);
+  assert.equal(storage.get('partnerArmState')?.generation, arm);
 });
 
 await test('a daemon release still wins over the pinned arm', async () => {

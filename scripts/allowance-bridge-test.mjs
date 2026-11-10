@@ -441,7 +441,7 @@ await test('a retired epoch observation cannot latch over the new connection', a
   assert.equal(bridge.current().revision, base);
 
   const stale = structuredClone(server);
-  stale.revision = base + 5;
+  stale.revision = base + 1;
   stale.categories['news'].ledger.openingsUsed = 0;
   const gate = deferred();
   readGate = gate;
@@ -451,14 +451,14 @@ await test('a retired epoch observation cannot latch over the new connection', a
   bridge.reset();
   epoch++;
   const fresh = structuredClone(server);
-  fresh.revision = base + 1;
+  fresh.revision = base + 2;
   bridge.onMessage({ type: 'allowanceStateSync', allowance: fresh }, epoch);
   for (let n = 0; n < 3; n++) await flush();
   gate.resolve();
   for (let n = 0; n < 10; n++) await flush();
 
-  assert.equal(bridge.current().revision, base + 1, 'the stale epoch did not win');
-  assert.equal(values.allowanceAuthority.revision, base + 1);
+  assert.equal(bridge.current().revision, base + 2, 'the connected observation wins');
+  assert.equal(values.allowanceAuthority.revision, base + 2);
   assert.equal(values.allowanceAuthority.categories['news'].ledger.openingsUsed, 1);
 });
 
@@ -490,6 +490,15 @@ await test('a committed daemon snapshot is mirrored before an offline fallback e
   assert.equal(server.revision, base + 1, 'the daemon committed the command');
   assert.equal(values.allowanceAuthority.revision, base, 'the local mirror did not');
   assert.equal(bridge.current().revision, base + 1, 'the accepted snapshot is in memory');
+
+  // A status reply captured before that commit arrives late. It matches the
+  // durable local snapshot and is accepted, but it must not clear the higher
+  // pending mirror; otherwise the next fallback would erase the committed
+  // daemon command.
+  bridge.onMessage({ type: 'allowanceStateSync', allowance: structuredClone(values.allowanceAuthority) }, epoch);
+  for (let n = 0; n < 8; n++) await flush();
+  assert.equal(values.allowanceAuthority.revision, base, 'the stale observation did not write');
+  assert.equal(bridge.current().revision, base + 1, 'the higher pending revision still wins');
 
   connected = false;
   const response = await dispatch({
@@ -588,6 +597,48 @@ await test('a daemon-acked snapshot on a retired epoch is still mirrored', async
   assert.equal(offline.ok, true);
   assert.equal(values.allowanceAuthority.revision, base + 2, 'fallback built on the mirrored revision');
   assert.equal(values.allowanceAuthority.categories[categoryName].ledger.earnedRewardMs, earned, 'the reward survived fallback');
+  connected = true;
+});
+
+await test('an epoch retiring during reconciliation still mirrors the snapshot', async () => {
+  bridge.reset();
+  epoch++;
+  connected = true;
+  server = emptyAllowanceAuthorityState();
+  values.allowanceAuthority = structuredClone(server);
+  bridge = createAllowanceBridge({
+    getConnection: () => connected ? ({ epoch, send }) : null,
+    onAuthority: (state) => results.push(state.revision),
+  });
+  const config = {
+    dailyAllowanceMs: 600_000, dailyOpenings: 1, waitingBaseMs: 0, waitingStepMs: 0,
+    waitingMaxMs: 0, rewardCapMs: 600_000,
+  };
+  const categoryName = 'retire-mid-reconcile';
+  const command = { kind: 'configure', operationId: id(120), category: categoryName, config };
+  const applied = applyAllowanceCommand(server, command, server.revision);
+  assert.equal(applied.ok, true);
+  server = commitAllowanceCommandRevision(applied.state, server.revision + 1, command);
+  const base = values.allowanceAuthority.revision;
+  const gate = deferred();
+  readGate = gate;
+  bridge.onMessage({ type: 'allowanceStateSync', allowance: server }, epoch);
+  for (let n = 0; n < 4; n++) await flush();
+  assert.equal(readGate, null, 'the reconcile read is parked');
+  // Retire the connection while the reconciliation still holds the pre-retire
+  // local snapshot. The committed daemon state must not be dropped.
+  connected = false;
+  epoch++;
+  bridge.reset();
+  gate.resolve();
+  for (let n = 0; n < 10; n++) await flush();
+  assert.equal(values.allowanceAuthority.revision, base + 1, 'the snapshot was mirrored after retirement');
+  assert.ok(values.allowanceAuthority.categories[categoryName]);
+
+  const offline = await dispatch({ kind: 'configure', operationId: id(121), category: 'after-mid-retire', config });
+  assert.equal(offline.ok, true);
+  assert.equal(values.allowanceAuthority.revision, base + 2, 'fallback extended the mirrored snapshot');
+  assert.ok(values.allowanceAuthority.categories[categoryName]);
   connected = true;
 });
 

@@ -72,6 +72,8 @@ Redemption validates the pending operation, matching paid expiry, active public 
 
 Browser lock synchronization cannot bypass this path: partner fields are pinned against generic remote merges on both authenticated and unauthenticated paths. Raw storage edits cannot release an arm.
 
+**2026-11-10 revision:** the daemon pins partner fields, but the browser previously merged the raw `lockState` copy with ordinary LWW. A raw `{partnerArmGeneration: null, partnerArmUpdatedAt: future}` could therefore make settings editable while the daemon stayed armed. The daemon-confirmed arm is now also stored in a separate `partnerArmState` pin; `getLockState` overlays it and `mergeRemoteLockState` treats daemon partner fields as authoritative, repairing a forged raw field. A partner-bearing frame older than the pin's stamp is ignored, daemon merges are serialized, and an armed raw state seeds the pin on the first read after an upgrade. Unauthenticated redacted syncs do not clear the pin. A same-user DevTools adversary can edit both storage keys, so this is an accidental/stale-write guard rather than the hard blocking boundary. Replay tombstones now retain every unexpired record; only expired records are pruned, so the old 256-entry cap cannot evict a live replay memo.
+
 ### Browser command path and UI
 
 The native message bridge in [`companion.ts`](../../src/background/companion.ts) serializes partner commands because the legacy `CommandResult` has no operation ID. A result belongs only to the one command outstanding in that connection epoch. Disconnect rejects pending work and never resolves it through the new daemon epoch.
@@ -85,10 +87,10 @@ The native message bridge in [`companion.ts`](../../src/background/companion.ts)
 | Shared lock semantics | 155 TS lock-math cases, including scoped active overlays, Unicode conflicts, duplicates, partner LWW/release/sanitization and compound locks |
 | Lock storage transitions | 24 focused store/gate tests, including category duplicate refusal/clock guards |
 | Pure category gate | 17 tests: precedence, thresholds, confidence, top-2 mass, overnight and pinned zones |
-| Partner protocol and browser bridge | 5 protocol tests + all 12 actual-background tests for ordinary sync and partner single-flight/reconnect behavior |
-| Companion core/daemon/relay | 255 Rust tests across six suites; clippy and rustfmt passed |
+| Partner protocol and browser bridge | 5 protocol groups (including real `partnerOperationFromResult` selection/refusal) + 6 browser-pin tests + all 12 actual-background tests for ordinary sync and partner single-flight/reconnect behavior |
+| Companion core/daemon/relay | 255 Rust tests across six suites at implementation; **320** after the 2026-11-10 review fixes; clippy and rustfmt passed |
 | Scoped browser lifecycle | Real lazy-card/embed active/inactive transition tests without navigation, plus deterministic ownership preservation |
-| Full partner browser flow | `PARTNER E2E: ALL PASSED`: aged active public key, new delayed key, real UI arm, forged raw-release refusal, wrong-key rejection, correct offline signing, exact release, other-gate preservation and replay failure |
+| Full partner browser flow | `PARTNER E2E: ALL PASSED` (15 checks): aged active public key, new delayed key, real UI arm, forged raw-release refusal, reloaded-UI settings lock, wrong-key rejection, correct offline signing, exact release, other-gate preservation and replay failure |
 
 Evidence is limited to Linux/WSL, Node, Rust, and real Chromium/native-messaging tests. Frontend Chrome/Firefox bundles and Rust wrappers were built/table checked, but Firefox native messaging, native Windows behavior, and a real Tauri shell were **not** exercised and are not claimed as verification. Item 12 deliberately remains hardware-blocked.
 

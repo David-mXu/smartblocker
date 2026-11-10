@@ -508,6 +508,19 @@ without giving up our architectural ones.
 > One earlier concurrent attempt failed only the YouTube page-visibility timing
 > assertion despite correct individual verdicts; it did not reproduce on either
 > unchanged rerun, so no root cause is claimed.
+>
+> ✅ **2026-11-10 status:** item **10** (Allowance / Reward / Sessions /
+> Pomodoro) and item **14** (per-category schedules + accountability-partner
+> codes) are implemented and review-clean. Item 10 keeps
+> daemon-authenticated revision intents, one durable writer for daemon
+> mirrors and fallback commands, and receipt-window reconciliation. Item 14
+> adds additive scoped schedules and offline-signed partner codes with a
+> browser-side authority pin. Final gates: typecheck, **133** focused checks
+> plus **283** adjacent storage/lock/break checks, **320** Rust core tests, clippy,
+> and all three real Linux E2Es (`PARTNER`, `ALLOWANCE DAEMON`,
+> `ALLOWANCE FALLBACK`) pass. Linux Chromium only; native Windows and a real
+> Tauri shell are not claimed. See
+> `docs/learning-notes/2026-11-10-item10-bridge-focus-resilience.md`.
 
 9. **Idle-aware usage statistics + dashboard** (per-day per-site/category
    counters + "pages silenced this week" + override-rate; JSON export;
@@ -521,6 +534,21 @@ without giving up our architectural ones.
    `docs/learning-notes/2026-11-08-idle-aware-usage-statistics.md`.
 10. **Breaks v2: Allowance / Reward / Sessions / Pomodoro** (escalating
     cost per use — Opal Waiting-Room pattern).
+    **Implemented; focused review clean (2026-11-10):** per-category daily
+    allowance and reward pools, escalating (capped) waiting, limited openings,
+    primary-category-only relief, real productive-work rewards, and separate
+    fixed Pomodoro breaks. The daemon owns authenticated revision intents and
+    durable receipts; a command succeeds only after its snapshot is persisted.
+    The extension fallback shares one serialized writer with daemon-snapshot
+    reconciliation, preserves local-only transitions, and mirrors a committed
+    snapshot even when its connection epoch has retired. A stale receipt
+    outside the peer's retained 64-command window is treated as ambiguous
+    rather than as proof of divergence. Focus/Pomodoro state is generation-
+    and ownership-guarded, so stale reads and late rollbacks cannot advance a
+    newer session or skip a fixed break. Gates: typecheck, 133 focused checks,
+    283 adjacent storage/lock/break checks, **320** Rust tests, clippy, and the real
+    Linux daemon/fallback E2Es. See
+    `docs/learning-notes/2026-11-10-item10-bridge-focus-resilience.md`.
 11. **Multi-browser onboarding + "Fix extensions" surface** (companion
     detects installed browsers, per-browser install/fix flow).
     **Implemented; focused review clean (2026-11-08):** positive executable/App
@@ -572,6 +600,23 @@ without giving up our architectural ones.
 14. **Per-category schedules** (then per-list after the multi-list UI
     redesign) and **accountability-partner unlock codes** (offline-signed,
     24 h partner-activation delay).
+    **Implemented; focused review clean (2026-11-10):** schedules use additive
+    `categorySchedules` fields, so an older peer cannot strip scoped windows;
+    active scoped rules overlay the merged LWW result (a timer or other active
+    window cannot discard enforcement); validation, ownership and epoch
+    guards prevent duplicate, ambiguous or stale windows. Partner keys are
+    partner-held Ed25519 with a full wall + monotonic 24-hour activation
+    delay. `SBP1` codes bind the exact installation, arm, operation, nonce and
+    expiry; replay tombstones are durable and every unexpired tombstone is
+    retained; release removes only the exact arm and never ordinary
+    `enabled`, timer, Frozen, password, delay or random-text gates. The
+    browser pins daemon-confirmed partner fields in `partnerArmState`, so a
+    raw or stale `lockState` write cannot unlock settings while the daemon
+    stays armed. Gates: 17 schedule-math checks, 8 relief-guard checks, 5
+    partner-protocol groups, 6 browser-pin tests, **320** Rust tests, clippy,
+    and the 15-check real Linux partner E2E. See
+    `docs/learning-notes/2026-11-09-scoped-schedules-and-partner-codes.md` and
+    `docs/learning-notes/2026-11-10-item10-bridge-focus-resilience.md`.
 
 ---
 

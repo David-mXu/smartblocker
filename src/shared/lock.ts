@@ -83,6 +83,21 @@ export async function getLockState(): Promise<LockState> {
   if (pin) {
     state.partnerArmGeneration = pin.generation;
     state.partnerArmUpdatedAt = pin.updatedAt;
+  } else if (typeof state.partnerArmGeneration === 'string') {
+    // Upgrade path: an older installation can have a valid armed raw state
+    // with no pin yet. Seed it on the first read so a later raw clear cannot
+    // release the arm before an authenticated daemon frame arrives.
+    const seeded = parsePartnerArmPin({
+      generation: state.partnerArmGeneration,
+      updatedAt: state.partnerArmUpdatedAt ?? 0,
+    });
+    if (seeded) {
+      state.partnerArmGeneration = seeded.generation;
+      state.partnerArmUpdatedAt = seeded.updatedAt;
+      void api.storage.local.set({ [PARTNER_ARM_KEY]: seeded }).catch((error) => {
+        console.warn('[SmartBlocker] partner arm pin was not seeded:', error);
+      });
+    }
   }
   cache = state;
   return cache;
@@ -495,7 +510,20 @@ function canonicalJson(value: unknown): string {
   );
 }
 
-export async function mergeRemoteLockState(remote: unknown): Promise<boolean> {
+let mergeQueue: Promise<void> = Promise.resolve();
+
+/** Serialize daemon-frame merges. Two independent status/pairing promises
+ * otherwise read the same snapshot and land their writes out of order. */
+export function mergeRemoteLockState(remote: unknown): Promise<boolean> {
+  const attempt = mergeQueue.then(() => mergeRemoteLockStateNow(remote));
+  mergeQueue = attempt.then(
+    () => undefined,
+    () => undefined,
+  );
+  return attempt;
+}
+
+async function mergeRemoteLockStateNow(remote: unknown): Promise<boolean> {
   const now = Date.now();
   const current = { ...EMPTY_LOCK_STATE, ...(await getLockState()) };
   const sanitizedRemote = sanitizeLockState(remote, now, MAX_LOCK_MS);
@@ -504,10 +532,15 @@ export async function mergeRemoteLockState(remote: unknown): Promise<boolean> {
   // forged or stale local LWW stamp. Without this, a raw
   // `{partnerArmGeneration: null}` write would unlock settings locally while
   // the daemon stayed armed, and a legitimate release could be outranked by a
-  // future local stamp.
+  // future local stamp. A stale partner-bearing frame may still arrive after
+  // a newer one; the daemon stamps every successful arm/release strictly
+  // upward, so only an equal-or-newer stamp may replace the pin.
+  const remotePartnerTs = sanitizedRemote.partnerArmUpdatedAt ?? 0;
+  const currentPartnerTs = current.partnerArmUpdatedAt ?? 0;
   const hasPartner =
-    sanitizedRemote.partnerArmGeneration !== undefined ||
-    sanitizedRemote.partnerArmUpdatedAt !== undefined;
+    (sanitizedRemote.partnerArmGeneration !== undefined ||
+      sanitizedRemote.partnerArmUpdatedAt !== undefined) &&
+    remotePartnerTs >= currentPartnerTs;
   if (hasPartner) {
     merged.partnerArmGeneration = sanitizedRemote.partnerArmGeneration ?? null;
     merged.partnerArmUpdatedAt = sanitizedRemote.partnerArmUpdatedAt ?? 0;

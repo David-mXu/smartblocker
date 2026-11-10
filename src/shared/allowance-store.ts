@@ -108,7 +108,10 @@ export async function reconcileLocalAllowanceSnapshot(
       await writeLocalAllowanceAuthority(clean);
       return { decision: 'accepted', state: clean };
     } catch (error) {
-      return { decision: 'accepted', state: clean, error: asError(error) };
+      // The interface promises the pre-write durable value on failure; a
+      // caller must not treat `clean` as persisted just because the reducer
+      // accepted it.
+      return { decision: 'accepted', state: local, error: asError(error) };
     }
   });
 }

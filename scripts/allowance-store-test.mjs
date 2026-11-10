@@ -72,6 +72,7 @@ const {
   allowanceLocalDayKey,
   getLocalAllowanceAuthority,
   promoteLocalAllowanceAuthorityForConflict,
+  reconcileLocalAllowanceSnapshot,
   submitLocalAllowanceCommand,
 } = await import('../src/shared/allowance-store.ts?store-test=1');
 
@@ -203,6 +204,25 @@ await test('fallback reward commands honor the opt-in reward config and daily ca
     60_000,
     'authority still enforces the daily reward cap',
   );
+});
+
+await test('a failed accepted reconcile reports the durable revision', async () => {
+  const current = await getLocalAllowanceAuthority();
+  const incoming = structuredClone(current);
+  incoming.revision = current.revision + 1;
+  incoming.categories['reconcile-target'] = structuredClone(current.categories['video games']);
+  failNextWrite = true;
+  const failed = await reconcileLocalAllowanceSnapshot(incoming);
+  assert.equal(failed.decision, 'accepted');
+  assert.ok(failed.error, 'the persistence failure is reported');
+  assert.equal(failed.state.revision, current.revision, 'the reported state is the durable one');
+  assert.equal((await getLocalAllowanceAuthority()).revision, current.revision);
+
+  const retried = await reconcileLocalAllowanceSnapshot(incoming);
+  assert.equal(retried.decision, 'accepted');
+  assert.equal(retried.error, undefined);
+  assert.equal(retried.state.revision, current.revision + 1);
+  assert.ok((await getLocalAllowanceAuthority()).categories['reconcile-target']);
 });
 
 await test('local day keys are calendar-shaped local dates', () => {
