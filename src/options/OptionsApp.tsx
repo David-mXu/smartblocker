@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
+  Archive,
   Bell,
   CalendarBlank,
   ChartLineUp,
@@ -24,6 +25,7 @@ import { useOptionsState, type OptionsState } from './useOptionsState';
 import { WelcomeWizard } from './welcome/WelcomeWizard';
 import { BlockingPage } from './pages/BlockingPage';
 import { ProfilesPage } from './pages/ProfilesPage';
+import { BackupPage } from './pages/BackupPage';
 import { SitesPage } from './pages/SitesPage';
 import { FocusPage } from './pages/FocusPage';
 import { LocksPage } from './pages/LocksPage';
@@ -52,6 +54,7 @@ const PAGES: PageDef[] = [
   { id: 'dashboard', label: 'Now', icon: Gauge, Component: DashboardPage },
   { id: 'blocking', label: 'Blocking', icon: Prohibit, Component: BlockingPage },
   { id: 'profiles', label: 'Profiles', icon: Stack, Component: ProfilesPage },
+  { id: 'backup', label: 'Backup', icon: Archive, Component: BackupPage },
   { id: 'sites', label: 'Sites', icon: Globe, Component: SitesPage },
   { id: 'focus', label: 'Focus', icon: Target, Component: FocusPage },
   { id: 'locks', label: 'Locks', icon: LockSimple, Component: LocksPage },

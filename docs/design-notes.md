@@ -217,7 +217,11 @@ Tint recipe for callouts: `bg-<hue>/10 border-<hue>/30 text-<hue>-soft`.
   review) · Profiles `#profiles` (Default first, then named snapshots with
   Activate / Duplicate / Rename / two-step Delete; create copies the active
   settings without switching; the active association's desktop apps and
-  connection status; every action disables with the lock reason) · Sites
+  connection status; every action disables with the lock reason) · Backup
+  `#backup` (download a versioned configuration JSON; choose a file, pick
+  merge or replace with an explicit confirmation, review counts/names/warnings,
+  apply, and restore the automatic pre-restore snapshot; restore refuses while
+  locked) · Sites
   `#sites` (`ListEditor` Always allow / Always block; a
   collapsed **More rules** disclosure holds Title patterns (`*` wildcard)
   and YouTube channels — always block / never block for their topic) · Focus `#focus` (goal, open-tab
@@ -406,6 +410,15 @@ longer exists.
   `.profile-delete` (second click confirms), `#profile-name`,
   `#profile-create`, `#profile-msg`, `#profiles-lock-note`,
   `#profile-rename-input`, `#profile-apps-status`, `#profile-apps-list`.
+- `#backup`: `#backup-export`, `#backup-pick`, `#backup-import` (file input),
+  `#backup-file`, `#backup-mode-merge`, `#backup-mode-replace`,
+  `#backup-errors`, `#backup-preview`, `#backup-preview-summary`,
+  `#backup-preview-changes` (`li[data-kind][data-action]`),
+  `#backup-preview-warnings`, `#backup-confirm-replace`,
+  `#backup-confirm-replace-note`, `#backup-apply`, `#backup-msg`,
+  `#backup-lock-note`, `#backup-pre-restore`, `#backup-pre-restore-info`,
+  `#backup-pre-restore-download`, `#backup-pre-restore-apply`,
+  `#backup-pre-restore-msg`.
 - `#sites`: `#whitelist`, `#blocklist`, and inside the `#more-rules`
   `<details>` (auto-open when it holds rules): `#title-rules`,
   `#channel-blocklist`, `#channel-allowlist` (`ListEditor` roots; `-input`,

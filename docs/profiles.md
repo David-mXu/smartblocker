@@ -140,6 +140,10 @@ activation cannot look older than an already-synchronized list.
 
 The stable DOM IDs are listed in `docs/design-notes.md` §7.
 
+Configuration backup/restore includes every named profile and its app
+association: see [`docs/backup.md`](backup.md) for the file format, merge /
+replace rules, schedule ownership, and the pre-restore snapshot.
+
 ## Verification
 
 ```bash

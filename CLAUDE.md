@@ -118,6 +118,16 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   `npm run build:chrome`): seeds v2 aggregates into a disposable profile,
   relaunches the extension, verifies the 7/35-day range, reason chart, day
   presets, Top-N/“other” controls, aggregate-only JSON export, and clear.
+- `node scripts/backup-test.mjs` — versioned configuration backup/restore
+  (`src/shared/backup.ts` is the pure erasable-syntax-only core; `backup-store.ts`
+  is mocked-storage-tested): schema/version rejection, corrupt/oversized
+  files, deterministic JSON, merge/replace, duplicate/bounds repair, schedule
+  ownership, lock refusal before writes, the pre-restore slot, and secret
+  exclusion.
+- `node scripts/e2e-backup.mjs` — focused backup suite (run after `npm run
+  build:chrome`): real download bytes, corrupt-import rejection, merge and
+  confirmed replace applies, lock refusal with no live writes, and pre-restore
+  recovery. Writes `docs/audits/assets/2026-11-09-backup.png`.
 - `node scripts/rules-test.mjs` — pure unit tests for the deterministic rule
   core: title-rule compiler/matcher + channel rules (`src/shared/rules.ts`,
   same type-stripping constraints), the shared classifier block predicate, and
@@ -360,7 +370,9 @@ Commit and push when appropriate.
   toggles + minute leads), `#preferences` (display-only first day of week +
   24-hour time), `#usage`
   (idle-aware local-day host/category dashboard + JSON export/clear),
-  `#companion`, `#privacy`, `#advanced` (exact threshold slider +
+  `#backup` (versioned config export/download, validated import with a
+  merge/replace preview, lock-refused apply, and a one-slot pre-restore
+  snapshot), `#companion`, `#privacy`, `#advanced` (exact threshold slider +
   diagnostics: Test classifier / Scan history / Latency log → `#out`), and
   `#welcome` — the 3-step first-run wizard (`onInstalled` opens it; plain
   `options.html` only shows a "Finish setup" banner). Its final step gates
@@ -420,7 +432,12 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   `scripts/resume-test.mjs`), `notifications.ts` (pure reminder preferences/
   ledger sanitization + `planNotifications` derivation from lock state,
   category schedules, and allowance authority; erasable-syntax-only, tested
-  by `scripts/notifications-test.mjs`), `display-prefs.ts` (pure
+  by `scripts/notifications-test.mjs`), `backup.ts` (pure versioned config
+  backup/restore core — schema/version gate, parsing + bounds repair,
+  deterministic serialization, merge/replace preview, and schedule-rule
+  ownership; erasable-syntax-only, tested by `scripts/backup-test.mjs`;
+  `backup-store.ts` layers storage, lock refusal, and the one-slot pre-restore
+  snapshot on top, also Node-tested with mocked storage), `display-prefs.ts` (pure
   first-day/weekday ordering, 12/24-hour formatting, and block-message
   sanitization; tested by `scripts/preferences-test.mjs`), `lock-math.ts`
   (pure lock/schedule time math — no browser APIs, Node-testable; per-rule
