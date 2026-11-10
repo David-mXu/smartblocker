@@ -485,12 +485,7 @@ pub fn next_schedule_lock_at_in<Tz: TimeZone>(
     min
 }
 
-fn rule_lock_onsets_tz<Tz: TimeZone>(
-    r: &ScheduleRule,
-    now: i64,
-    tz: &Tz,
-    min: &mut Option<i64>,
-) {
+fn rule_lock_onsets_tz<Tz: TimeZone>(r: &ScheduleRule, now: i64, tz: &Tz, min: &mut Option<i64>) {
     let lead_ms = i64::from(rule_lead_minutes(r)) * 60_000;
     for offset in -1..=7 {
         let Some(day_start) = local_midnight(tz, now, offset) else {
@@ -530,12 +525,7 @@ pub fn next_window_start_in<Tz: TimeZone>(
     min
 }
 
-fn rule_window_starts_tz<Tz: TimeZone>(
-    r: &ScheduleRule,
-    now: i64,
-    tz: &Tz,
-    min: &mut Option<i64>,
-) {
+fn rule_window_starts_tz<Tz: TimeZone>(r: &ScheduleRule, now: i64, tz: &Tz, min: &mut Option<i64>) {
     for offset in -1..=7 {
         let Some(day_start) = local_midnight(tz, now, offset) else {
             continue;
@@ -1249,11 +1239,8 @@ mod tests {
             let mut overnight = mon_overnight();
             overnight.lead_minutes = Some(60);
             let rules = [overnight];
-            let pre = derive_lock_status_in(
-                &schedules_state(rules.to_vec()),
-                at(tz, 6, 21, 30),
-                tz,
-            );
+            let pre =
+                derive_lock_status_in(&schedules_state(rules.to_vec()), at(tz, 6, 21, 30), tz);
             assert_eq!(pre.reasons, vec![LockReason::ScheduleLead]);
             assert_eq!(pre.until, Some(at(tz, 7, 6, 0)));
         }
@@ -1270,15 +1257,9 @@ mod tests {
                 next_schedule_lock_at_in(&rules, now, tz),
                 Some(at(tz, 8, 8, 30))
             );
-            assert_eq!(
-                next_window_start_in(&rules, now, tz),
-                Some(at(tz, 8, 9, 0))
-            );
+            assert_eq!(next_window_start_in(&rules, now, tz), Some(at(tz, 8, 9, 0)));
             let state = schedules_state(rules.to_vec());
-            assert_eq!(
-                next_boundary_in(&state, now, tz),
-                Some(at(tz, 8, 8, 30))
-            );
+            assert_eq!(next_boundary_in(&state, now, tz), Some(at(tz, 8, 8, 30)));
         }
     }
 
