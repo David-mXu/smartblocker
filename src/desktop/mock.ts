@@ -19,6 +19,10 @@ import type {
   LockReason,
   PendingSession,
   RunningApp,
+  UsageAppTotal,
+  UsageDayExport,
+  UsageExport,
+  UsageSummary,
 } from './api';
 import { targetKey } from './apps';
 
@@ -31,12 +35,33 @@ interface MockState {
   status: DesktopStatus;
   events: ActivityEvent[];
   running: RunningApp[];
+  usage: MockUsage;
   /** Per-reason end times, folded into status.lock on every read. */
   ends: Partial<Record<LockReason, number | null>>;
   /** When set, start_companion rejects with this text. */
   startError?: string;
+  /** Test hook: usage reads fail with this text. */
+  usageError?: string;
   /** Test hook: the next undo loses the race to the commit. */
   lateUndo?: boolean;
+}
+
+interface MockUsageApp {
+  id: string;
+  label: string;
+  activeMs: number;
+}
+
+interface MockUsageDay {
+  date: string;
+  wallMs: number;
+  apps: MockUsageApp[];
+}
+
+interface MockUsage {
+  available: boolean;
+  platform: string;
+  days: MockUsageDay[];
 }
 
 const params = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
@@ -250,6 +275,59 @@ function seedEvents(now: number): ActivityEvent[] {
   ];
 }
 
+// ---------------------------------------------------------------------------
+// Usage preview data
+// ---------------------------------------------------------------------------
+
+const USAGE_APPS = [
+  { id: 'code', label: 'Code', share: 0.36 },
+  { id: 'chrome', label: 'chrome', share: 0.22 },
+  { id: 'msedge', label: 'msedge', share: 0.12 },
+  { id: 'slack', label: 'slack', share: 0.08 },
+  { id: 'discord', label: 'Discord', share: 0.06 },
+  { id: 'spotify', label: 'Spotify', share: 0.045 },
+  { id: 'notion', label: 'Notion', share: 0.035 },
+  { id: 'zoom', label: 'zoom', share: 0.03 },
+  { id: 'steam', label: 'steam', share: 0.025 },
+  { id: '1password', label: '1Password', share: 0.015 },
+  { id: 'obs64', label: 'OBS Studio', share: 0.01 },
+  { id: 'whatsapp', label: 'WhatsApp', share: 0.005 },
+] as const;
+
+function localDayKey(ts: number): string {
+  const d = new Date(ts);
+  const y = String(d.getFullYear()).padStart(4, '0');
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function localDayOffset(now: number, offset: number): { key: string; weekday: number } {
+  const d = new Date(now);
+  const shifted = new Date(d.getFullYear(), d.getMonth(), d.getDate() - offset, 12, 0, 0, 0);
+  return { key: localDayKey(shifted.getTime()), weekday: shifted.getDay() };
+}
+
+/** 35 days of plausible, deterministic local usage. */
+function seedUsage(now: number): MockUsage {
+  const days: MockUsageDay[] = [];
+  for (let offset = 0; offset < 35; offset += 1) {
+    const { key, weekday } = localDayOffset(now, offset);
+    const weekend = weekday === 0 || weekday === 6;
+    // Today is partial; a rolling pattern keeps the chart from looking fake.
+    const factor = offset === 0 ? 0.38 : weekend ? 0.58 : 0.82 + ((offset * 7) % 11) / 50;
+    const active = Math.round((weekend ? 4.1 : 7.2) * factor * HOUR);
+    const wall = Math.round(active * (1.22 + ((offset * 3) % 5) / 40));
+    const apps = USAGE_APPS.map((app, i) => ({
+      id: app.id,
+      label: app.label,
+      activeMs: Math.round(active * app.share * (0.92 + ((offset + i * 2) % 7) / 50)),
+    }));
+    days.push({ date: key, wallMs: wall, apps });
+  }
+  return { available: true, platform: 'windows', days };
+}
+
 function baseState(now: number): MockState {
   return {
     status: {
@@ -287,6 +365,7 @@ function baseState(now: number): MockState {
     },
     events: seedEvents(now),
     running: RUNNING_APPS.map((a) => ({ ...a })),
+    usage: seedUsage(now),
     ends: {},
   };
 }
@@ -383,6 +462,16 @@ const SCENARIOS: Record<string, Patch> = {
     s.status.appTargets = [];
     s.status.appTargetsVersion = 0;
     s.events = [];
+  },
+  'usage-empty': (s) => {
+    s.usage.days = [];
+  },
+  'usage-unavailable': (s) => {
+    s.usage.available = false;
+    s.usage.days = [];
+  },
+  'usage-error': (s) => {
+    s.usageError = 'Couldn’t reach the companion. It may have stopped.';
   },
 };
 
@@ -517,6 +606,96 @@ function repairBrowser(s: MockState, browser: string): BrowserRepairResult {
 }
 
 // ---------------------------------------------------------------------------
+// Usage derivation
+// ---------------------------------------------------------------------------
+
+function clampPeriod(periodDays: unknown): number {
+  const n = Number(periodDays);
+  return Number.isFinite(n) ? Math.max(1, Math.min(35, Math.trunc(n))) : 7;
+}
+
+function periodKeys(now: number, periodDays: number): string[] {
+  const keys: string[] = [];
+  for (let offset = 0; offset < periodDays; offset += 1) {
+    keys.push(localDayOffset(now, offset).key);
+  }
+  return keys;
+}
+
+function activeOf(day: MockUsageDay): number {
+  return day.apps.reduce((sum, app) => sum + Math.max(0, app.activeMs), 0);
+}
+
+function usageSummary(s: MockUsage, now: number, periodDaysRaw: unknown): UsageSummary {
+  const periodDays = clampPeriod(periodDaysRaw);
+  const keys = periodKeys(now, periodDays);
+  const byDate = new Map(s.days.map((day) => [day.date, day]));
+  const totals = { activeMs: 0, wallMs: 0 };
+  const apps = new Map<string, UsageAppTotal>();
+
+  for (const date of keys) {
+    const day = byDate.get(date);
+    if (!day) continue;
+    totals.activeMs += activeOf(day);
+    totals.wallMs += day.wallMs;
+    for (const app of day.apps) {
+      const entry = apps.get(app.id) ?? { id: app.id, label: app.label, activeMs: 0 };
+      entry.activeMs += app.activeMs;
+      apps.set(app.id, entry);
+    }
+  }
+
+  return {
+    available: s.available,
+    platform: s.platform,
+    retentionDays: 35,
+    periodDays,
+    generatedAtMs: now,
+    days: keys.map((date) => {
+      const day = byDate.get(date);
+      return { date, activeMs: day ? activeOf(day) : 0, wallMs: day?.wallMs ?? 0 };
+    }),
+    totals,
+    apps: [...apps.values()].sort((a, b) => b.activeMs - a.activeMs || a.label.localeCompare(b.label)),
+    lastSampleAtMs: s.available && keys.some((date) => byDate.has(date)) ? now - 4_000 : null,
+  };
+}
+
+function usageExport(s: MockUsage, now: number, periodDaysRaw: unknown): UsageExport {
+  const periodDays = clampPeriod(periodDaysRaw);
+  const keys = periodKeys(now, periodDays);
+  const byDate = new Map(s.days.map((day) => [day.date, day]));
+  const days: UsageDayExport[] = keys
+    .filter((date) => byDate.has(date))
+    .map((date) => {
+      const day = byDate.get(date)!;
+      return {
+        date,
+        activeMs: activeOf(day),
+        wallMs: day.wallMs,
+        apps: [...day.apps].sort((a, b) => b.activeMs - a.activeMs || a.label.localeCompare(b.label)),
+      };
+    });
+  return {
+    version: 1,
+    generatedAtMs: now,
+    retentionDays: 35,
+    periodDays,
+    platform: s.platform,
+    metricDefinitions: {
+      activeMs:
+        'Milliseconds attributed to the focused foreground app while the last user input was under 30 seconds old. Sampling is 5 seconds; gaps over 30 seconds are discarded.',
+      wallMs: 'Sum of the same bounded awake sampling intervals, including idle time.',
+      appIdentity:
+        "The executable's file basename; no path, window title, document name, or URL.",
+      idleAndSleep: 'No time while idle for 30 seconds or more, or across a gap over 30 seconds.',
+      retention: 'Local calendar days including today; older days are pruned to the newest 35.',
+    },
+    days,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
 
@@ -586,6 +765,18 @@ export async function mockInvoke(cmd: string, args: Record<string, unknown> = {}
     case 'get_recent_activity': {
       const limit = Math.max(0, Number(args.limit) || 0);
       return clone(s.events.slice(0, limit));
+    }
+
+    case 'get_desktop_usage':
+      if (s.usageError) throw s.usageError;
+      return usageSummary(s.usage, now, args.periodDays);
+
+    case 'export_desktop_usage':
+      return usageExport(s.usage, now, args.periodDays);
+
+    case 'clear_desktop_usage': {
+      s.usage.days = [];
+      return usageSummary(s.usage, now, args.periodDays);
     }
 
     case 'set_license_key': {

@@ -13,6 +13,7 @@
 use crate::allowance::{AllowanceAuthorityState, AllowanceCommandRefusal};
 use crate::lock_math::LockState;
 use crate::partner::PartnerState;
+use crate::usage::{UsageExport, UsageSummary};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -294,6 +295,40 @@ pub enum CompanionMessage {
         pid: u32,
         mono_ms: u64,
     },
+    /// The desktop UI's local usage query. Companion-internal (the extension
+    /// never sends it), unauthenticated like every UI command, and answered
+    /// only by the daemon that owns the in-memory tracker. `requestId` lets a
+    /// client ignore status broadcasts that arrive before the reply.
+    #[serde(rename_all = "camelCase")]
+    UsageCommand {
+        v: u32,
+        request_id: String,
+        action: UsageAction,
+        #[serde(default)]
+        period_days: u32,
+    },
+    /// Truthful usage result: `summary` for Summary/Clear, `export` for
+    /// Export. A failed clear reports `ok: false`; never claims a durable
+    /// reset that didn't land.
+    #[serde(rename_all = "camelCase")]
+    UsageResult {
+        v: u32,
+        request_id: String,
+        ok: bool,
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<UsageSummary>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        export: Option<UsageExport>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UsageAction {
+    Summary,
+    Export,
+    Clear,
 }
 
 /// Decode an already-framed JSON value; `None` for unknown/malformed message
@@ -575,6 +610,60 @@ mod tests {
             json!({ "type": "pong", "v": 2, "pid": 4321, "monoMs": 99 })
         );
         assert_eq!(parse_message(&value), Some(pong));
+    }
+
+    #[test]
+    fn usage_messages_are_companion_internal_and_camel_case() {
+        let command = CompanionMessage::UsageCommand {
+            v: PROTOCOL_VERSION,
+            request_id: "r1".into(),
+            action: UsageAction::Summary,
+            period_days: 7,
+        };
+        assert_eq!(
+            serde_json::to_value(&command).unwrap(),
+            json!({
+                "type": "usageCommand",
+                "v": 2,
+                "requestId": "r1",
+                "action": "summary",
+                "periodDays": 7,
+            })
+        );
+        assert_eq!(
+            parse_message(&serde_json::to_value(&command).unwrap()),
+            Some(command)
+        );
+
+        let export = crate::usage::UsageExport {
+            version: 1,
+            generated_at_ms: 5,
+            retention_days: 35,
+            period_days: 7,
+            platform: "windows".into(),
+            metric_definitions: crate::usage::UsageMetricDefinitions {
+                active_ms: "a".into(),
+                wall_ms: "w".into(),
+                app_identity: "id".into(),
+                idle_and_sleep: "i".into(),
+                retention: "r".into(),
+            },
+            days: vec![],
+        };
+        let result = CompanionMessage::UsageResult {
+            v: PROTOCOL_VERSION,
+            request_id: "r1".into(),
+            ok: true,
+            message: "ok".into(),
+            summary: None,
+            export: Some(export),
+        };
+        let value = serde_json::to_value(&result).unwrap();
+        assert_eq!(value["type"], "usageResult");
+        assert_eq!(value["requestId"], "r1");
+        assert_eq!(value["export"]["retentionDays"], 35);
+        assert!(value.get("summary").is_none());
+        assert_eq!(parse_message(&value), Some(result));
     }
 
     #[test]

@@ -467,7 +467,7 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
 - `companion/` — the Phase 4 desktop companion (cargo workspace, NOT part of
   the extension build; see `companion/README.md`). `smartblocker-core` = ALL
   logic (protocol/framing/lock math mirror/merge/store/enforcer/procwatch/
-  ipc/daemon/registration/policy/license), `smartblocker-nm-host` = the
+  ipc/daemon/registration/policy/license/usage), `smartblocker-nm-host` = the
   browser-spawned stdio↔IPC relay, `smartblocker-daemon` = headless Linux/e2e
   face (also hosts the `watchdog` supervisor subcommand and the lock-guarded
   `uninstall`), `smartblocker-companion` = Tauri shell (Windows; excluded
@@ -493,7 +493,11 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   socket squatter reads as dead); `uninstall` refuses on
   `settings_locked`; `is_pro` fails CLOSED on a missing key
   (`SBPRO_DEV_OPEN=1` dev escape hatch, pending user ratification) with
-  a 7-day expiry grace and mid-lock `license_key` heal. Extension IDs are
+  a 7-day expiry grace and mid-lock `license_key` heal. `usage.rs` keeps a
+  separate local foreground-app tracker: 5s samples, a 30s input-idle gate,
+  civil-day/DST splitting, 35-day retention, an 80-app/day cap with an
+  `other.apps` overflow row, and versioned sanitized state; the UI reads it
+  over `UsageCommand` and clear is persisted by the daemon first. Extension IDs are
   pinned: chrome/edge
   `dhbhbhhcjkfdkfbloeaeedndfjfadajh` (from the committed manifest `"key"`;
   private key `smartblocker-dev-key.pem` at repo root, gitignored — DO NOT

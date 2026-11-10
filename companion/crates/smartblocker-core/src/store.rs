@@ -9,6 +9,7 @@ use crate::app_targets::{sanitize_legacy_entries, sanitize_targets, version_for,
 use crate::lock_math::LockState;
 use crate::partner::PartnerState;
 use crate::protocol::{BlockingState, MAX_JS_SAFE_INTEGER};
+use crate::usage::{sanitize_usage_state, UsageState};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
@@ -99,7 +100,9 @@ const CONFIG_FILE: &str = "config.json";
 const BLOCKING_STATE_FILE: &str = "blocking-state.json";
 const PARTNER_STATE_FILE: &str = "partner-state.json";
 const ALLOWANCE_STATE_FILE: &str = "allowance-state.json";
+const USAGE_STATE_FILE: &str = "usage-state.json";
 
+#[derive(Clone)]
 pub struct Store {
     dir: PathBuf,
 }
@@ -229,6 +232,27 @@ impl Store {
             ));
         }
         self.save(ALLOWANCE_STATE_FILE, state)
+    }
+
+    /// Raw, untrusted usage JSON. The tracker sanitizes it (version, bounds,
+    /// local-day keys) before use; a corrupt file reads as `None`.
+    pub fn load_usage_state(&self) -> Option<serde_json::Value> {
+        self.read_json(USAGE_STATE_FILE)
+    }
+
+    /// Atomic write of the already-sanitized tracker state. Keeping the state
+    /// version in the filename-adjacent payload lets a future version reject
+    /// old data explicitly instead of guessing.
+    pub fn save_usage_state(&self, state: &UsageState) -> io::Result<()> {
+        let raw = serde_json::to_value(state)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if sanitize_usage_state(&raw) != *state {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "usage state is not in canonical sanitized form",
+            ));
+        }
+        self.save(USAGE_STATE_FILE, state)
     }
 
     fn load_or_default<T: DeserializeOwned + Default>(&self, file: &str) -> T {

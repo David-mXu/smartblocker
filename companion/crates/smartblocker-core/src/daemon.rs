@@ -32,11 +32,12 @@ use crate::partner::{self, PartnerState, PendingPartnerOperation, MAX_OPERATION_
 use crate::procwatch::{ProcessSource, SysinfoSource};
 use crate::protocol::{
     parse_message, BlockAction, BlockingState, CompanionBrowser, CompanionEnforcement,
-    CompanionMessage, CompanionStatus, ExtensionLossState, ExtensionLossStatus,
+    CompanionMessage, CompanionStatus, ExtensionLossState, ExtensionLossStatus, UsageAction,
     MAX_JS_SAFE_INTEGER, PROTOCOL_VERSION,
 };
 use crate::snapshot::{self, BrowserGraceInfo, BrowserInfo, StatusSnapshot};
 use crate::store::{CompanionConfig, Store};
+use crate::usage::{ForegroundProbe, UsageTracker, USAGE_TICK_MS};
 
 /// Poll cadence while ANY lock is armed (process snapshots are taken in
 /// this mode: armed-phase enforcement, red-team #25).
@@ -149,6 +150,10 @@ struct Shared {
     /// Written only by the enforcement loop after each tick; status replies
     /// and desktop snapshots read the same suspect tracks as close decisions.
     enforcer_state: Mutex<EnforcerState>,
+    /// Local foreground-app usage. Only the daemon's sampling thread mutates
+    /// it; UI queries read/export/clear under the same mutex, so a clear can
+    /// never race an in-flight sample into resurrecting pre-clear totals.
+    usage: Mutex<UsageTracker>,
     /// Advances only when grace tracks begin, clear, or restart. Captured with
     /// a personalized status and checked again at its ordered queue handoff.
     extension_loss_revision: AtomicU64,
@@ -338,6 +343,56 @@ impl Shared {
                 },
             );
         }
+    }
+
+    /// Answer one local UI usage query. Summary/export are read-only; clear
+    /// empties and persists under the tracker mutex before replying, so a
+    /// concurrent sample cannot append to the old aggregates between the
+    /// reset and the acknowledgement.
+    fn usage_command(&self, conn_id: u64, request_id: &str, action: UsageAction, period_days: u32) {
+        let now = self.wall_ms();
+        let (ok, message, summary, export) = {
+            let mut tracker = self.usage.lock().unwrap();
+            match action {
+                UsageAction::Summary => (
+                    true,
+                    String::new(),
+                    Some(tracker.summary(now, period_days)),
+                    None,
+                ),
+                UsageAction::Export => (
+                    true,
+                    String::new(),
+                    None,
+                    Some(tracker.export(now, period_days)),
+                ),
+                UsageAction::Clear => match tracker.clear(now) {
+                    Ok(()) => {
+                        let summary = tracker.summary(now, period_days);
+                        drop(tracker);
+                        self.log_event("usage-cleared", "local app usage aggregates");
+                        (true, "Usage cleared".to_string(), Some(summary), None)
+                    }
+                    Err(error) => (
+                        false,
+                        format!("Couldn't save the cleared usage data: {error}"),
+                        Some(tracker.summary(now, period_days)),
+                        None,
+                    ),
+                },
+            }
+        };
+        self.reply_to(
+            conn_id,
+            &CompanionMessage::UsageResult {
+                v: PROTOCOL_VERSION,
+                request_id: request_id.to_string(),
+                ok,
+                message,
+                summary,
+                export,
+            },
+        );
     }
 
     /// Push each authenticated extension only its own browser's observation.
@@ -2070,6 +2125,24 @@ fn load_or_initialize_partner_state(
     Ok(rehydrated)
 }
 
+/// Take one foreground sample when due and, on a change, let the tracker's
+/// own batched writer decide whether to touch disk. Sampling is skipped on
+/// platforms where the probe reports unavailable, so a Linux daemon never
+/// fabricates wall/active totals it cannot attribute.
+fn sample_usage(shared: &Shared, probe: &mut dyn ForegroundProbe, now_wall_ms: i64) {
+    if !probe.available() {
+        return;
+    }
+    let sample = probe.sample();
+    let mut tracker = shared.usage.lock().unwrap();
+    let outcome = tracker.observe(now_wall_ms, &sample);
+    if outcome.changed {
+        if let Err(error) = tracker.maybe_persist(now_wall_ms) {
+            eprintln!("[daemon] failed to persist usage state: {error}");
+        }
+    }
+}
+
 /// Runs forever (accept loop on the calling thread). Returns only on a bind
 /// error — `AddrInUse` means another daemon instance is already running.
 pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
@@ -2093,6 +2166,15 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
     // Best-effort managed-browser policy hardening (off until policy_enforce
     // + a real update_url are configured; no-op on non-Windows).
     let _ = crate::policy::apply_configured_policies(&initial_config);
+    let usage_probe = crate::usage::default_probe();
+    let usage_available = usage_probe.available();
+    let usage_platform = usage_probe.platform();
+    let usage = UsageTracker::load(
+        opts.store.clone(),
+        started_wall_ms,
+        usage_available,
+        usage_platform,
+    );
     let shared = Arc::new(Shared {
         lock_state: Mutex::new(initial),
         #[cfg(test)]
@@ -2105,6 +2187,7 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
         blocking: Mutex::new(initial_blocking),
         conns: Mutex::new(HashMap::new()),
         enforcer_state: Mutex::new(EnforcerState::default()),
+        usage: Mutex::new(usage),
         extension_loss_revision: AtomicU64::new(0),
         next_extension_loss_sequence: AtomicU64::new(0),
         started,
@@ -2143,9 +2226,18 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
             // Last logged license posture; the fail-closed gate's transitions
             // (dev-open/pro/grace/expired…) go to events.log as they happen.
             let mut last_posture: Option<&'static str> = None;
+            // Foreground-app usage probe (Windows); unavailable elsewhere.
+            let mut usage_probe = usage_probe;
+            let mut last_usage_sample_ms = 0i64;
             loop {
                 let now_wall = shared.wall_ms();
                 let now_mono = shared.mono_ms();
+                if now_wall < last_usage_sample_ms
+                    || now_wall - last_usage_sample_ms >= USAGE_TICK_MS as i64
+                {
+                    sample_usage(&shared, usage_probe.as_mut(), now_wall);
+                    last_usage_sample_ms = now_wall;
+                }
                 shared.observe_partner_at(now_wall, now_mono);
                 // Commit a focus session whose undo window closed BEFORE
                 // deriving status, so this very tick enforces it. Snapshots
@@ -2602,6 +2694,15 @@ fn serve_connection(id: u64, stream: ipc::Stream, shared: Arc<Shared>) {
                 meaningful = true;
                 shared.allowance_command_intent(id, &command, base_revision);
             }
+            Some(CompanionMessage::UsageCommand {
+                request_id,
+                action,
+                period_days,
+                ..
+            }) => {
+                meaningful = true;
+                shared.usage_command(id, &request_id, action, period_days);
+            }
             Some(CompanionMessage::Heartbeat { .. }) => meaningful = true,
             Some(CompanionMessage::Ping { .. }) => {
                 // Companion-internal liveness probe (watchdog supervisor,
@@ -2717,6 +2818,63 @@ pub fn probe_ping(socket_name: &str, leg_timeout: Duration) -> Option<(u32, u64)
         }
     }
     None
+}
+
+/// Blocking local UI client for the companion-internal usage commands. The
+/// reply is matched by `requestId` because the daemon's status greeting can
+/// arrive first. Never used by the extension.
+pub fn send_usage_command(
+    socket_name: &str,
+    action: UsageAction,
+    period_days: u32,
+    leg_timeout: Duration,
+) -> io::Result<CompanionMessage> {
+    static NEXT_REQUEST: AtomicU64 = AtomicU64::new(0);
+    let request_id = format!(
+        "{}-{}",
+        std::process::id(),
+        NEXT_REQUEST.fetch_add(1, Ordering::Relaxed)
+    );
+    let mut stream = ipc::connect(socket_name)?;
+    stream.set_recv_timeout(Some(leg_timeout))?;
+    stream.set_send_timeout(Some(leg_timeout))?;
+    let command = CompanionMessage::UsageCommand {
+        v: PROTOCOL_VERSION,
+        request_id: request_id.clone(),
+        action,
+        period_days,
+    };
+    crate::framing::write_frame(&mut stream, &serde_json::to_value(&command)?)?;
+    let deadline = Instant::now() + leg_timeout.saturating_mul(4);
+    while Instant::now() < deadline {
+        match read_frame(&mut stream) {
+            Ok(Some(frame)) => match parse_message(&frame) {
+                Some(result @ CompanionMessage::UsageResult { .. }) => {
+                    let CompanionMessage::UsageResult {
+                        request_id: reply_id,
+                        ..
+                    } = &result
+                    else {
+                        unreachable!()
+                    };
+                    if *reply_id == request_id {
+                        return Ok(result);
+                    }
+                }
+                Some(CompanionMessage::Error { message, .. }) => {
+                    return Err(io::Error::other(message));
+                }
+                // Greeting/status broadcasts and unrelated pushes.
+                _ => {}
+            },
+            Ok(None) => return Err(io::Error::other("daemon closed the usage connection")),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        "timed out waiting for the daemon's usage reply",
+    ))
 }
 
 /// Blocking CLI client for `block` and `lock`. A reply is accepted only after
@@ -2848,6 +3006,7 @@ mod tests {
         let partner =
             partner::rehydrate(&PartnerState::new(&"01".repeat(32)).unwrap(), 0, 0).unwrap();
         store.save_partner_state(&partner).unwrap();
+        let usage = UsageTracker::load(store.clone(), 0, true, "windows");
         let shared = Arc::new(Shared {
             store,
             lock_state: Mutex::new(LockState::default()),
@@ -2858,6 +3017,7 @@ mod tests {
             blocking: Mutex::new(None),
             conns: Mutex::new(HashMap::new()),
             enforcer_state: Mutex::new(EnforcerState::default()),
+            usage: Mutex::new(usage),
             extension_loss_revision: AtomicU64::new(0),
             next_extension_loss_sequence: AtomicU64::new(0),
             started: Instant::now(),
@@ -5396,6 +5556,98 @@ mod tests {
             latest_allowance_command_result(&outbox)["allowance"]["revision"],
             1
         );
+    }
+
+    #[test]
+    fn usage_commands_summarize_clear_and_export_through_the_local_reply() {
+        use crate::usage::{ForegroundSample, UsageApp};
+
+        let (_dir, shared) = test_shared();
+        let now = shared.wall_ms();
+        let code = UsageApp {
+            id: "code".into(),
+            label: "Code".into(),
+        };
+        let sample = ForegroundSample {
+            app: Some(code),
+            idle_ms: 0,
+        };
+        {
+            let mut tracker = shared.usage.lock().unwrap();
+            tracker.observe(now, &sample);
+            tracker.observe(now + 5_000, &sample);
+            tracker.flush().unwrap();
+        }
+        let outbox = add_conn(&shared, 9, false);
+
+        shared.usage_command(9, "r1", UsageAction::Summary, 7);
+        let frames = frames_in(&outbox);
+        assert_eq!(frames.len(), 1);
+        match parse_message(&frames[0]).unwrap() {
+            CompanionMessage::UsageResult {
+                request_id,
+                ok,
+                summary: Some(summary),
+                export: None,
+                ..
+            } => {
+                assert_eq!(request_id, "r1");
+                assert!(ok);
+                assert_eq!(summary.totals.active_ms, 5_000);
+                assert_eq!(summary.days.len(), 7);
+                assert_eq!(summary.apps[0].id, "code");
+            }
+            other => panic!("unexpected usage reply: {other:?}"),
+        }
+
+        shared.usage_command(9, "r2", UsageAction::Clear, 7);
+        let frames = frames_in(&outbox);
+        assert_eq!(frames.len(), 1);
+        match parse_message(&frames[0]).unwrap() {
+            CompanionMessage::UsageResult {
+                request_id,
+                ok,
+                summary: Some(summary),
+                export: None,
+                ..
+            } => {
+                assert_eq!(request_id, "r2");
+                assert!(ok);
+                assert_eq!(summary.totals.active_ms, 0);
+                assert!(summary.apps.is_empty());
+            }
+            other => panic!("unexpected clear reply: {other:?}"),
+        }
+        let raw = shared.store.load_usage_state().unwrap();
+        assert!(crate::usage::sanitize_usage_state(&raw).days.is_empty());
+
+        // The cleared checkpoint starts a new interval; only the sample after
+        // it can add time.
+        {
+            let mut tracker = shared.usage.lock().unwrap();
+            tracker.observe(now + 10_000, &sample);
+            tracker.observe(now + 15_000, &sample);
+        }
+        shared.usage_command(9, "r3", UsageAction::Export, 7);
+        let frames = frames_in(&outbox);
+        assert_eq!(frames.len(), 1);
+        match parse_message(&frames[0]).unwrap() {
+            CompanionMessage::UsageResult {
+                request_id,
+                ok,
+                summary: None,
+                export: Some(export),
+                ..
+            } => {
+                assert_eq!(request_id, "r3");
+                assert!(ok);
+                assert_eq!(export.version, 1);
+                assert_eq!(export.days.len(), 1);
+                assert_eq!(export.days[0].active_ms, 5_000);
+                assert_eq!(export.days[0].apps[0].id, "code");
+            }
+            other => panic!("unexpected export reply: {other:?}"),
+        }
     }
 
     #[test]

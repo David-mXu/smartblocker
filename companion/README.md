@@ -39,6 +39,11 @@ password lock, Frozen Turkey, or an active schedule window — it:
   substring list (`appBlocklist`) still honored for old configs. Path matches
   are exact-file equality, never a folder prefix, and legacy contains rules
   keep their broad semantics until the user removes them,
+- records **local-only app usage** (Windows): foreground executable active time
+  in five-second samples, gated on the system's 30-second idle signal, split by
+  local calendar day and retained for 35 days. Only the executable basename and
+  millisecond totals are stored — no window titles, document names, paths or
+  URLs. The Usage page can export or clear it, and it never changes blocking.
 - anchors lock/expiry math to a **monotonic clock with wall-clock-jump
   compensation** (the extension's `lock-enforcer.ts` mirrors this) —
   rewinding the system clock does not shorten a lock,
@@ -180,6 +185,14 @@ current base revision and persist before being acknowledged. A browser may
 recover a snapshot only into a genuinely uninitialized daemon; present corrupt
 files prevent startup rather than silently becoming a new daily pool.
 
+`usage-state.json` is the desktop usage aggregate: a versioned, sanitized map of
+local dates to app buckets plus a single foreground checkpoint. It is bounded to
+35 retained local days and 80 app rows per day (overflow folds into
+`other.apps`), written atomically in 15-second batches, and cleared through the
+live daemon over `UsageCommand` so an in-flight sample cannot resurrect old
+totals. On non-Windows platforms the probe reports unavailable and the file is
+not extended.
+
 ## Windows build (the real target)
 
 Prereqs: MSVC toolchain (`rustup default stable-x86_64-pc-windows-msvc`),
@@ -241,6 +254,12 @@ tray icon art ever changes, regenerate via `cargo tauri icon <1024px png>`.
     (command-line fingerprinting); rename a blocked app to
     `smartblocker-daemon.exe` → gains no kill-immunity: it's closed as a
     decoy (`decoy-killed` in `events.log`).
+11. Usage: work in Notepad for two minutes, then switch to another app → the
+    Usage page shows both, with Notepad's time stopping at the switch. Leave
+    the machine idle for a minute → active time does not grow with idle time.
+    Export, then clear → the JSON contains app names and durations only (no
+    title/path/URL), and the page returns to zero. Quit the companion and
+    reopen the window → the last aggregate is still readable from disk.
 
 ## The stable extension ID
 

@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   Browsers,
+  ChartBar,
   ClockCounterClockwise,
   GearSix,
   House,
@@ -19,11 +20,12 @@ import { HomePage } from './pages/HomePage';
 import { AppsPage } from './pages/AppsPage';
 import { BrowsersPage } from './pages/BrowsersPage';
 import { ActivityPage } from './pages/ActivityPage';
+import { UsagePage } from './pages/UsagePage';
 import { SettingsPage } from './pages/SettingsPage';
 
 // Desktop companion window: 220px sidebar + one page at a time, hash-routed
 // like the extension options page (#home, #apps, #browsers, #activity,
-// #settings). Dark Lamplight only.
+// #usage, #settings). Dark Lamplight only.
 
 interface PageDef {
   id: string;
@@ -43,6 +45,13 @@ const PAGES: PageDef[] = [
     title: 'Activity — SmartBlocker',
     icon: ClockCounterClockwise,
     Component: ActivityPage,
+  },
+  {
+    id: 'usage',
+    label: 'Usage',
+    title: 'Usage — SmartBlocker',
+    icon: ChartBar,
+    Component: UsagePage,
   },
   { id: 'settings', label: 'Settings', title: 'Settings — SmartBlocker', icon: GearSix, Component: SettingsPage },
 ];

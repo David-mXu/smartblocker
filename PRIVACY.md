@@ -171,6 +171,22 @@ network requests.
 
 The optional desktop companion (`companion/`) has **zero network code**. It
 talks only to your browsers over OS-local Native Messaging pipes and stores
-only your lock state and its own settings (blocked app names) in a local
-data folder. It observes running process names on your machine solely to
-enforce blocks you configured; nothing it sees is transmitted anywhere.
+your lock state, its own settings (blocked app names), and local app-usage
+totals in a local data folder. It observes running process names on your
+machine solely to enforce blocks you configured; nothing it sees is transmitted
+anywhere.
+
+**Local app usage (desktop, Windows).** The companion's Usage page records how
+long the foreground application was actively in use, in five-second samples,
+and adds no time after 30 seconds without keyboard or mouse input (or across a
+sleep/daemon gap over 30 seconds). It stores only the executable's basename
+(a lowercase id plus a bounded display label) and millisecond totals per local
+calendar day; there is no window title, document name, file path, command
+line, or URL. The desktop aggregate lives in `usage-state.json` in the
+companion's data folder, keeps 35 local days, and caps 80 app rows per day
+(extra apps fold into an `other.apps` total). It is separate from the browser
+extension's `usageStats:v1` and from the companion's `events.log`. The Usage
+page can export those aggregates as JSON or clear them after a second-click
+confirmation; clearing does not touch locks, blocked apps, or the Activity log.
+On non-Windows systems the page reports foreground tracking as unavailable
+rather than guessing. Usage totals are never used to change blocking.

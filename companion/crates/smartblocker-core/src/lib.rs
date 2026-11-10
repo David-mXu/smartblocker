@@ -29,4 +29,5 @@ pub mod registration;
 pub mod snapshot;
 pub mod store;
 pub mod supervisor;
+pub mod usage;
 pub mod win_meta;

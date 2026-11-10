@@ -123,6 +123,76 @@ export interface ActivityEvent {
   detail: string;
 }
 
+// ---------------------------------------------------------------------------
+// Local desktop app usage (companion/crates/smartblocker-core/src/usage.rs)
+// ---------------------------------------------------------------------------
+
+export interface UsageAppTotal {
+  /** Lowercase executable stem. */
+  id: string;
+  /** Original executable basename; no path or window title. */
+  label: string;
+  activeMs: number;
+}
+
+export interface UsageDayTotal {
+  /** YYYY-MM-DD in the computer's local time zone. */
+  date: string;
+  activeMs: number;
+  wallMs: number;
+}
+
+export interface UsageTotals {
+  /** Foreground app time while the user was active. */
+  activeMs: number;
+  /** Bounded awake observation time, including idle. */
+  wallMs: number;
+}
+
+export interface UsageSummary {
+  /** False where the companion cannot observe the foreground app. */
+  available: boolean;
+  platform: string;
+  retentionDays: number;
+  periodDays: number;
+  generatedAtMs: number;
+  /** Newest first, one row per local day in the selected period. */
+  days: UsageDayTotal[];
+  totals: UsageTotals;
+  /** Aggregated across the period, sorted by active time. */
+  apps: UsageAppTotal[];
+  lastSampleAtMs: number | null;
+}
+
+export interface UsageAppExport {
+  id: string;
+  label: string;
+  activeMs: number;
+}
+
+export interface UsageDayExport {
+  date: string;
+  activeMs: number;
+  wallMs: number;
+  apps: UsageAppExport[];
+}
+
+export interface UsageExport {
+  version: number;
+  generatedAtMs: number;
+  retentionDays: number;
+  periodDays: number;
+  platform: string;
+  metricDefinitions: {
+    activeMs: string;
+    wallMs: string;
+    appIdentity: string;
+    idleAndSleep: string;
+    retention: string;
+  };
+  days: UsageDayExport[];
+}
+
 /** Command name → [args, result]. */
 export interface Commands {
   get_status: [undefined, DesktopStatus];
@@ -133,6 +203,9 @@ export interface Commands {
   set_app_blocklist: [{ apps: string[]; targets?: AppTarget[] }, void];
   list_running_apps: [undefined, RunningApp[]];
   get_recent_activity: [{ limit: number }, ActivityEvent[]];
+  get_desktop_usage: [{ periodDays: number }, UsageSummary];
+  export_desktop_usage: [{ periodDays: number }, UsageExport];
+  clear_desktop_usage: [{ periodDays: number }, UsageSummary];
   set_license_key: [{ key: string }, LicenseInfo];
   install_integration: [undefined, string];
   /** Repairs one detected browser's registration, never its extension. */

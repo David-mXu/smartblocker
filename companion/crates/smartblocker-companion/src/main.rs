@@ -18,7 +18,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde_json::json;
@@ -31,7 +31,9 @@ use tauri_plugin_notification::NotificationExt;
 use smartblocker_core::activity::{self, ActivityEvent};
 use smartblocker_core::app_targets::{sanitize_targets, version_for, AppTarget};
 use smartblocker_core::apps::{self, RunningApp};
-use smartblocker_core::daemon::{run_daemon, DaemonOptions, LogNotifier, Notifier};
+use smartblocker_core::daemon::{
+    run_daemon, send_usage_command, DaemonOptions, LogNotifier, Notifier,
+};
 use smartblocker_core::focus_session::{self, PendingSession};
 use smartblocker_core::framing::write_frame;
 use smartblocker_core::ipc::{self, DEFAULT_SOCKET_NAME};
@@ -42,9 +44,12 @@ use smartblocker_core::lock_math::{
 use smartblocker_core::onboarding::{
     self, BrowserIntegration, BrowserRepairResult, InstallationStatus, RegistrationStatus,
 };
-use smartblocker_core::protocol::{CompanionBrowser, PROTOCOL_VERSION};
+use smartblocker_core::protocol::{
+    CompanionBrowser, CompanionMessage, UsageAction, PROTOCOL_VERSION,
+};
 use smartblocker_core::snapshot::{self, BrowserGraceInfo, BrowserInfo};
 use smartblocker_core::store::Store;
+use smartblocker_core::usage::{self, UsageExport, UsageSummary};
 
 const NOT_RUNNING: &str = "The companion isn't running. Start it, then try again.";
 
@@ -487,6 +492,101 @@ fn get_recent_activity(ctx: State<'_, AppCtx>, limit: usize) -> Result<Vec<Activ
     Ok(activity::read_recent_events(&ctx.store(), limit))
 }
 
+/// One usage query over the local IPC. `period_days` is clamped by the core.
+/// The daemon owns the live tracker; the shell never samples the foreground
+/// itself, so there is exactly one attribution path.
+fn usage_via_daemon(
+    ctx: &AppCtx,
+    action: UsageAction,
+    period_days: u32,
+) -> Result<(Option<UsageSummary>, Option<UsageExport>), String> {
+    let message = send_usage_command(
+        &ctx.socket_name,
+        action,
+        period_days,
+        Duration::from_secs(2),
+    )
+    .map_err(|error| format!("Couldn't reach the companion's usage data: {error}"))?;
+    match message {
+        CompanionMessage::UsageResult {
+            ok,
+            message,
+            summary,
+            export,
+            ..
+        } => {
+            if ok {
+                Ok((summary, export))
+            } else {
+                Err(if message.is_empty() {
+                    "The companion couldn't complete the usage request.".to_string()
+                } else {
+                    message
+                })
+            }
+        }
+        _ => Err("The companion sent an unexpected usage reply.".to_string()),
+    }
+}
+
+fn daemon_is_live(ctx: &AppCtx) -> bool {
+    snapshot::read_live_snapshot(&ctx.store(), now_ms()).is_some()
+}
+
+fn usage_available() -> bool {
+    usage::default_probe().available()
+}
+
+#[tauri::command(async)]
+fn get_desktop_usage(ctx: State<'_, AppCtx>, period_days: u32) -> Result<UsageSummary, String> {
+    if daemon_is_live(&ctx) {
+        if let Ok((Some(summary), _)) = usage_via_daemon(&ctx, UsageAction::Summary, period_days) {
+            return Ok(summary);
+        }
+    }
+    // No daemon (or an older one): read the last atomically written state.
+    Ok(usage::summary_from_store(
+        &ctx.store(),
+        now_ms(),
+        period_days,
+        usage_available(),
+    ))
+}
+
+#[tauri::command(async)]
+fn export_desktop_usage(ctx: State<'_, AppCtx>, period_days: u32) -> Result<UsageExport, String> {
+    if daemon_is_live(&ctx) {
+        if let Ok((_, Some(export))) = usage_via_daemon(&ctx, UsageAction::Export, period_days) {
+            return Ok(export);
+        }
+    }
+    Ok(usage::export_from_store(
+        &ctx.store(),
+        now_ms(),
+        period_days,
+    ))
+}
+
+#[tauri::command(async)]
+fn clear_desktop_usage(ctx: State<'_, AppCtx>, period_days: u32) -> Result<UsageSummary, String> {
+    if daemon_is_live(&ctx) {
+        // While the daemon owns the tracker, only its clear is safe: a direct
+        // file write would be overwritten by the next in-memory batch.
+        let (Some(summary), _) = usage_via_daemon(&ctx, UsageAction::Clear, period_days)? else {
+            return Err("The companion sent an unexpected clear reply.".to_string());
+        };
+        return Ok(summary);
+    }
+    usage::clear_store(&ctx.store(), now_ms())
+        .map_err(|error| format!("Couldn't clear app usage: {error}"))?;
+    Ok(usage::summary_from_store(
+        &ctx.store(),
+        now_ms(),
+        period_days,
+        usage_available(),
+    ))
+}
+
 #[tauri::command(async)]
 fn set_license_key(ctx: State<'_, AppCtx>, key: String) -> Result<LicenseInfo, String> {
     license::set_license_key(&ctx.store(), &key, now_ms())
@@ -598,6 +698,9 @@ fn main() {
             set_app_blocklist,
             list_running_apps,
             get_recent_activity,
+            get_desktop_usage,
+            export_desktop_usage,
+            clear_desktop_usage,
             set_license_key,
             install_integration,
             repair_browser,
