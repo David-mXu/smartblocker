@@ -21,6 +21,7 @@ active named profile replaces Default only for these fields
 - `focusGoal`, `useTabContext`
 - `blockAdult`, `maskSearchElements`
 - `surrenderMode`
+- `blockMessage` (the optional plain-text note on block screens)
 - `breakMode`, `breakDelayMinutes`, `breakDurationMinutes`, `breakTextLength`
 
 These stay global (`PROFILE_GLOBAL_FIELDS`) and are never overwritten by a
@@ -31,6 +32,8 @@ switch:
 - `shareFeedback`
 - `resolveEmbedTitles`
 - `resumeMode`, `resumeAt`
+- `notificationPrefs` (quiet reminder toggles and leads)
+- `firstDayOfWeek`, `hour24` (display-only preferences)
 
 Deliberately excluded from snapshots: lock state, password hash/KDF material,
 local AI corrections/centroids, feedback, usage statistics, onboarding state
