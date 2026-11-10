@@ -109,8 +109,20 @@ function TimelineTicks({ model }: { model: DashboardModel }) {
 }
 
 export function DashboardPage({ state }: { state: OptionsState }) {
-  const { settings, lockState, pendingFocus, companion, now } = state;
+  const { settings, lockState, pendingFocus, companion, now, profiles } = state;
   const [allowance, setAllowance] = useState<DashboardAllowanceInput>({ state: null, source: null });
+  const activeProfile =
+    profiles && profiles.activeProfileId !== null
+      ? profiles.profiles.find((profile) => profile.id === profiles.activeProfileId) ?? null
+      : null;
+  const dashboardProfile = profiles
+    ? {
+        name: activeProfile?.name ?? 'Default',
+        detail: activeProfile
+          ? 'Named policy profile. Global switches, reminders and local AI corrections stay shared.'
+          : 'Built-in Default policy. Create a named profile to switch scoped rules.',
+      }
+    : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -184,9 +196,19 @@ export function DashboardPage({ state }: { state: OptionsState }) {
         pendingFocus,
         companion,
         allowance,
+        profile: dashboardProfile,
         timeline,
       }),
-    [now, settings, lockState, pendingFocus, companion, allowance, timeline],
+    [
+      now,
+      settings,
+      lockState,
+      pendingFocus,
+      companion,
+      allowance,
+      dashboardProfile,
+      timeline,
+    ],
   );
 
   return (
@@ -314,7 +336,15 @@ export function DashboardPage({ state }: { state: OptionsState }) {
           />
 
           {model.profile && (
-            <SettingRow label="Profile" description={model.profile.detail ?? 'Current profile'} control={<Badge variant="outline">{model.profile.name}</Badge>} />
+            <SettingRow
+              label="Profile"
+              description={model.profile.detail ?? 'Current profile'}
+              control={
+                <Badge variant="outline">
+                  <span id="dashboard-profile">{model.profile.name}</span>
+                </Badge>
+              }
+            />
           )}
         </SettingsGroup>
       </SettingsSection>

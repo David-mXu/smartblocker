@@ -226,6 +226,9 @@ try {
     'textual equivalents name both schedule lanes',
   );
 
+  await page.waitForSelector('#dashboard-profile', { timeout: 5_000 }).catch(() => null);
+  const profileText = (await page.locator('#dashboard-profile').textContent()) ?? '';
+  check(profileText.trim() === 'Default', 'dashboard names the active Default profile', profileText.trim());
   const companionText = (await page.locator('#dashboard-companion').textContent()) ?? '';
   check(
     /not installed|Connecting|Connected|Disconnected|Checking/.test(companionText),

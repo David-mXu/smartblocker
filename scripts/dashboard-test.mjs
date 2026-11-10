@@ -73,6 +73,7 @@ const model = (overrides = {}) =>
     pendingFocus: overrides.pendingFocus ?? null,
     companion: overrides.companion ?? null,
     allowance: overrides.allowance ?? emptyAllowance,
+    profile: overrides.profile ?? null,
     locale: 'en-US',
     ...(overrides.timeline ? { timeline: overrides.timeline } : {}),
   });
@@ -200,6 +201,13 @@ if (DST_CHILD) {
     assert.deepEqual(result.timeline.lanes[0].text, ['No focus hours today.']);
     assert.deepEqual(result.timeline.lanes[1].text, ['No category schedules today.']);
     assert.equal(result.profile, null);
+  });
+
+  await test('profile is reported only when supplied, never invented', () => {
+    const named = model({ profile: { name: 'Deep work', detail: 'Named policy profile' } });
+    assert.equal(named.profile.name, 'Deep work');
+    assert.equal(named.profile.detail, 'Named policy profile');
+    assert.equal(model().profile, null);
   });
 
   await test('blocking on, paused, and forced by a lock are distinguished', () => {
