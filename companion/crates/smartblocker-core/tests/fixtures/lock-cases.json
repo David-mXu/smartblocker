@@ -912,6 +912,34 @@
       "now": 1000000,
       "maxLockMs": 2592000000,
       "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "a schedule label of exactly 80 UTF-16 units is kept whole on both sides",
+      "raw": { "schedules": [{ "id": "exact80", "label": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "days": [1], "startMinutes": 540, "endMinutes": 1020 }] },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [{ "id": "exact80", "label": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "days": [1], "startMinutes": 540, "endMinutes": 1020 }], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "an over-long 100-unit ASCII label truncates to the first 80 UTF-16 units (100 y -> 80 y), scoped rules included",
+      "raw": { "schedules": [{ "id": "overlong", "label": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy", "days": [1], "startMinutes": 540, "endMinutes": 1020 }], "categorySchedules": [{ "id": "scoped-overlong", "label": "jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj", "days": [2], "startMinutes": 720, "endMinutes": 780, "categories": ["video games"] }], "categorySchedulesUpdatedAt": 900000 },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [{ "id": "overlong", "label": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy", "days": [1], "startMinutes": 540, "endMinutes": 1020 }], "schedulesUpdatedAt": 0, "categorySchedules": [{ "id": "scoped-overlong", "label": "jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj", "days": [2], "startMinutes": 720, "endMinutes": 780, "categories": ["video games"] }], "categorySchedulesUpdatedAt": 900000 }
+    },
+    {
+      "name": "a label containing newlines and whitespace runs collapses to single spaces identically (Deep<LF>Work__focus<TAB>block<SPACE> -> Deep Work focus block)",
+      "raw": { "schedules": [{ "id": "newlines", "label": "Deep\nWork  focus\tblock ", "days": [1], "startMinutes": 540, "endMinutes": 1020 }] },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [{ "id": "newlines", "label": "Deep Work focus block", "days": [1], "startMinutes": 540, "endMinutes": 1020 }], "schedulesUpdatedAt": 0 }
+    },
+    {
+      "name": "label truncation counts UTF-16 code units and never splits a surrogate pair: 40 CJK units + 30 emoji (40+60=100 units) keep 40 CJK + 20 emoji (exactly 80 units; adding the 21st pair would read 82 and the pair is dropped whole)",
+      "raw": { "schedules": [{ "id": "mixed-units", "label": "深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀", "days": [1], "startMinutes": 540, "endMinutes": 1020 }], "schedulesUpdatedAt": 800000 },
+      "now": 1000000,
+      "maxLockMs": 2592000000,
+      "expect": { "breakStartedAt": null, "breakNotBefore": null, "breakEndsAt": null, "breakUpdatedAt": 0, "timerUntil": null, "passwordHash": null, "passwordTs": 0, "frozenUntil": null, "schedules": [{ "id": "mixed-units", "label": "深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深深😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀", "days": [1], "startMinutes": 540, "endMinutes": 1020 }], "schedulesUpdatedAt": 800000 }
     }
   ]
 }

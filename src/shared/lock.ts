@@ -9,6 +9,12 @@
 // extension bypass it. Accepted — the Phase 4 desktop companion reads this
 // same key over Native Messaging and becomes the hard enforcer.
 //
+// WRITE SERIALIZATION: every lockState / partner-pin write — user transitions
+// (timer, Frozen Turkey, breaks, gates, passwords, schedule edits) and
+// daemon merges alike — runs through ONE promise queue. A merge computed
+// from a pre-arm snapshot must never overwrite a just-armed lock, and ops
+// must not enqueue behind themselves (see runLockOp below).
+//
 // Import direction: settings.ts imports lock.ts, NEVER the reverse.
 import { api } from './api';
 import {
@@ -21,6 +27,7 @@ import {
   makeBreakOperation,
   mergeLockStates,
   sanitizeLockState,
+  sanitizeScheduleLabel,
   validateCategoryScheduleRule,
   validateScheduleRule,
 } from './lock-math';
@@ -75,19 +82,29 @@ api.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && (changes[STORAGE_KEY] || changes[PARTNER_ARM_KEY])) cache = null;
 });
 
-/** Read the effective lock state. `seedInline` is true only inside the merge
- *  queue: the merge already owns the slot, so seeding must not enqueue behind
- *  itself. A public read queues the seed so it cannot land after a newer
- *  daemon release. */
+/** Read the effective lock state. `seedInline` is true only inside a queued
+ *  write op: the op already owns the write-queue slot, so seeding must not
+ *  enqueue behind itself (that would deadlock). A public read queues the
+ *  seed so it cannot land after a newer daemon release. */
 async function readLockState(seedInline: boolean): Promise<LockState> {
   if (cache) return cache;
-  const stored = await api.storage.local.get([STORAGE_KEY, PARTNER_ARM_KEY]);
-  const state: LockState = { ...EMPTY_LOCK_STATE, ...(stored[STORAGE_KEY] as Partial<LockState> | undefined) };
-  const pin = parsePartnerArmPin(stored[PARTNER_ARM_KEY]);
-  if (pin) {
-    state.partnerArmGeneration = pin.generation;
-    state.partnerArmUpdatedAt = pin.updatedAt;
-  } else if (typeof state.partnerArmGeneration === 'string') {
+  let state: LockState;
+  // The loop exists for the seeding path: awaiting the seed lets an entire
+  // queued op train (and the seed write's own storage change, which clears
+  // the cache listener) land before this read finishes, so committing the
+  // pre-drain snapshot would poison the cache with stale state. After a
+  // seeded wait the raw read is retried ONCE; a second failure stops instead
+  // of spinning on a hostile store.
+  for (let attempt = 0; ; attempt++) {
+    const stored = await api.storage.local.get([STORAGE_KEY, PARTNER_ARM_KEY]);
+    state = { ...EMPTY_LOCK_STATE, ...(stored[STORAGE_KEY] as Partial<LockState> | undefined) };
+    const pin = parsePartnerArmPin(stored[PARTNER_ARM_KEY]);
+    if (pin) {
+      state.partnerArmGeneration = pin.generation;
+      state.partnerArmUpdatedAt = pin.updatedAt;
+      break;
+    }
+    if (typeof state.partnerArmGeneration !== 'string') break;
     // Upgrade path: an older installation can have a valid armed raw state
     // with no pin yet. Seed it on the first read so a later raw clear cannot
     // release the arm before an authenticated daemon frame arrives. Clamp a
@@ -96,16 +113,18 @@ async function readLockState(seedInline: boolean): Promise<LockState> {
       generation: state.partnerArmGeneration,
       updatedAt: Math.min(state.partnerArmUpdatedAt ?? 0, Date.now()),
     });
-    if (seeded) {
-      state.partnerArmGeneration = seeded.generation;
-      state.partnerArmUpdatedAt = seeded.updatedAt;
-      try {
-        if (seedInline) await writeSeedIfAbsent(seeded);
-        else await seedPartnerArmPin(seeded);
-      } catch (error) {
-        console.warn('[SmartBlocker] partner arm pin was not seeded:', error);
-      }
+    if (!seeded) break;
+    state.partnerArmGeneration = seeded.generation;
+    state.partnerArmUpdatedAt = seeded.updatedAt;
+    try {
+      if (seedInline) await writeSeedIfAbsent(seeded);
+      else await seedPartnerArmPin(seeded);
+    } catch (error) {
+      console.warn('[SmartBlocker] partner arm pin was not seeded:', error);
+      break;
     }
+    if (attempt === 0) continue;
+    break;
   }
   // Do not clobber a newer snapshot installed by a merge or a lock write that
   // completed while this read was parked. The storage listener will clear the
@@ -119,6 +138,11 @@ export function getLockState(): Promise<LockState> {
   return readLockState(false);
 }
 
+/** Persist a new lock state. Callers must already hold the one write-queue
+ *  slot (runLockOp): this is a raw read-modify-write step, and its whole
+ *  ordering guarantee comes from the queue around it. Also sets the cache so
+ *  the next inline read (readLockState(true)) inside the same op sees the
+ *  value just written. */
 async function writeLockState(next: LockState): Promise<void> {
   cache = next;
   await api.storage.local.set({ [STORAGE_KEY]: next });
@@ -135,12 +159,17 @@ function clampDuration(durationMs: number): number {
   return Math.min(durationMs, MAX_LOCK_MS);
 }
 
-/** Lock settings for a duration. Repeat calls only ever extend. */
-export async function startTimerLock(durationMs: number): Promise<LockStatus> {
-  const state = await getLockState();
-  const until = Math.max(state.timerUntil ?? 0, Date.now() + clampDuration(durationMs));
-  await writeLockState({ ...state, timerUntil: until });
-  return getLockStatus();
+/** Lock settings for a duration. Repeat calls only ever extend. Runs on the
+ *  write queue so an in-flight merge computed from a pre-arm snapshot cannot
+ *  overwrite the arm. */
+export function startTimerLock(durationMs: number): Promise<LockStatus> {
+  return runLockOp(async (): Promise<LockStatus> => {
+    const state = await readLockState(true);
+    const until = Math.max(state.timerUntil ?? 0, Date.now() + clampDuration(durationMs));
+    const next = { ...state, timerUntil: until };
+    await writeLockState(next);
+    return deriveLockStatus(next, Date.now());
+  });
 }
 
 function gateNow(): number {
@@ -151,128 +180,155 @@ function gateNow(): number {
 
 /** Arm a delay gate without starting its countdown. The chosen wait is stored
  *  separately so it cannot be shortened by a later UI reload. */
-export async function armDelayLock(durationMs: number): Promise<void> {
-  const delayDurationMs = clampDelayLockDuration(durationMs);
-  const state = await getLockState();
-  if (armedDelayLock(state)) throw new Error('A delay lock is already armed.');
-  await writeLockState({
-    ...state,
-    delayUntil: 0,
-    delayDurationMs,
-    delayUpdatedAt: gateNow(),
+export function armDelayLock(durationMs: number): Promise<void> {
+  return runLockOp(async (): Promise<void> => {
+    const delayDurationMs = clampDelayLockDuration(durationMs);
+    const state = await readLockState(true);
+    if (armedDelayLock(state)) throw new Error('A delay lock is already armed.');
+    await writeLockState({
+      ...state,
+      delayUntil: 0,
+      delayDurationMs,
+      delayUpdatedAt: gateNow(),
+    });
   });
 }
 
 /** Begin the one countdown for this arm operation. This changes no timerUntil
  *  or other independent gate and is legal only from the armed-waiting state. */
-export async function startDelayUnlock(): Promise<LockStatus> {
-  const now = gateNow();
-  const state = await getLockState();
-  const delay = armedDelayLock(state);
-  if (!delay) throw new Error('A delay lock is not armed.');
-  if (delay.until !== 0) throw new Error('The unlock countdown has already started.');
-  await writeLockState({
-    ...state,
-    delayUntil: now + delay.durationMs,
-    delayUpdatedAt: now,
+export function startDelayUnlock(): Promise<LockStatus> {
+  return runLockOp(async (): Promise<LockStatus> => {
+    const now = gateNow();
+    const state = await readLockState(true);
+    const delay = armedDelayLock(state);
+    if (!delay) throw new Error('A delay lock is not armed.');
+    if (delay.until !== 0) throw new Error('The unlock countdown has already started.');
+    const next = { ...state, delayUntil: now + delay.durationMs, delayUpdatedAt: now };
+    await writeLockState(next);
+    return deriveLockStatus(next, now);
   });
-  return getLockStatus(now);
 }
 
 /** Cancel only the pending release attempt. The delay gate stays armed and
  *  must be started again; no independent lock or break field is touched. */
-export async function cancelDelayUnlock(): Promise<LockStatus> {
-  const now = gateNow();
-  const state = await getLockState();
-  const delay = armedDelayLock(state);
-  if (!delay || delay.until === 0) throw new Error('No unlock countdown is running.');
-  await writeLockState({ ...state, delayUntil: 0, delayUpdatedAt: now });
-  return getLockStatus(now);
+export function cancelDelayUnlock(): Promise<LockStatus> {
+  return runLockOp(async (): Promise<LockStatus> => {
+    const now = gateNow();
+    const state = await readLockState(true);
+    const delay = armedDelayLock(state);
+    if (!delay || delay.until === 0) throw new Error('No unlock countdown is running.');
+    const next = { ...state, delayUntil: 0, delayUpdatedAt: now };
+    await writeLockState(next);
+    return deriveLockStatus(next, now);
+  });
 }
 
 /** Background-only completion. Wall time is re-read on every call: reaching
  *  readiness does not by itself clear the gate and a stale alarm cannot win. */
-export async function completeDelayUnlock(): Promise<LockStatus> {
-  const now = gateNow();
-  const state = await getLockState();
-  const delay = armedDelayLock(state);
-  if (!delay || delay.until === 0) throw new Error('No unlock countdown is running.');
-  if (now < delay.until) throw new Error('The unlock delay has not elapsed yet.');
-  await writeLockState({
-    ...state,
-    delayUntil: null,
-    delayDurationMs: null,
-    delayUpdatedAt: now,
+export function completeDelayUnlock(): Promise<LockStatus> {
+  return runLockOp(async (): Promise<LockStatus> => {
+    const now = gateNow();
+    const state = await readLockState(true);
+    const delay = armedDelayLock(state);
+    if (!delay || delay.until === 0) throw new Error('No unlock countdown is running.');
+    if (now < delay.until) throw new Error('The unlock delay has not elapsed yet.');
+    const next = {
+      ...state,
+      delayUntil: null,
+      delayDurationMs: null,
+      delayUpdatedAt: now,
+    };
+    await writeLockState(next);
+    return deriveLockStatus(next, now);
   });
-  return getLockStatus(now);
 }
 
-export async function armRandomTextLock(length: number): Promise<void> {
-  const candidate: LockState = { ...EMPTY_LOCK_STATE, randomTextLen: length };
-  const randomTextLen = armedRandomTextLength(candidate);
-  if (randomTextLen === null) throw new Error('Random text length must be between 1 and 5,000.');
-  const state = await getLockState();
-  if (armedRandomTextLength(state) !== null) {
-    throw new Error('A random-text lock is already armed.');
-  }
-  await writeLockState({
-    ...state,
-    randomTextLen,
-    randomTextUpdatedAt: gateNow(),
+export function armRandomTextLock(length: number): Promise<void> {
+  return runLockOp(async (): Promise<void> => {
+    // Validate on a scratch state, outside the real one, so the check can
+    // never depend on (or write) anything else.
+    const candidate: LockState = { ...EMPTY_LOCK_STATE, randomTextLen: length };
+    const randomTextLen = armedRandomTextLength(candidate);
+    if (randomTextLen === null) {
+      throw new Error('Random text length must be between 1 and 5,000.');
+    }
+    const state = await readLockState(true);
+    if (armedRandomTextLength(state) !== null) {
+      throw new Error('A random-text lock is already armed.');
+    }
+    await writeLockState({
+      ...state,
+      randomTextLen,
+      randomTextUpdatedAt: gateNow(),
+    });
   });
 }
 
 /** Release only the exact arm generation for which the background verified a
- *  challenge. Re-reading and comparing the stamp closes challenge/arm races. */
-export async function releaseRandomTextLock(expectedArmStamp: number): Promise<LockStatus> {
-  const now = gateNow();
-  const state = await getLockState();
-  if (
-    armedRandomTextLength(state) === null ||
-    !Number.isFinite(expectedArmStamp) ||
-    (state.randomTextUpdatedAt ?? 0) !== expectedArmStamp
-  ) {
-    throw new Error('This unlock text belongs to an older lock. Request a fresh one.');
-  }
-  await writeLockState({ ...state, randomTextLen: null, randomTextUpdatedAt: now });
-  return getLockStatus(now);
+ *  challenge. The queue's write granularity is what closes the last
+ *  challenge/arm race: the stamp is compared against a state no concurrent
+ *  merge can be mid-flight about to overwrite. */
+export function releaseRandomTextLock(expectedArmStamp: number): Promise<LockStatus> {
+  return runLockOp(async (): Promise<LockStatus> => {
+    const now = gateNow();
+    const state = await readLockState(true);
+    if (
+      armedRandomTextLength(state) === null ||
+      !Number.isFinite(expectedArmStamp) ||
+      (state.randomTextUpdatedAt ?? 0) !== expectedArmStamp
+    ) {
+      throw new Error('This unlock text belongs to an older lock. Request a fresh one.');
+    }
+    const next = { ...state, randomTextLen: null, randomTextUpdatedAt: now };
+    await writeLockState(next);
+    return deriveLockStatus(next, now);
+  });
 }
 
 /** Force blocking ON for a duration — uncancellable by construction: no
  *  function in this module ever shortens frozenUntil. */
-export async function startFrozenTurkey(durationMs: number): Promise<LockStatus> {
-  const state = await getLockState();
-  const until = Math.max(state.frozenUntil ?? 0, Date.now() + clampDuration(durationMs));
-  await writeLockState({ ...state, frozenUntil: until });
-  return getLockStatus();
+export function startFrozenTurkey(durationMs: number): Promise<LockStatus> {
+  return runLockOp(async (): Promise<LockStatus> => {
+    const state = await readLockState(true);
+    const until = Math.max(state.frozenUntil ?? 0, Date.now() + clampDuration(durationMs));
+    const next = { ...state, frozenUntil: until };
+    await writeLockState(next);
+    return deriveLockStatus(next, Date.now());
+  });
 }
 
 /** Schedule a break without shortening any lock. delayMs > 0 creates a
  *  pending operation; wall-time derivation activates it at breakNotBefore. */
-export async function startBreak(delayMs: number, durationMs: number): Promise<LockStatus> {
-  const now = Date.now();
-  const state = await getLockState();
-  const status = deriveLockStatus(state, now);
-  if (!status.settingsLocked) throw new Error('A break requires an active lock.');
-  if (status.breakEndsAt !== null && status.breakEndsAt > now) {
-    throw new Error('A break is already pending or active.');
-  }
-  await writeLockState({ ...state, ...makeBreakOperation(now, delayMs, durationMs) });
-  return getLockStatus(now);
+export function startBreak(delayMs: number, durationMs: number): Promise<LockStatus> {
+  return runLockOp(async (): Promise<LockStatus> => {
+    const now = Date.now();
+    const state = await readLockState(true);
+    const status = deriveLockStatus(state, now);
+    if (!status.settingsLocked) throw new Error('A break requires an active lock.');
+    if (status.breakEndsAt !== null && status.breakEndsAt > now) {
+      throw new Error('A break is already pending or active.');
+    }
+    const next = { ...state, ...makeBreakOperation(now, delayMs, durationMs) };
+    await writeLockState(next);
+    return deriveLockStatus(next, now);
+  });
 }
 
 /** Re-block early by cancelling only the break operation. The fresh stamp is
  *  a tombstone: an older peer cannot restore the relaxed interval on merge. */
-export async function cancelBreak(): Promise<LockStatus> {
-  const state = await getLockState();
-  await writeLockState({
-    ...state,
-    breakStartedAt: null,
-    breakNotBefore: null,
-    breakEndsAt: null,
-    breakUpdatedAt: Date.now(),
+export function cancelBreak(): Promise<LockStatus> {
+  return runLockOp(async (): Promise<LockStatus> => {
+    const state = await readLockState(true);
+    const next = {
+      ...state,
+      breakStartedAt: null,
+      breakNotBefore: null,
+      breakEndsAt: null,
+      breakUpdatedAt: Date.now(),
+    };
+    await writeLockState(next);
+    return deriveLockStatus(next, Date.now());
   });
-  return getLockStatus();
 }
 
 // ---- Password hashing (red-team #21) ----
@@ -366,7 +422,8 @@ async function getKdfParams(): Promise<LockKdfParams | null> {
 
 /** Legacy → v2 rehash, run ONLY after a successful legacy verify: a fresh
  *  salt goes to lockKdf and the hash is re-armed with a fresh passwordTs so
- *  the upgrade wins the companion merge (one-way, silent). */
+ *  the upgrade wins the companion merge (one-way, silent). Runs inside the
+ *  caller's write-queue slot (verifyPasswordLocked / armPasswordLock). */
 async function migrateToV2Hash(pw: string): Promise<void> {
   const kdf: LockKdfParams = {
     salt: randomSaltHex(),
@@ -374,7 +431,7 @@ async function migrateToV2Hash(pw: string): Promise<void> {
     v: 2,
   };
   await api.storage.local.set({ [KDF_STORAGE_KEY]: kdf });
-  const state = await getLockState();
+  const state = await readLockState(true);
   await writeLockState({
     ...state,
     passwordHash: await pbkdf2HashHex(pw, kdf.salt, kdf.iterations),
@@ -382,14 +439,10 @@ async function migrateToV2Hash(pw: string): Promise<void> {
   });
 }
 
-/** Verify a password against the armed hash WITHOUT unlocking. Tries the v2
- *  scheme first (when lockKdf is present), then the legacy hash — a legacy
- *  hash can still be armed on an upgraded install (never migrated yet, or
- *  re-adopted from an older peer via the opaque CRDT merge). A successful
- *  LEGACY verify migrates the stored hash to v2 in place. Wrong passwords
- *  never write anything. */
-export async function verifyPassword(password: string): Promise<boolean> {
-  const state = await getLockState();
+/** The queued body of verifyPassword. Callers already holding the write-queue
+ *  slot must use this directly — enqueueing from inside an op deadlocks. */
+async function verifyPasswordLocked(password: string): Promise<boolean> {
+  const state = await readLockState(true);
   if (!state.passwordHash) return true;
   const pw = password.trim();
   const kdf = await getKdfParams();
@@ -401,42 +454,61 @@ export async function verifyPassword(password: string): Promise<boolean> {
   return true;
 }
 
+/** Verify a password against the armed hash WITHOUT unlocking. Tries the v2
+ *  scheme first (when lockKdf is present), then the legacy hash — a legacy
+ *  hash can still be armed on an upgraded install (never migrated yet, or
+ *  re-adopted from an older peer via the opaque CRDT merge). A successful
+ *  LEGACY verify migrates the stored hash to v2 in place. Wrong passwords
+ *  never write anything. Queued because the migration is a lockState write. */
+export function verifyPassword(password: string): Promise<boolean> {
+  return runLockOp(() => verifyPasswordLocked(password));
+}
+
 /** Arm the indefinite password lock. Overwriting an armed hash would BE an
  *  unlock, so arming twice throws. New arms are always v2. */
-export async function armPasswordLock(password: string): Promise<void> {
-  const pw = password.trim();
-  if (pw.length < MIN_PASSWORD_LENGTH) {
-    throw new Error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
-  }
-  const state = await getLockState();
-  if (state.passwordHash) throw new Error('A password lock is already armed.');
-  // Write the salt BEFORE the hash: an interrupted arm that leaves only an
-  // orphan salt behind is harmless (the next arm re-mints it), whereas a v2
-  // hash whose salt never landed would verify as legacy and never unlock.
-  const kdf: LockKdfParams = {
-    salt: randomSaltHex(),
-    iterations: PBKDF2_ITERATIONS,
-    v: 2,
-  };
-  await api.storage.local.set({ [KDF_STORAGE_KEY]: kdf });
-  await writeLockState({
-    ...state,
-    passwordHash: await pbkdf2HashHex(pw, kdf.salt, kdf.iterations),
-    passwordTs: Date.now(),
+export function armPasswordLock(password: string): Promise<void> {
+  return runLockOp(async (): Promise<void> => {
+    const pw = password.trim();
+    if (pw.length < MIN_PASSWORD_LENGTH) {
+      throw new Error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+    }
+    const state = await readLockState(true);
+    if (state.passwordHash) throw new Error('A password lock is already armed.');
+    // Write the salt BEFORE the hash: an interrupted arm that leaves only an
+    // orphan salt behind is harmless (the next arm re-mints it), whereas a v2
+    // hash whose salt never landed would verify as legacy and never unlock.
+    const kdf: LockKdfParams = {
+      salt: randomSaltHex(),
+      iterations: PBKDF2_ITERATIONS,
+      v: 2,
+    };
+    await api.storage.local.set({ [KDF_STORAGE_KEY]: kdf });
+    await writeLockState({
+      ...state,
+      passwordHash: await pbkdf2HashHex(pw, kdf.salt, kdf.iterations),
+      passwordTs: Date.now(),
+    });
   });
 }
 
 /** Clears ONLY the password source on a match — timer, Frozen Turkey, and
- *  schedule windows all survive a password unlock. */
-export async function attemptPasswordUnlock(password: string): Promise<boolean> {
-  const state = await getLockState();
-  if (!state.passwordHash) return true;
-  if (!(await verifyPassword(password))) return false;
-  // Tombstone: the unlock must WIN the companion merge, so clearing the hash
-  // stamps passwordTs — otherwise the peer's armed copy re-arms us on sync.
-  // Re-read: a legacy→v2 migration inside verifyPassword just rewrote state.
-  await writeLockState({ ...(await getLockState()), passwordHash: null, passwordTs: Date.now() });
-  return true;
+ *  schedule windows all survive a password unlock. Verify + tombstone run in
+ *  ONE queue slot: no merge can interleave between them. */
+export function attemptPasswordUnlock(password: string): Promise<boolean> {
+  return runLockOp(async (): Promise<boolean> => {
+    const state = await readLockState(true);
+    if (!state.passwordHash) return true;
+    if (!(await verifyPasswordLocked(password))) return false;
+    // Tombstone: the unlock must WIN the companion merge, so clearing the hash
+    // stamps passwordTs — otherwise the peer's armed copy re-arms us on sync.
+    // Re-read: a legacy→v2 migration inside the verify just rewrote state.
+    await writeLockState({
+      ...(await readLockState(true)),
+      passwordHash: null,
+      passwordTs: Date.now(),
+    });
+    return true;
+  });
 }
 
 /** Replace the schedule rules. Refused while any lock is active — otherwise
@@ -451,58 +523,80 @@ export async function attemptPasswordUnlock(password: string): Promise<boolean> 
  *  offset (no IANA database on the Rust mirror's offline build), so a window
  *  drifts one hour from civil time across a DST change — see the field doc
  *  in lock-math.ts. */
-export async function setSchedules(rules: ScheduleRule[]): Promise<void> {
-  if ((await getLockStatus()).settingsLocked) {
-    throw new Error('Schedules cannot be changed while SmartBlocker is locked.');
+/** Repair a rule's display label instead of rejecting the rule: collapse
+ *  control characters/whitespace and truncate at the shared 80-unit cap,
+ *  exactly like the Rust mirror's sanitize_schedule_label, so both stores
+ *  converge on the same string. The enforcement window — never the name —
+ *  is the contract; a malformed-but-string label keeps its rule. */
+function repairRuleLabel<T extends ScheduleRule>(r: T): T {
+  const next = { ...r };
+  if (typeof next.label === 'string') {
+    const label = sanitizeScheduleLabel(next.label);
+    if (label === undefined) delete next.label;
+    else next.label = label;
   }
-  for (const r of rules) {
-    const problem = validateScheduleRule(r);
-    if (problem) throw new Error(`Invalid schedule: ${problem}`);
-  }
-  const tzOffsetMinutes = -new Date().getTimezoneOffset();
-  const tzName = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const pinned = rules.map((r) => ({
-    ...r,
-    tzOffsetMinutes: r.tzOffsetMinutes ?? tzOffsetMinutes,
-    tzName: r.tzName ?? (typeof tzName === 'string' ? tzName.slice(0, 64) : undefined),
-  }));
-  await writeLockState({
-    ...(await getLockState()),
-    schedules: pinned,
-    schedulesUpdatedAt: Date.now(),
+  return next;
+}
+
+export function setSchedules(rules: ScheduleRule[]): Promise<void> {
+  return runLockOp(async (): Promise<void> => {
+    const state = await readLockState(true);
+    if (deriveLockStatus(state, Date.now()).settingsLocked) {
+      throw new Error('Schedules cannot be changed while SmartBlocker is locked.');
+    }
+    const repaired = rules.map((r) => repairRuleLabel(r));
+    for (const r of repaired) {
+      const problem = validateScheduleRule(r);
+      if (problem) throw new Error(`Invalid schedule: ${problem}`);
+    }
+    const tzOffsetMinutes = -new Date().getTimezoneOffset();
+    const tzName = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const pinned = repaired.map((r) => ({
+      ...r,
+      tzOffsetMinutes: r.tzOffsetMinutes ?? tzOffsetMinutes,
+      tzName: r.tzName ?? (typeof tzName === 'string' ? tzName.slice(0, 64) : undefined),
+    }));
+    await writeLockState({
+      ...state,
+      schedules: pinned,
+      schedulesUpdatedAt: Date.now(),
+    });
   });
 }
 
 /** Replace only category-scoped windows. These never become settings locks or
  * global force-blocking reasons, but an active scope still cannot be deleted
  * as a shortcut around its selected-category block. */
-export async function setCategorySchedules(rules: CategoryScheduleRule[]): Promise<void> {
-  const now = Date.now();
-  const state = await getLockState();
-  if (deriveLockStatus(state, now).settingsLocked) {
-    throw new Error('Schedules cannot be changed while SmartBlocker is locked.');
-  }
-  if (currentWindowEnd(state.categorySchedules ?? [], new Date(now)) !== null) {
-    throw new Error('Category schedules cannot be changed while a category window is active.');
-  }
-  const ids = new Set<string>();
-  for (const r of rules) {
-    const problem = validateCategoryScheduleRule(r);
-    if (problem) throw new Error(`Invalid category schedule: ${problem}`);
-    if (ids.has(r.id)) throw new Error('Category schedule IDs must be unique.');
-    ids.add(r.id);
-  }
-  const tzOffsetMinutes = -new Date().getTimezoneOffset();
-  const tzName = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const pinned = rules.map((r) => ({
-    ...r,
-    tzOffsetMinutes: r.tzOffsetMinutes ?? tzOffsetMinutes,
-    tzName: r.tzName ?? (typeof tzName === 'string' ? tzName.slice(0, 64) : undefined),
-  }));
-  await writeLockState({
-    ...state,
-    categorySchedules: pinned,
-    categorySchedulesUpdatedAt: now,
+export function setCategorySchedules(rules: CategoryScheduleRule[]): Promise<void> {
+  return runLockOp(async (): Promise<void> => {
+    const now = Date.now();
+    const state = await readLockState(true);
+    if (deriveLockStatus(state, now).settingsLocked) {
+      throw new Error('Schedules cannot be changed while SmartBlocker is locked.');
+    }
+    if (currentWindowEnd(state.categorySchedules ?? [], new Date(now)) !== null) {
+      throw new Error('Category schedules cannot be changed while a category window is active.');
+    }
+    const repaired = rules.map((r) => repairRuleLabel(r));
+    const ids = new Set<string>();
+    for (const r of repaired) {
+      const problem = validateCategoryScheduleRule(r);
+      if (problem) throw new Error(`Invalid category schedule: ${problem}`);
+      if (ids.has(r.id)) throw new Error('Category schedule IDs must be unique.');
+      ids.add(r.id);
+    }
+    const tzOffsetMinutes = -new Date().getTimezoneOffset();
+    const tzName = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const pinned = repaired.map((r) => ({
+      ...r,
+      tzOffsetMinutes: r.tzOffsetMinutes ?? tzOffsetMinutes,
+      tzName: r.tzName ?? (typeof tzName === 'string' ? tzName.slice(0, 64) : undefined),
+    }));
+    await writeLockState({
+      ...state,
+      categorySchedules: pinned,
+      categorySchedulesUpdatedAt: now,
+    });
   });
 }
 
@@ -526,7 +620,28 @@ function canonicalJson(value: unknown): string {
   );
 }
 
-let mergeQueue: Promise<void> = Promise.resolve();
+// The ONE write queue for every lockState / partner-pin write. Serializing
+// user transitions and daemon merges against each other is the fix for the
+// lost-arm race: a merge that read storage before an arm lands can no longer
+// write its stale pre-arm snapshot back afterwards. A single queue means
+// there is no second lock and no ordering to get wrong; the price is that
+// ops must NEVER enqueue from inside an op — the public getLockState()
+// path enqueues a partner-pin seed, which would wait behind the slot the
+// caller is itself occupying (deadlock), so ops use readLockState(true)
+// and writeLockState directly. Failures never poison the chain (each op's
+// outcome is swallowed before the next op chains onto it), and each op
+// remains an independent read-modify-write, so a crashed op mid-queue has
+// the same crash-idempotency as one unserialized.
+let lockOps: Promise<unknown> = Promise.resolve();
+
+function runLockOp<T>(op: () => Promise<T>): Promise<T> {
+  const attempt = lockOps.then(op);
+  lockOps = attempt.then(
+    () => undefined,
+    () => undefined,
+  );
+  return attempt;
+}
 
 async function writeSeedIfAbsent(pin: PartnerArmPin): Promise<void> {
   const existing = await getPartnerArmPin();
@@ -534,27 +649,18 @@ async function writeSeedIfAbsent(pin: PartnerArmPin): Promise<void> {
   await api.storage.local.set({ [PARTNER_ARM_KEY]: pin });
 }
 
-/** Seed an upgrade pin on the merge queue, so a late seed cannot land after
- * a newer daemon release. The merge path calls `readLockState(true)` while it
- * already holds the queue slot. */
-async function seedPartnerArmPin(pin: PartnerArmPin): Promise<void> {
-  const attempt = mergeQueue.then(() => writeSeedIfAbsent(pin));
-  mergeQueue = attempt.then(
-    () => undefined,
-    () => undefined,
-  );
-  await attempt;
+/** Seed an upgrade pin on the write queue, so a late seed cannot land after
+ * a newer daemon release. Queued ops reach the same place through
+ * readLockState(true)'s inline writeSeedIfAbsent. */
+function seedPartnerArmPin(pin: PartnerArmPin): Promise<void> {
+  return runLockOp(() => writeSeedIfAbsent(pin));
 }
 
 /** Serialize daemon-frame merges. Two independent status/pairing promises
- * otherwise read the same snapshot and land their writes out of order. */
+ * otherwise read the same snapshot and land their writes out of order — and,
+ * unserialized, a merge could overwrite a lock transitioned in parallel. */
 export function mergeRemoteLockState(remote: unknown): Promise<boolean> {
-  const attempt = mergeQueue.then(() => mergeRemoteLockStateLocked(remote));
-  mergeQueue = attempt.then(
-    () => undefined,
-    () => undefined,
-  );
-  return attempt;
+  return runLockOp(() => mergeRemoteLockStateLocked(remote));
 }
 
 async function mergeRemoteLockStateLocked(remote: unknown): Promise<boolean> {

@@ -6,12 +6,19 @@
 //
 // STATE MACHINE (derived, settings are the source of truth — nothing else
 // is persisted):
-//   ARMED   ⇔ settings.resumeMode !== 'off' && settings.enabled === false
+//   ARMED   ⇔ settings.onboarded && settings.resumeMode !== 'off'
+//             && settings.enabled === false — never-onboarded installs stay
+//             unarmed: `enabled: false` before
+//             `COMPLETE_ONBOARDING` is the PRE-onboarding default, not a
+//             user disable, so auto-resume must not flip it back on.
 //   FIRED   → setSettings({ enabled: true, resumeAt: null }) + a quiet
 //             notification. Never fires while any lock is active: a timed
-//             lock DEFERS the resume to the lock's end, an indefinite
-//             (password) lock drops it — blocking is enforced anyway and
-//             setSettings would throw.
+//             lock DEFERS the resume to the lock's end; an indefinite
+//             (password) lock defers it TOO, in a looser sense — the alarm
+//             is cleared, but resumeMode/resumeAt survive (they live in
+//             settings, which the lock never touches), so the next
+//             syncResume after the unlock — lockState-change listener or SW
+//             start — fires the still-armed plan. Nothing is dropped.
 //   CLEARED → the master toggle returning to ON (by the user OR by firing)
 //             nulls resumeAt; resumeMode survives, so the next disable
 //             re-arms. Setting resumeMode to 'off' also nulls resumeAt.
@@ -58,9 +65,12 @@ interface ArmedPlan {
 }
 
 /** The armed plan, or null when auto-resume is inert (mode 'off', an
- *  unknown stored mode, or blocking already on). */
+ *  unknown stored mode, blocking already on, or the install was never
+ *  onboarded — `enabled: false` is that install's pre-onboarding default,
+ *  not a user disable). */
 async function readArmedPlan(): Promise<ArmedPlan | null> {
   const s = await getSettings();
+  if (!s.onboarded) return null;
   const mode = normalizeResumeMode(s.resumeMode);
   if (mode === 'off' || s.enabled) return null;
   return { mode, resumeAt: s.resumeAt };
@@ -91,19 +101,30 @@ async function notifyResumed(): Promise<void> {
 let firing = false;
 
 /** Fire an armed resume now. Idempotent: racing triggers land on the one
- *  guarded write, and once `enabled` is true every later call no-ops. */
+ *  guarded write, and once `enabled` is true every later call no-ops. The
+ *  alarm listener calls this DIRECTLY, bypassing readArmedPlan, so the
+ *  onboarding gate is re-checked here: a never-onboarded install bails
+ *  before touching the master switch and clears the one-shot alarm so a
+ *  stale `resume-at` cannot re-wake it. */
 async function resumeNow(): Promise<void> {
   if (firing) return;
   firing = true;
   try {
-    if ((await getSettings()).enabled) return;
+    const settings = await getSettings();
+    if (settings.enabled) return;
+    if (!settings.onboarded) {
+      void api.alarms.clear(RESUME_ALARM_NAME);
+      return;
+    }
     const lock = await getLockStatus();
     if (lock.settingsLocked) {
       // A lock means blocking is enforced anyway (schedule window, Frozen
       // Turkey, timer, password) — an auto-resume mid-lock is pointless AND
       // setSettings would throw. Defer past a timed lock (+1s so the end
-      // strictly passed, mirroring the lock-boundary alarm); drop under an
-      // indefinite password lock.
+      // strictly passed, mirroring the lock-boundary alarm). An indefinite
+      // lock also DEFERS, not drops: the alarm is cleared, but the armed
+      // plan survives in settings, and the next syncResume (lockState
+      // change on unlock, or SW start) re-derives and fires it.
       if (lock.until !== null) {
         void api.alarms.create(RESUME_ALARM_NAME, { when: lock.until + 1000 });
       } else {

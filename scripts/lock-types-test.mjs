@@ -105,6 +105,8 @@ const {
   mergeRemoteLockState,
   setCategorySchedules,
   startDelayUnlock,
+  startFrozenTurkey,
+  startTimerLock,
 } = await import('../src/shared/lock.ts');
 const {
   attemptRandomTextUnlock,
@@ -490,6 +492,53 @@ await test('a service-worker restart invalidates the old in-memory challenge', a
     /no longer valid/,
   );
   assert.equal(writes.length, 0);
+});
+
+await test('a merge racing a timer arm loses neither side (all lock writes serialize)', async () => {
+  // Regression for the lost-arm race: user transitions used to be raw
+  // read-modify-writes racing the merge queue, so a merge computed from a
+  // pre-arm snapshot could overwrite a just-armed lock. Serialized writes
+  // interleave at write granularity — every source must survive ANY order.
+  now = NOW;
+  seed(emptyState());
+  await Promise.all([
+    startFrozenTurkey(500_000),
+    mergeRemoteLockState({ timerUntil: NOW + 600_000 }),
+    startTimerLock(700_000),
+  ]);
+  const state = await getLockState();
+  assert.notEqual(state.frozenUntil, null);
+  assert.ok(state.frozenUntil >= NOW + 500_000, 'the frozen arm was lost');
+  assert.notEqual(state.timerUntil, null);
+  assert.ok(state.timerUntil >= NOW + 600_000, 'the timer arm was lost');
+});
+
+await test('queued transitions keep draining while a concurrent public read seeds the partner pin', async () => {
+  // A public read enqueues a partner-pin seed behind queued ops; the ops
+  // must keep draining (no op may re-enqueue behind itself) and the seed
+  // must land. A hang means the write queue deadlocked.
+  now = NOW;
+  seed({ ...emptyState(), partnerArmGeneration: 'a'.repeat(64), partnerArmUpdatedAt: NOW - 10 });
+  const settled = Promise.all([
+    startTimerLock(60_000),
+    startFrozenTurkey(120_000),
+    armDelayLock(60_000),
+    getLockState(),
+  ]);
+  const drained = await Promise.race([
+    settled.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 5_000)),
+  ]);
+  assert.equal(drained, true, 'the lock write queue deadlocked');
+  assert.equal(
+    writes.some((items) => items.partnerArmState !== undefined),
+    true,
+    'expected the public read to seed the missing partner pin',
+  );
+  const state = await getLockState();
+  assert.ok(state.timerUntil !== null && state.timerUntil > now);
+  assert.ok(state.frozenUntil !== null && state.frozenUntil > now);
+  assert.equal(state.delayUntil, 0);
 });
 
 await test('a stale random-text arm cannot erase a newer release tombstone', async () => {

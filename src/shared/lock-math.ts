@@ -65,6 +65,67 @@ export const MAX_SCHEDULE_LEAD_MINUTES = 1_440;
  *  Rust companion. Labels do not affect schedule evaluation. */
 export const MAX_SCHEDULE_LABEL_LENGTH = 80;
 
+/** Unicode White_Space property as code points — the exact set Rust's
+ *  `char::is_whitespace` (split_whitespace) matches. JS `\s` would
+ *  additionally match U+FEFF, which Rust does NOT treat as whitespace, so
+ *  the explicit set keeps the collapse identical across both languages.
+ *  U+0009–U+000D are already plain spaces by the time this is consulted
+ *  (the Cc flattening below), but they are listed for completeness. */
+const LABEL_WHITESPACE_POINTS = [
+  0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0x85, 0xa0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000,
+];
+
+function isLabelWhitespace(ch: string): boolean {
+  const code = ch.codePointAt(0) ?? 0;
+  return (code >= 0x2000 && code <= 0x200a) || LABEL_WHITESPACE_POINTS.includes(code);
+}
+
+/** Collapse control characters/whitespace and cap a rule label, mirroring
+ *  sanitize_schedule_label in lock_math.rs character-for-character — a
+ *  malformed label must never drop the rule itself (the window is the
+ *  enforcement contract, the name is convenience). \n and every other
+ *  Unicode Cc char flatten to a space and whitespace runs collapse to one
+ *  (Rust maps char::is_control to ' ' then split_whitespace().join(" "));
+ *  a label that collapses to nothing becomes undefined (Rust: None).
+ *  Truncation counts UTF-16 code units — JavaScript `.length` semantics —
+ *  and never splits a surrogate pair, so a daemon round-trip cannot turn a
+ *  label this side accepted into one its validator rejects. */
+export function sanitizeScheduleLabel(
+  label: string | null | undefined,
+): string | undefined {
+  if (typeof label !== 'string') return undefined;
+  let flattened = '';
+  for (const ch of label) {
+    const code = ch.codePointAt(0) ?? 0;
+    flattened += code <= 0x1f || (code >= 0x7f && code <= 0x9f) ? ' ' : ch;
+  }
+  let collapsed = '';
+  let lastWasSpace = true;
+  for (const ch of flattened) {
+    if (!isLabelWhitespace(ch)) {
+      collapsed += ch;
+      lastWasSpace = false;
+    } else if (!lastWasSpace) {
+      collapsed += ' ';
+      lastWasSpace = true;
+    }
+  }
+  // Rust's split_whitespace().join(" ") trims both ends; the loop above
+  // trims the leading edge, so at most one trailing space remains.
+  if (collapsed === '') return undefined;
+  if (collapsed.endsWith(' ')) collapsed = collapsed.slice(0, -1);
+  if (collapsed === '') return undefined;
+  let units = 0;
+  let out = '';
+  for (const ch of collapsed) {
+    const width = ch.length; // UTF-16 code units: 2 for a surrogate pair.
+    if (units + width > MAX_SCHEDULE_LABEL_LENGTH) break;
+    out += ch;
+    units += width;
+  }
+  return out;
+}
+
 export interface LockState {
   /** When this break operation was requested. All three nullable break
    *  timestamps are one operation, merged together by breakUpdatedAt. */
@@ -823,12 +884,30 @@ export function mergeLockStates(a: LockState, b: LockState, now: number): LockSt
   return merged;
 }
 
+/** Normalize a raw rule's label exactly like the Rust sanitize path: a
+ *  string label is collapsed/truncated, null reads as absent (serde's
+ *  Option), and any OTHER type drops the whole rule (serde fails the rule's
+ *  deserialization). Returns a shallow copy so the caller's raw frame is
+ *  never mutated. */
+function sanitizeRuleLabel<T extends ScheduleRule>(r: T): T | null {
+  if (r.label !== null && r.label !== undefined && typeof r.label !== 'string') return null;
+  const next = { ...r };
+  const label = sanitizeScheduleLabel(next.label);
+  if (label === undefined) delete next.label;
+  else next.label = label;
+  return next;
+}
+
 /** Coerce untrusted input (the companion talks over Native Messaging) into a
  *  well-formed LockState: wrong types dropped, invalid rules dropped, end
  *  timestamps clamped to `now` + maxLockMs so a bad peer cannot lock forever.
  *  The two metadata stamps are clamped to `now` — they order
  *  last-writer-wins merges, so a forged FUTURE stamp must never be admitted:
- *  it would outrank every honest write until that date arrived. */
+ *  it would outrank every honest write until that date arrived. Labels are
+ *  the one field sanitized to a valid value instead of dropping the rule —
+ *  they are display-only, so a long/control-character name never loses the
+ *  enforcement window it describes (truncate-and-keep, mirroring
+ *  sanitize_lock_state on the Rust side). */
 export function sanitizeLockState(raw: unknown, now: number, maxLockMs: number): LockState {
   const o = (raw ?? {}) as Record<string, unknown>;
   const cap = now + maxLockMs;
@@ -837,23 +916,20 @@ export function sanitizeLockState(raw: unknown, now: number, maxLockMs: number):
   const stamp = (v: unknown): number =>
     typeof v === 'number' && Number.isSafeInteger(v) && v > 0 ? Math.min(v, now) : 0;
   const schedules = Array.isArray(o.schedules)
-    ? (o.schedules as ScheduleRule[]).filter(
-        (r) =>
-          r !== null &&
-          typeof r === 'object' &&
-          typeof r.id === 'string' &&
-          validateScheduleRule(r) === null,
-      )
+    ? (o.schedules as ScheduleRule[])
+        .filter((r) => r !== null && typeof r === 'object' && typeof r.id === 'string')
+        .map((r) => sanitizeRuleLabel(r))
+        .filter((r): r is ScheduleRule => r !== null && validateScheduleRule(r) === null)
     : [];
   let categorySchedules: CategoryScheduleRule[] | undefined;
   if (Array.isArray(o.categorySchedules)) {
-    const candidates = o.categorySchedules.filter(
-      (r): r is CategoryScheduleRule =>
-        r !== null &&
-        typeof r === 'object' &&
-        typeof (r as CategoryScheduleRule).id === 'string' &&
-        validateCategoryScheduleRule(r as CategoryScheduleRule) === null,
-    );
+    const candidates = o.categorySchedules
+      .filter((r) => r !== null && typeof r === 'object' && typeof r.id === 'string')
+      .map((r) => sanitizeRuleLabel(r as CategoryScheduleRule))
+      .filter(
+        (r): r is CategoryScheduleRule =>
+          r !== null && validateCategoryScheduleRule(r) === null,
+      );
     // All-or-neutral: a malformed scoped list (including duplicate IDs) must
     // not become an explicit empty deletion or retain only convenient rules.
     if (
@@ -972,7 +1048,10 @@ export function sanitizeLockState(raw: unknown, now: number, maxLockMs: number):
 /** Returns a human-readable problem, or null when the rule is valid. Ranges
  *  for the tz pin match the real world (UTC−12:00 … UTC+14:00) and are
  *  mirrored by `validate_schedule_rule` in lock_math.rs — sanitize paths in
- *  both languages drop rules failing ANY of these checks. */
+ *  both languages drop rules failing ANY of these checks, except the label
+ *  bound: sanitize schedules repair labels to a valid value first
+ *  (sanitizeScheduleLabel / sanitize_schedule_label), so a malformed name
+ *  never drops the window that carries the enforcement. */
 export function validateScheduleRule(r: ScheduleRule): string | null {
   if (!Array.isArray(r.days) || r.days.length === 0) return 'Pick at least one day.';
   if (r.days.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) return 'Days must be 0–6.';
