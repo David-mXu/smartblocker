@@ -248,13 +248,38 @@ export async function addForceRedirectRule(
     },
   };
 
+  // Reserve the (tabId, url) slot BEFORE the await: two concurrent
+  // addForceRedirectRule calls for the same navigation both passed the
+  // has-check above, and indexing only after updateSessionRules resolves let
+  // each of them install its own rule — leaving an orphaned duplicate in the
+  // session ruleset that clearForceRedirectRule (index-driven) could never
+  // see again. Indexing the pending reservation first makes the second caller
+  // observe the first's entry; the reservation is reverted on install failure
+  // so no phantom rule is reported as already-enforced.
+  indexRule({ ruleId: rule.id, tabId, url: canonical });
   try {
     await api.declarativeNetRequest.updateSessionRules({ addRules: [rule] });
   } catch (e) {
+    unindexRule(rule.id);
     console.warn('[SmartBlocker] force redirect rule rejected (falling back to overlay):', e);
     return { status: 'failed' };
   }
-  indexRule({ ruleId: rule.id, tabId, url: canonical });
+  // A concurrent clearForceRedirectRule/clearForceRedirectsForTab that ran
+  // while this add was in flight could only drop our index reservation —
+  // the live rule did not exist for it to remove yet. If our reservation is
+  // gone (or no longer ours), remove the now-installed rule ourselves and
+  // report failure so the caller falls back to the injected overlay; never
+  // report a rule we cannot account for as enforced.
+  if (ruleIdsByTabUrl.get(tabId)?.get(canonical) !== rule.id) {
+    try {
+      await api.declarativeNetRequest.updateSessionRules({ removeRuleIds: [rule.id] });
+    } catch {
+      // best-effort; clearAllForceRedirectRules re-reads the live ruleset at
+      // unlock and still catches a leftover.
+    }
+    unindexRule(rule.id); // no-op when the concurrent clear already unindexed
+    return { status: 'failed' };
+  }
 
   // Defensive FIFO prune past the cap.
   if (allocatedOrder.length > MAX_FORCE_REDIRECT_RULES) {

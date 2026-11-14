@@ -725,18 +725,32 @@ async function armSubFrame(tabId: number, frameId: number, url: string): Promise
   }
 }
 
+// logSample is a read-modify-write of storage.local.latencySamples, and two
+// evaluations on the same tab (arm() frees the in-flight key, so a stale and a
+// fresh one can overlap) lose each other's sample with last-write-wins. Serialize
+// through a single in-context promise chain — the same enqueue pattern
+// usage-stats-tracker.ts uses. A failed link must not poison the queue, but
+// the awaiting caller still sees ITS write's rejection.
+let latencyLogQueue: Promise<void> = Promise.resolve();
 async function logSample(sample: LatencySample) {
-  const { latencySamples = [] } = await api.storage.local.get('latencySamples');
-  latencySamples.push(sample);
-  while (latencySamples.length > LATENCY_LOG_MAX) latencySamples.shift();
-  await api.storage.local.set({ latencySamples });
-  console.log(
-    `[SmartBlocker] ${sample.blocked ? 'BLOCKED' : 'allowed'} "${sample.title}" -> ` +
-      `${sample.label} (${(sample.score * 100).toFixed(0)}%) | ` +
-      `pageDelay ${sample.pageDelayMs}ms, load ${Math.round(sample.loadMs)}ms, ` +
-      `infer ${Math.round(sample.inferMs)}ms, inject ${Math.round(sample.injectMs)}ms, ` +
-      `total ${Math.round(sample.totalMs)}ms${sample.cached ? ' (cached)' : ''}`,
+  const write = latencyLogQueue.then(async () => {
+    const { latencySamples = [] } = await api.storage.local.get('latencySamples');
+    latencySamples.push(sample);
+    while (latencySamples.length > LATENCY_LOG_MAX) latencySamples.shift();
+    await api.storage.local.set({ latencySamples });
+    console.log(
+      `[SmartBlocker] ${sample.blocked ? 'BLOCKED' : 'allowed'} "${sample.title}" -> ` +
+        `${sample.label} (${(sample.score * 100).toFixed(0)}%) | ` +
+        `pageDelay ${sample.pageDelayMs}ms, load ${Math.round(sample.loadMs)}ms, ` +
+        `infer ${Math.round(sample.inferMs)}ms, inject ${Math.round(sample.injectMs)}ms, ` +
+        `total ${Math.round(sample.totalMs)}ms${sample.cached ? ' (cached)' : ''}`,
+    );
+  });
+  latencyLogQueue = write.then(
+    () => undefined,
+    () => undefined,
   );
+  await write;
 }
 
 // Pull richer page signals (channel, description/post-body snippet, fallbackTitle) from the
@@ -1164,6 +1178,16 @@ async function onTitle(
     requestedSerpGeneration ?? (serpTitleGeneration.get(tabId) ?? 0);
   const stillCurrentTitle = () =>
     !isSerp || serpTitleGeneration.get(tabId) === mySerpGeneration;
+  // Non-SERP navigation staleness — the mirror of the block-side stale check
+  // near the end of onTitle and of subFrameGeneration in onSubFrame. arm()
+  // frees the in-flight key, so a NEWER evaluation for this tab can already be
+  // running while this one is still awaiting classify()/gatherMeta(); an ALLOW
+  // verdict for the PREVIOUS page must never tear down the newer navigation's
+  // curtain, overlay, or force-redirect rule. The armedUrl disjunct preserves
+  // the same-url re-arm case (onHistoryStateUpdated bumps navGeneration for
+  // the SAME url right after changeInfo.title) and the SPA meta-recheck path.
+  const stillCurrentPage = () =>
+    navGeneration.get(tabId) === myGeneration || armedUrl.get(tabId) === url;
   const policyEpoch = categoryPolicyEpoch;
 
   try {
@@ -1172,21 +1196,30 @@ async function onTitle(
     const categorySchedules = (await getLockState()).categorySchedules ?? [];
     if (!stillCurrentTitle()) return;
     if (!settings.enabled && !lock.forceBlocking) {
-      armedAt.delete(tabId);
-      clearCurtain(tabId);
-      clearOverlay(tabId);
-      void clearForceRedirectRule(tabId, url);
+      if (stillCurrentPage()) {
+        armedAt.delete(tabId);
+        clearCurtain(tabId);
+        clearOverlay(tabId);
+        void clearForceRedirectRule(tabId, url);
+      }
       return; // master switch off — never classify or block (unless a Frozen
       //         Turkey session or schedule window forces blocking on)
+      // Stale evaluations (tab already navigated on) leave the teardown to the
+      // newer navigation's own evaluation — a stale clear could otherwise
+      // unblock a page the user just navigated to.
     }
     if (isWhitelisted(url, settings.whitelist)) {
-      armedAt.delete(tabId);
-      clearCurtain(tabId);
-      clearOverlay(tabId);
-      void clearForceRedirectRule(tabId, url);
-      // Even on whitelisted workspaces (e.g. Google AI Studio, Gemini, Docs,
-      // Notion), scan for embedded distraction videos/iframes inside the page.
-      void runPageSanitizer(tabId);
+      if (stillCurrentPage()) {
+        armedAt.delete(tabId);
+        clearCurtain(tabId);
+        clearOverlay(tabId);
+        void clearForceRedirectRule(tabId, url);
+        // Even on whitelisted workspaces (e.g. Google AI Studio, Gemini,
+        // Docs, Notion), scan for embedded distraction videos/iframes inside
+        // the page. A newer navigation runs its own evaluation with fresh
+        // settings; don't do its work (or undo it) from a stale one.
+        void runPageSanitizer(tabId);
+      }
       return;
     }
 
@@ -1212,16 +1245,18 @@ async function onTitle(
     // YouTube while distracting videos are blocked and search cards masked.
     // An explicit user rule trumps this convenience.
     if (!blocklistHit && !titleRuleHit && !adultHost && isYouTubeBrowsingSurface(url)) {
-      armedAt.delete(tabId);
       lastClassified.set(tabId, `${url}|${initialTitle ?? 'youtube'}`);
       void recordTabStatus(tabId, { url, title: initialTitle ?? '', kind: 'browsing', ts: Date.now() });
-      clearCurtain(tabId);
-      clearOverlay(tabId);
-      void clearForceRedirectRule(tabId, url);
-      // The page-level exemption covers the container, not its video results.
-      // YouTube Search cards are classified independently so broad queries can
-      // mix productive tutorials with distracting entertainment.
-      void runPageSanitizer(tabId);
+      if (stillCurrentPage()) {
+        armedAt.delete(tabId);
+        clearCurtain(tabId);
+        clearOverlay(tabId);
+        void clearForceRedirectRule(tabId, url);
+        // The page-level exemption covers the container, not its video
+        // results. YouTube Search cards are classified independently so broad
+        // queries can mix productive tutorials with distracting entertainment.
+        void runPageSanitizer(tabId);
+      }
       return;
     }
 
@@ -1694,13 +1729,23 @@ async function onTitle(
       }
       injectMs = Date.now() - tInject;
     } else {
-      // P2 verdict-clear: an allowed verdict releases the session rule this
-      // URL may have picked up from an earlier fail-closed redirect (a no-op
-      // when none exists, so non-force modes stay cheap).
-      void clearForceRedirectRule(tabId, url);
-      clearCurtain(tabId);
-      clearOverlay(tabId);
-      void runPageSanitizer(tabId);
+      // Stale-ALLOW guard. This allow verdict may belong to the PREVIOUS
+      // page: arm() frees the in-flight key, so a newer evaluation for this
+      // tab can already have painted a block screen for the page the user
+      // actually navigated to. The block side de-energizes stale verdicts
+      // just above; the allow side must not tear DOM below itself. Same
+      // gate the recordTabStatus call above uses — clear side effects only
+      // when the tab is still on this generation or the same URL (the
+      // onHistoryStateUpdated re-arm case).
+      if (stillCurrentPage()) {
+        // P2 verdict-clear: an allowed verdict releases the session rule this
+        // URL may have picked up from an earlier fail-closed redirect (a
+        // no-op when none exists, so non-force modes stay cheap).
+        void clearForceRedirectRule(tabId, url);
+        clearCurtain(tabId);
+        clearOverlay(tabId);
+        void runPageSanitizer(tabId);
+      }
     }
 
     await logSample({
