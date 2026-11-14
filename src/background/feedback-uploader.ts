@@ -6,12 +6,52 @@
 // never full URLs, never browsing history).
 import { api } from '../shared/api';
 import { FEEDBACK_ENDPOINT } from '../shared/config';
-import { getFeedback, markUploaded } from '../shared/feedback';
+import { getFeedback, markSkipped, markUploaded, type FeedbackRecord } from '../shared/feedback';
 import { getSettings } from '../shared/settings';
 
 const ALARM_NAME = 'feedback-upload';
 const PERIOD_MINUTES = 24 * 60;
 const MAX_BATCH = 100;
+
+// Wire-contract mirrors of the ingestion worker's validation caps
+// (feedback-worker/src/index.js MAX_TEXT / MAX_MODEL_ID / hostname ceiling).
+// A record failing these can NEVER be accepted — and the worker 400s the
+// whole batch, so without this check one oversized legacy record (stored
+// before addFeedback started capping fields) makes the daily alarm re-send
+// the same doomed batch forever. Such records are marked skipped once and
+// never retried; they still count for local on-device learning.
+const WORKER_MAX_TEXT = 500;
+const WORKER_MAX_MODEL_ID = 200;
+const WORKER_MAX_DOMAIN = 253;
+
+/**
+ * True if the worker's validateRecord() would accept this record — a faithful
+ * mirror of feedback-worker/src/index.js semantics (exact parity matters: a
+ * false negative here means the worker 400s the whole batch and the daily
+ * alarm retries forever; a false positive permanently skips a sendable
+ * record). Kind/score/ts are guaranteed by the FeedbackRecord type and only
+ * defensively re-checked.
+ */
+function withinWorkerCaps(r: FeedbackRecord): boolean {
+  if (r.kind !== 'false_positive' && r.kind !== 'false_negative') return false;
+  // isShortString: nonempty, ≤ cap.
+  if (!r.title || r.title.length > WORKER_MAX_TEXT) return false;
+  // isOptShortString: absent is fine, present must be nonempty and ≤ cap.
+  const optShort = (v: string | undefined) =>
+    v === undefined || (v.length > 0 && v.length <= WORKER_MAX_TEXT);
+  if (!optShort(r.channel)) return false;
+  if (!optShort(r.context)) return false;
+  // domain: string ≤ 253 (the worker allows empty).
+  if (r.domain.length > WORKER_MAX_DOMAIN) return false;
+  // modelLabel: string ≤ cap (the worker allows empty here, unlike title).
+  if (r.modelLabel.length > WORKER_MAX_TEXT) return false;
+  if (r.kind === 'false_negative' && (!r.correctedLabel || r.correctedLabel.length > WORKER_MAX_TEXT))
+    return false;
+  if (!r.modelId || r.modelId.length > WORKER_MAX_MODEL_ID) return false;
+  if (!Number.isFinite(r.score)) return false;
+  if (!Number.isInteger(r.ts) || r.ts <= 0) return false;
+  return true;
+}
 
 /** Random, resettable install id so the server can de-duplicate batches
  *  without anything identifying: delete it (clear extension storage) and the
@@ -67,7 +107,21 @@ async function uploadPending(): Promise<void> {
   const { shareFeedback } = await getSettings();
   if (!shareFeedback) return;
 
-  const pending = (await getFeedback()).filter((r) => !r.uploaded).slice(0, MAX_BATCH);
+  const unsent = (await getFeedback()).filter((r) => !r.uploaded && !r.skipped);
+  // Permanently retire records that can never satisfy the worker's wire
+  // contract, so they stop poisoning every daily batch.
+  const unsendable = unsent.filter((r) => !withinWorkerCaps(r));
+  if (unsendable.length > 0) {
+    try {
+      await markSkipped(unsendable.map((r) => r.ts));
+      console.warn(
+        `[SmartBlocker] feedback upload: skipped ${unsendable.length} record(s) outside the worker's wire caps`,
+      );
+    } catch (e) {
+      console.warn('[SmartBlocker] feedback skip marking failed:', e);
+    }
+  }
+  const pending = unsent.filter(withinWorkerCaps).slice(0, MAX_BATCH);
   if (pending.length === 0) return;
 
   const res = await fetch(`${FEEDBACK_ENDPOINT.replace(/\/$/, '')}/v1/feedback`, {
@@ -76,8 +130,8 @@ async function uploadPending(): Promise<void> {
     body: JSON.stringify({
       installId: await getInstallId(),
       extVersion: api.runtime.getManifest().version,
-      // `uploaded` is local bookkeeping — strip it from the wire format.
-      records: pending.map(({ uploaded: _uploaded, ...r }) => r),
+      // `uploaded`/`skipped` are local bookkeeping — strip from the wire format.
+      records: pending.map(({ uploaded: _uploaded, skipped: _skipped, ...r }) => r),
     }),
   });
   if (!res.ok) {

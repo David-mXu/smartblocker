@@ -29,6 +29,23 @@ api.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes[STORAGE_KEY]) cache = null;
 });
 
+// Serialize read-modify-write operations at write granularity: two concurrent
+// addOverride calls both load() the same snapshot and the later save()
+// silently drops the earlier append (last-write-wins). Mirrors the
+// in-context promise chain of allowance-store.ts enqueueLocal /
+// usage-stats-tracker.ts enqueue. Cross-context coherence still relies on the
+// storage.onChanged invalidation above.
+let writeQueue: Promise<unknown> = Promise.resolve();
+
+function enqueueWrite<T>(work: () => Promise<T>): Promise<T> {
+  const attempt = writeQueue.then(work);
+  writeQueue = attempt.then(
+    () => undefined,
+    () => undefined,
+  );
+  return attempt;
+}
+
 /**
  * Normalize a title for consistent de-duplication between add and check:
  * strip zero-width/invisible unicode (Cf), NFKC-normalize (folds fullwidth and
@@ -61,9 +78,23 @@ async function load(): Promise<StoredOverride[]> {
   return cache;
 }
 
+/**
+ * Commit the cache only after the storage write succeeds. A rejected set()
+ * (quota, transient Firefox failures) must not leave this context serving
+ * entries that never persisted — and a failed write fires no
+ * storage.onChanged, so nothing else would rescue the phantom cache. On
+ * failure the cache is invalidated (not reverted): storage is the source of
+ * truth, and a re-read is correct whether the write partially landed or not.
+ * The caller gets the rejection, so a dropped write surfaces.
+ */
 async function save(entries: StoredOverride[]): Promise<void> {
-  cache = entries;
-  await api.storage.local.set({ [STORAGE_KEY]: entries });
+  try {
+    await api.storage.local.set({ [STORAGE_KEY]: entries });
+    cache = entries;
+  } catch (e) {
+    cache = null;
+    throw e;
+  }
 }
 
 /**
@@ -78,22 +109,24 @@ export async function addOverride(title: string, hostname?: string): Promise<voi
   const key = normalizeOverrideTitle(title);
   if (!key) return;
   const host = hostname ? normalizeHost(hostname) : undefined;
-  const entries = await load();
+  return enqueueWrite(async () => {
+    const entries = await load();
 
-  // Remove any existing entry at this exact scope so we can push a refreshed one.
-  const filtered = entries.filter(
-    (e) => normalizeOverrideTitle(e.title) !== key || hostOf(e) !== host,
-  );
+    // Remove any existing entry at this exact scope so we can push a refreshed one.
+    const filtered = entries.filter(
+      (e) => normalizeOverrideTitle(e.title) !== key || hostOf(e) !== host,
+    );
 
-  filtered.push(host ? { title: key, host, ts: Date.now() } : { title: key, ts: Date.now() });
+    filtered.push(host ? { title: key, host, ts: Date.now() } : { title: key, ts: Date.now() });
 
-  // Trim to the cap, keeping the most-recently-added (tail) entries.
-  const bounded =
-    filtered.length > MAX_OVERRIDES
-      ? filtered.slice(filtered.length - MAX_OVERRIDES)
-      : filtered;
+    // Trim to the cap, keeping the most-recently-added (tail) entries.
+    const bounded =
+      filtered.length > MAX_OVERRIDES
+        ? filtered.slice(filtered.length - MAX_OVERRIDES)
+        : filtered;
 
-  await save(bounded);
+    await save(bounded);
+  });
 }
 
 /**
