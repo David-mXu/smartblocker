@@ -112,13 +112,15 @@ try {
     armKdf?.v === 2 && armKdf?.iterations === 210_000 && saltOk,
     JSON.stringify(armKdf),
   );
-  // The salt must NEVER live inside the merged lockState CRDT.
+  // The salt must NEVER live inside the merged lockState CRDT. Denylist, not
+  // allowlist: legitimate lockState fields legitimately grow over time (the
+  // breaks feature added null break fields and broke the old strict list on
+  // every fresh run — hidden because CI excludes Playwright). Fail on any key
+  // carrying salt/KDF material; pass every legitimate lock field.
   const lockStateKeys = Object.keys(armed?.lockState ?? {}).sort();
   check(
     'lockState carries no salt/KDF fields (lockKdf stays out of lockStateSync)',
-    lockStateKeys.every((k) =>
-      ['timerUntil', 'passwordHash', 'passwordTs', 'frozenUntil', 'schedules', 'schedulesUpdatedAt'].includes(k),
-    ),
+    lockStateKeys.length > 0 && lockStateKeys.every((k) => !/salt|kdf/i.test(k)),
     `keys=${lockStateKeys}`,
   );
   // Cross-check the v2 hash with an independent in-page PBKDF2 computation,
@@ -158,9 +160,7 @@ try {
   await opts.fill('#lock-password', 'totally-wrong-1');
   await opts.click('#lock-password-btn');
   await opts.waitForFunction(
-    () => document.getElementById('lock-password-msg')?.textContent?.includes('Wrong password'),
-    { timeout: 10_000 },
-  );
+    () => document.getElementById('lock-password-msg')?.textContent?.includes('Wrong password'), undefined, { timeout: 10_000 });
   const afterWrong = await readLock();
   check(
     'wrong password rejected; armed v2 hash untouched',
@@ -180,9 +180,7 @@ try {
   await opts.fill('#lock-password', PASSWORD);
   await opts.click('#lock-password-btn');
   await opts.waitForFunction(
-    () => document.getElementById('lock-password-msg')?.textContent?.includes('Wrong password'),
-    { timeout: 15_000 },
-  );
+    () => document.getElementById('lock-password-msg')?.textContent?.includes('Wrong password'), undefined, { timeout: 15_000 });
   const afterSwap = await readLock();
   check(
     'v2 hash + foreign salt does NOT verify (hash still armed, salt not accepted)',
@@ -202,9 +200,7 @@ try {
   await opts.fill('#lock-password', 'shortpw'); // 7 chars — would pass the old min of 4
   await opts.click('#lock-password-btn');
   await opts.waitForFunction(
-    () => document.getElementById('lock-password-msg')?.textContent?.includes('at least 8'),
-    { timeout: 10_000 },
-  );
+    () => document.getElementById('lock-password-msg')?.textContent?.includes('at least 8'), undefined, { timeout: 10_000 });
   const afterShort = await readLock();
   check('7-char new arm refused with a min-8 hint; nothing armed', !afterShort.lockState?.passwordHash);
 
@@ -342,9 +338,7 @@ try {
     () => {
       const t = document.getElementById('out')?.textContent ?? '';
       return t.includes('->') || t.startsWith('Error');
-    },
-    { timeout: MODEL_TIMEOUT_MS },
-  );
+    }, undefined, { timeout: MODEL_TIMEOUT_MS });
   const out = await page.locator('#out').textContent();
   check('model load + Test Pair classification succeeded', !out.startsWith('Error'));
 

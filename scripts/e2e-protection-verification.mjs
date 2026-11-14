@@ -16,7 +16,11 @@ const DEFAULT_CORE = {
   labels: [...LABELS],
   blockedLabels: [...BLOCKED_LABELS],
   blockThreshold: BLOCK_THRESHOLD,
-  enabled: true,
+  // Models the fresh-install default since finding #9 (2026-11-14): blocking
+  // is OFF until COMPLETE_ONBOARDING persists enabled+onboarded (or the user
+  // toggles the master switch). Verification is policy-only (never consults
+  // settings.enabled), so the cold `ready` report must pass regardless.
+  enabled: false,
   onboarded: false,
 };
 

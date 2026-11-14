@@ -84,6 +84,13 @@ let sw;
 try {
   sw = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker', { timeout: 15_000 });
   sw.on('console', (message) => console.log('  [sw]', message.text()));
+  // Fresh installs default to enabled=false until onboarding completes
+  // (finding #9, 2026-11-14); the classifier-block-before-relief check below
+  // needs blocking live, so arm the master switch explicitly.
+  await sw.evaluate(async () => {
+    const { settings = {} } = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({ settings: { ...settings, enabled: true } });
+  });
   const opts = await context.newPage();
   await opts.goto(`chrome-extension://${EXTENSION_ID}/options.html#allowance`);
   const rpc = (message) => opts.evaluate((value) => chrome.runtime.sendMessage(value), message);

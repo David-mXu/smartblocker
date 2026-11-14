@@ -939,6 +939,15 @@ await test('background listeners dedupe real session status events and gate focu
   try {
     const usage = await import('../src/background/usage-stats.ts');
     usage.initUsageStats();
+    // Seed an explicitly ONBOARDED, enabled install: protection accounting in
+    // this suite must not depend on ambient DEFAULTS. `enabled` is OFF for
+    // never-onboarded fresh installs since the 2026-11-14 onboarding gating,
+    // so the first protected segment below needs explicit settings.
+    await storage.set({ settings: { enabled: true, onboarded: true } });
+    storageChanges.emit(
+      { settings: { oldValue: undefined, newValue: { enabled: true, onboarded: true } } },
+      'local',
+    );
     await usage.getUsageStatsSnapshot();
 
     // Simulate a blocked verdict that predates a service-worker restart. Its

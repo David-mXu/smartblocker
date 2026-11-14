@@ -65,7 +65,7 @@ try {
   await sw.evaluate(async () => {
     const { settings = {} } = await chrome.storage.local.get('settings');
     await chrome.storage.local.set({
-      settings: { ...settings, blocklist: [], resolveEmbedTitles: false },
+      settings: { ...settings, enabled: true, blocklist: [], resolveEmbedTitles: false },
     });
     await chrome.storage.local.remove(['overrides', 'feedback', 'latencySamples', 'historyScan', 'lockState']);
   });
@@ -192,9 +192,7 @@ try {
     () => {
       const t = document.getElementById('out')?.textContent ?? '';
       return t.includes('->') || t.startsWith('Error');
-    },
-    { timeout: MODEL_TIMEOUT_MS },
-  );
+    }, undefined, { timeout: MODEL_TIMEOUT_MS });
   const pairOut = await popup.locator('#out').textContent();
   const warmupOk = !pairOut.startsWith('Error');
   console.log(`${warmupOk ? 'PASS' : 'FAIL'} model warm (test pair round-trip)`);

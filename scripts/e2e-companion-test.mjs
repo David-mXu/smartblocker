@@ -166,7 +166,7 @@ async function extensionBlockingView() {
   return sw.evaluate(async () => {
     const stored = await chrome.storage.local.get(['settings', 'companionSnapshot']);
     return {
-      enabled: stored.settings?.enabled ?? true,
+      enabled: stored.settings?.enabled ?? false,
       authority: stored.companionSnapshot?.status?.blocking ?? null,
     };
   });
@@ -254,6 +254,13 @@ try {
       'overrides', 'feedback', 'lockState', 'companionSnapshot', 'lockClockAnchor',
     ]),
   );
+
+  // Fresh installs start with blocking OFF (onboarding-gated default,
+  // 2026-11-14): the (a0) fresh-daemon scenario's PREMISE is an extension
+  // that intends blocking on, its hello seeding the daemon's durable state
+  // without a CLI write — seed that intent explicitly instead of leaning on
+  // an ambient default that no longer exists.
+  await setExtensionEnabled(true);
 
   // (a) Options page shows the live companion connection.
   const opts = await context.newPage();

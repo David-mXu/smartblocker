@@ -79,9 +79,7 @@ try {
     () => {
       const t = document.getElementById('out')?.textContent ?? '';
       return t.includes('->') || t.startsWith('Error');
-    },
-    { timeout: MODEL_TIMEOUT_MS },
-  );
+    }, undefined, { timeout: MODEL_TIMEOUT_MS });
   const out = await page.locator('#out').textContent();
   console.log('--- diagnostics output ---\n' + out + '\n--------------------');
 
@@ -138,9 +136,14 @@ try {
   // oEmbed title resolution is opt-in (default OFF for privacy, finding #9);
   // the SERP/embed sections below exercise the historical oEmbed resolve
   // path, so opt in for this run. Later set() calls preserve the key.
+  // Blocking is likewise explicitly armed: fresh installs now default to
+  // enabled=false until onboarding completes (finding #9, 2026-11-14), and a
+  // cold .e2e-profile must not depend on the old silent default.
   await sw.evaluate(async () => {
     const { settings = {} } = await chrome.storage.local.get('settings');
-    await chrome.storage.local.set({ settings: { ...settings, resolveEmbedTitles: true } });
+    await chrome.storage.local.set({
+      settings: { ...settings, resolveEmbedTitles: true, enabled: true },
+    });
   });
 
   // 4. Live blocker: serve fake YouTube watch pages via network interception
@@ -260,9 +263,7 @@ try {
   await page.bringToFront();
   await page.click('#scan-history');
   await page.waitForFunction(
-    () => /Scan (done|error)/.test(document.getElementById('out')?.textContent ?? ''),
-    { timeout: 120_000 },
-  );
+    () => /Scan (done|error)/.test(document.getElementById('out')?.textContent ?? ''), undefined, { timeout: 120_000 });
   const scanOut = await page.locator('#out').textContent();
   console.log('--- history scan ---\n' + scanOut + '\n--------------------');
   const scanOk = scanOut.includes('Scan done') && /video games/.test(scanOut);
@@ -689,9 +690,7 @@ try {
   await tab.waitForFunction(
     () =>
       document.getElementById('yt-shorts')?.getAttribute('data-smartblocker-masked') ===
-      'serp-card',
-    { timeout: 30_000 },
-  );
+      'serp-card', undefined, { timeout: 30_000 });
   console.log('PASS lazily-inserted YouTube Short is classified and masked');
 
   await sw.evaluate(async () => {
@@ -755,9 +754,7 @@ try {
         airrack?.getAttribute('data-smartblocker-masked') === 'embed' &&
         karpathy?.getAttribute('data-smartblocker-state') === 'allowed'
       );
-    },
-    { timeout: 15_000 },
-  );
+    }, undefined, { timeout: 15_000 });
 
   const aiStudioState = await tab.evaluate(() => ({
     fullPageBlocked: !!document.getElementById('smartblocker-overlay'),
@@ -856,9 +853,7 @@ try {
 
   await tab.goto('https://aistudio.google.com/prompts/shadow_embed_test');
   await tab.waitForFunction(
-    () => !!document.querySelector('sb-closed-player'),
-    { timeout: 10_000 },
-  );
+    () => !!document.querySelector('sb-closed-player'), undefined, { timeout: 10_000 });
 
   // Wait for all 3 sub-frames to attach at the CDP level
   let mcFrame = null;
