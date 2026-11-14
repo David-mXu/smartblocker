@@ -158,6 +158,10 @@ export function OptionsApp() {
 
   return (
     <main className="min-h-screen w-full overflow-x-hidden bg-background text-foreground">
+      {/* #welcome is a full-page route (design-notes §5): the wizard draws
+          its own header, so the shell header would double it. Hide the
+          shell chrome there entirely. */}
+      {!isWelcome && (
       <header className="sticky top-0 z-40 border-b border-border bg-background">
         <div className="mx-auto flex h-14 max-w-5xl items-center justify-between gap-3 px-4 md:px-8">
           <Wordmark />
@@ -186,6 +190,7 @@ export function OptionsApp() {
           {modelProgress.text}
         </div>
       </header>
+      )}
 
       {/* Lock seal — global, under the header, only while locked. */}
       <div

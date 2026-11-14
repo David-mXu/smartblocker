@@ -229,27 +229,36 @@ function UsageChart({ days }: { days: ChartDay[] }) {
           ))}
         </div>
       </div>
-      <table className="sr-only">
-        <caption>Daily blocked pages by reason</caption>
-        <thead>
-          <tr>
-            <th scope="col">Day</th>
-            {REASONS.map((reason) => (
-              <th key={reason.key} scope="col">{reason.label}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {days.map((day) => (
-            <tr key={day.date}>
-              <th scope="row">{formatDay(day.date)}</th>
+      {/* Screen-reader data table for the visual chart. The sr-only CLIPPING
+          wrapper matters: a <table> ignores a 1px specified width (min-content
+          wins), so sr-only on the table itself left its wide layout box in the
+          document and caused horizontal overflow at phone sizes. A block
+          wrapper honors the 1px width and its overflow:hidden clips the table
+          out of the page's scrollable area while keeping it fully in the
+          accessibility tree. */}
+      <div className="sr-only">
+        <table>
+          <caption>Daily blocked pages by reason</caption>
+          <thead>
+            <tr>
+              <th scope="col">Day</th>
               {REASONS.map((reason) => (
-                <td key={reason.key}>{day.blocks[reason.key]}</td>
+                <th key={reason.key} scope="col">{reason.label}</th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {days.map((day) => (
+              <tr key={day.date}>
+                <th scope="row">{formatDay(day.date)}</th>
+                {REASONS.map((reason) => (
+                  <td key={reason.key}>{day.blocks[reason.key]}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+          </table>
+      </div>
       <div className="flex flex-wrap gap-x-4 gap-y-1.5">
         {REASONS.filter((reason) => reason.key !== 'unknown' || days.some((day) => day.blocks.unknown)).map(
           (reason) => (

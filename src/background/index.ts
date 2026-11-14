@@ -47,7 +47,7 @@ import {
   getRewardAccrualStatus,
   initRewardAccrual,
 } from './reward-accrual';
-import { scanHistory } from './history-ingester';
+import { healStaleHistoryScan, scanHistory } from './history-ingester';
 import { initFocusSessionCommitter } from '../shared/focus-session';
 import { recordTabStatus } from '../shared/tab-status';
 import {
@@ -81,6 +81,10 @@ initFocusSessionCommitter();
 initUsageStats();
 initFocusCycleScheduler();
 initRewardAccrual();
+// A scan killed by an SW reap leaves status 'running' in storage forever;
+// at boot nothing is scanning, so mark such records interrupted. Fire and
+// forget — it only writes storage, never blocks listener registration.
+void healStaleHistoryScan();
 
 // First-run onboarding: open the 3-step welcome wizard (options.html#welcome)
 // so the user picks what to block. Plain options.html never forces the
@@ -147,7 +151,9 @@ api.runtime.onMessage.addListener(
       return true;
     }
     if (msg?.type === 'GET_FOCUS_CYCLE') {
-      getFocusCycleResponse().then((response) => sendResponse(response));
+      getFocusCycleResponse()
+        .then((response) => sendResponse(response))
+        .catch((error) => sendResponse({ ok: false, error: String(error) }));
       return true;
     }
     if (msg?.type === 'START_FOCUS_CYCLE') {
