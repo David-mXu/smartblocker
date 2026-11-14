@@ -190,7 +190,9 @@ Tint recipe for callouts: `bg-<hue>/10 border-<hue>/30 text-<hue>-soft`.
   "Blocking on" / "Paused" / amber "Locked · 3h 12m" · `#save-msg` "Saved" ·
   `#model-progress` only while downloading) → `#lock-status` amber seal line
   when locked → `#banner` "Finish setting up SmartBlocker" + "Start setup"
-  link when `!onboarded`. State lives in `useOptionsState.ts`; formatting in
+  link when `!onboarded` (a fresh install pairs the "Paused" pill with the
+  banner on purpose: blocking stays off until `COMPLETE_ONBOARDING` verifies
+  and enables it — 2026-11-14). State lives in `useOptionsState.ts`; formatting in
   `format.ts`; one file per page in `pages/`.
 - **Navigation:** 180px sticky sidebar of real links (`href="#sites"`,
   `aria-current="page"`); below `md` it becomes a horizontally scrollable pill

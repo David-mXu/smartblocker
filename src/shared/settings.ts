@@ -182,7 +182,12 @@ const POLICY_DEFAULTS = defaultProfilePolicy(WHITELIST_VERSION);
 
 export const DEFAULTS: Settings = {
   ...POLICY_DEFAULTS,
-  enabled: true,
+  // OFF by default (2026-11-14, finding #9): a fresh install must never block
+  // silently while the options header still shows the "Finish setting up"
+  // banner. COMPLETE_ONBOARDING (protection-verification.ts) is the only
+  // automatic path that flips this to true; a manual master-switch toggle
+  // (popup / #blocking) remains a legitimate explicit enable.
+  enabled: false,
   onboarded: false,
   shareFeedback: false,
   resolveEmbedTitles: false,

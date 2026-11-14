@@ -103,7 +103,10 @@ export async function verifyProtection(): Promise<VerifyProtectionResponse> {
 }
 
 /** Re-prove readiness at commit time; the UI's earlier `ready` is only a
- * preview. This is the sole onboarding path that persists enabled+onboarded. */
+ * preview. This is the sole AUTOMATIC path that turns blocking on: fresh
+ * installs start with DEFAULTS.enabled = false (finding #9), and completion
+ * persists enabled+onboarded together — a manual master-switch toggle is the
+ * only other (explicit) enable. */
 export async function completeOnboarding(): Promise<CompleteOnboardingResponse> {
   const { report, policyKey } = await runProtectionVerification();
   if (report.status !== 'ready') return { ...report, saved: false };

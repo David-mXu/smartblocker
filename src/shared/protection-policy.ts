@@ -1,5 +1,11 @@
 // Pure policy for the built-in proof-of-protection fixtures. Kept free of
 // browser APIs so the configuration and verdict paths are directly Node-tested.
+//
+// Deliberately master-switch-independent: `ProtectionPolicySettings` carries
+// ONLY labels/blockedLabels/blockThreshold — never `settings.enabled`. The
+// wizard verifies the classifier, policy ladder, and permission work; since
+// DEFAULTS.enabled is false pre-onboarding (finding #9), a `ready` report
+// must not also silently require blocking to be live yet.
 import { TEST_TITLES } from './config.ts';
 import type { ClassifyOutcome, ProtectionCheck } from './messages.ts';
 import type { Settings } from './settings.ts';
