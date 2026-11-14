@@ -61,6 +61,7 @@ export function sanitizePage(opts: SanitizePageOptions): {
     __sbSanitizeTimer?: number;
     __sbNextId?: number;
     __sbOrigMedia?: WeakMap<HTMLIFrameElement, { src?: string; srcdoc?: string }>;
+    __sbRevealed?: WeakSet<Element>;
   };
   const previousPolicyEpoch = win.__sbSanitizeOpts?.policyEpoch;
   let resetClassifierForPolicy =
@@ -74,6 +75,15 @@ export function sanitizePage(opts: SanitizePageOptions): {
   // instead of page-readable/writable data-sb-orig-* attributes (#16).
   if (!win.__sbOrigMedia) win.__sbOrigMedia = new WeakMap();
   const origMedia = win.__sbOrigMedia;
+  // The ONLY reveal authority: elements the user genuinely revealed via a
+  // trusted click on our mask bar, tracked in isolated-world JS memory keyed by
+  // element identity (same pattern as __sbOrigMedia above). The DOM attribute
+  // data-smartblocker-masked="revealed" is a RENDER HINT ONLY — the page can
+  // write, forge, or strip it, so no mask path may trust it. A set membership
+  // here can never be forged by page JS, and a replaced DOM node (page
+  // re-render) naturally loses its reveal.
+  if (!win.__sbRevealed) win.__sbRevealed = new WeakSet();
+  const revealedEls = win.__sbRevealed;
 
   const MASK_CSS = `
       [data-smartblocker-masked] > *:not(.smartblocker-mask-bar),
@@ -281,6 +291,25 @@ export function sanitizePage(opts: SanitizePageOptions): {
     }
   }
 
+  /** True when the user genuinely revealed this element (isolated-world set).
+   * Never read the "revealed" attribute for this decision: the page can forge
+   * it, and server-rendered HTML can pre-mark its own distractions. */
+  function isUserRevealed(el: Element): boolean {
+    return revealedEls.has(el);
+  }
+
+  /** Nearest self-or-ancestor mask marker resolves the "already handled?"
+   * guard: a real mask kind (ours) shields, and so does a GENUINE reveal —
+   * but a page-written data-smartblocker-masked="revealed" with no record in
+   * the isolated-world set does NOT, so masking proceeds and overwrites it. */
+  function isMaskedOrGenuinelyRevealed(el: Element): boolean {
+    for (let node: Element | null = el; node; node = node.parentElement) {
+      const m = node.getAttribute('data-smartblocker-masked');
+      if (m) return m !== 'revealed' || isUserRevealed(node);
+    }
+    return false;
+  }
+
   /** Re-open only model-owned verdicts after a scoped policy/boundary change.
    * Deterministic masks have no classifier marker and deliberately survive.
    * User-revealed content also stays revealed; stored override policy explains
@@ -294,7 +323,9 @@ export function sanitizePage(opts: SanitizePageOptions): {
     const masked = queryAllDeep('[data-smartblocker-classifier="1"]', deepRoots);
     for (let i = 0; i < masked.length; i++) {
       const el = masked[i];
-      if (el.getAttribute('data-smartblocker-masked') === 'revealed') continue;
+      // Genuine user reveals survive a policy reset; a forged "revealed"
+      // attribute does not un-mask the element (the reset below clears it).
+      if (isUserRevealed(el)) continue;
       el.querySelector(':scope > .smartblocker-mask-bar')?.remove();
       el.removeAttribute('data-smartblocker-masked');
       el.removeAttribute('data-smartblocker-classifier');
@@ -319,15 +350,19 @@ export function sanitizePage(opts: SanitizePageOptions): {
     followers: Element[] = [],
     classifierOwned = false,
   ): boolean {
+    // Authority lives in the isolated-world set, never in the attribute: a
+    // genuinely revealed element stays revealed, but a page-forged
+    // "revealed" is overwritten by the mask below.
+    if (isUserRevealed(el)) return false;
     const currentState = el.getAttribute('data-smartblocker-masked');
-    if (currentState === 'revealed' || currentState === kind) return false;
+    if (currentState === kind) return false;
     // Followers: sibling pieces of ONE logical module (e.g. Google's entity
     // hero, split across several #rcnt rows) hidden together under a single
     // bar instead of one bar per row. No bar of their own — the leader's
     // "Show" reveals them all.
     for (let i = 0; i < followers.length; i++) {
       const f = followers[i];
-      if (f === el || f.getAttribute('data-smartblocker-masked') === 'revealed') continue;
+      if (f === el || isUserRevealed(f)) continue;
       ensureMaskCss(f.getRootNode());
       f.setAttribute('data-smartblocker-masked', kind);
       f.setAttribute('data-smartblocker-reason', reason);
@@ -369,8 +404,12 @@ export function sanitizePage(opts: SanitizePageOptions): {
         if (!ev.isTrusted) return;
         ev.preventDefault();
         ev.stopPropagation();
+        // Record the reveal in the isolated world FIRST — that record (not
+        // the attribute write below) is what every mask path consults.
+        revealedEls.add(el);
         el.setAttribute('data-smartblocker-masked', 'revealed');
         for (let i = 0; i < followers.length; i++) {
+          revealedEls.add(followers[i]);
           followers[i].setAttribute('data-smartblocker-masked', 'revealed');
         }
         const subRoots: DeepRoot[] = [];
@@ -573,12 +612,19 @@ export function sanitizePage(opts: SanitizePageOptions): {
           f.parentElement ||
           shadowHost ||
           f;
+        // Genuine user reveal (isolated-world set) is final for the session —
+        // even if the page strips the attribute, the content stays revealed.
+        if (isUserRevealed(container)) continue;
         const maskedState = container.getAttribute('data-smartblocker-masked');
-        if (maskedState || container.getAttribute('data-smartblocker-state')) {
+        if (maskedState === 'revealed') {
+          // "revealed" with no reveal record is forged (page JS or
+          // server-rendered HTML): drop it and re-evaluate below so the mask
+          // is re-applied instead of skipped.
+          container.removeAttribute('data-smartblocker-masked');
+        } else if (maskedState || container.getAttribute('data-smartblocker-state')) {
           // Self-heal: the attribute observer re-triggers a scan when a hostile
-          // page points a blanked iframe back at real media — re-unload it
-          // unless the user explicitly revealed this container.
-          if (maskedState && maskedState !== 'revealed') pauseAndUnloadMedia(container);
+          // page points a blanked iframe back at real media — re-unload it.
+          if (maskedState) pauseAndUnloadMedia(container);
           continue;
         }
 
@@ -663,10 +709,12 @@ export function sanitizePage(opts: SanitizePageOptions): {
       );
       for (let i = 0; i < facades.length; i++) {
         const host = facades[i];
-        if (
-          host.getAttribute('data-smartblocker-masked') ||
-          host.getAttribute('data-smartblocker-state')
-        ) {
+        if (isUserRevealed(host)) continue;
+        const hostMask = host.getAttribute('data-smartblocker-masked');
+        if (hostMask === 'revealed') {
+          // Forged reveal marker: strip so the paths below mask it again.
+          host.removeAttribute('data-smartblocker-masked');
+        } else if (hostMask || host.getAttribute('data-smartblocker-state')) {
           continue;
         }
         const ytId = facadeVideoId(host);
@@ -710,10 +758,12 @@ export function sanitizePage(opts: SanitizePageOptions): {
           const a = ytLinks[i] as HTMLAnchorElement;
           const card =
             a.closest('ms-youtube-chunk, youtube-video, .youtube-container-wrapper') || a;
-          if (
-            card.getAttribute('data-smartblocker-masked') ||
-            card.getAttribute('data-smartblocker-state')
-          ) {
+          if (isUserRevealed(card)) continue;
+          const cardMask = card.getAttribute('data-smartblocker-masked');
+          if (cardMask === 'revealed') {
+            // Forged reveal marker: strip so the paths below mask it again.
+            card.removeAttribute('data-smartblocker-masked');
+          } else if (cardMask || card.getAttribute('data-smartblocker-state')) {
             continue;
           }
           const href = a.href || '';
@@ -765,6 +815,9 @@ export function sanitizePage(opts: SanitizePageOptions): {
         );
         for (let i = 0; i < maskedYouTubeCards.length; i++) {
           const card = maskedYouTubeCards[i];
+          // Setting-off is a user-initiated reveal: record it in the
+          // isolated-world set so the reveal survives re-enabling + rescans.
+          revealedEls.add(card);
           card.setAttribute('data-smartblocker-masked', 'revealed');
           card.querySelector(':scope > .smartblocker-mask-bar')?.remove();
         }
@@ -775,9 +828,8 @@ export function sanitizePage(opts: SanitizePageOptions): {
         for (let i = 0; i < videoCards.length; i++) {
           const card = videoCards[i];
           if (
-            card.getAttribute('data-smartblocker-masked') ||
-            card.getAttribute('data-smartblocker-state') ||
-            card.closest('[data-smartblocker-masked]')
+            isMaskedOrGenuinelyRevealed(card) ||
+            card.getAttribute('data-smartblocker-state')
           ) {
             continue;
           }
@@ -841,6 +893,9 @@ export function sanitizePage(opts: SanitizePageOptions): {
         );
         for (let i = 0; i < maskedSerpEls.length; i++) {
           const el = maskedSerpEls[i];
+          // Setting-off is a user-initiated reveal: record it in the
+          // isolated-world set so the reveal survives re-enabling + rescans.
+          revealedEls.add(el);
           el.setAttribute('data-smartblocker-masked', 'revealed');
           el.querySelector(':scope > .smartblocker-mask-bar')?.remove();
         }
@@ -899,7 +954,10 @@ export function sanitizePage(opts: SanitizePageOptions): {
           media.closest('[role="dialog"], g-lightbox, .video-preview') ||
           media.parentElement ||
           media;
-        if (box.closest('[data-smartblocker-masked], [data-smartblocker-state="pending"]')) {
+        if (
+          box.closest('[data-smartblocker-state="pending"]') ||
+          isMaskedOrGenuinelyRevealed(box)
+        ) {
           continue;
         }
         if (
@@ -931,10 +989,7 @@ export function sanitizePage(opts: SanitizePageOptions): {
 
       for (let i = 0; i < shelfCandidates.length; i++) {
         const mod = shelfCandidates[i];
-        if (
-          mod.getAttribute('data-smartblocker-masked') ||
-          mod.closest('[data-smartblocker-masked]')
-        ) {
+        if (isMaskedOrGenuinelyRevealed(mod)) {
           continue;
         }
         // Never mask a wrapper that contains multiple separate top-level MjjYud organic results
@@ -1045,9 +1100,8 @@ export function sanitizePage(opts: SanitizePageOptions): {
       for (let i = 0; i < cardEls.length; i++) {
         const card = cardEls[i];
         if (
-          card.getAttribute('data-smartblocker-masked') ||
-          card.getAttribute('data-smartblocker-state') ||
-          card.closest('[data-smartblocker-masked]')
+          isMaskedOrGenuinelyRevealed(card) ||
+          card.getAttribute('data-smartblocker-state')
         ) {
           continue;
         }
@@ -1210,7 +1264,7 @@ export function sanitizePage(opts: SanitizePageOptions): {
         const targets = entityHeroTargets(titleEl);
         if (targets.length === 0) continue;
         const leader = targets[0];
-        if (targets.some((t) => t.closest('[data-smartblocker-masked]'))) continue;
+        if (targets.some((t) => isMaskedOrGenuinelyRevealed(t))) continue;
         if (leader.getAttribute('data-smartblocker-state')) continue; // verdict pending/allowed
         const entTitle = textOf(titleEl);
         if (!entTitle) continue;
@@ -1319,11 +1373,16 @@ export function sanitizePage(opts: SanitizePageOptions): {
       );
       for (let i = 0; i < sweepLinks.length; i++) {
         const a = sweepLinks[i];
-        if (a.closest('[data-smartblocker-masked], [data-smartblocker-image-row]')) continue;
+        if (
+          a.closest('[data-smartblocker-image-row]') ||
+          isMaskedOrGenuinelyRevealed(a)
+        ) {
+          continue;
+        }
         const reason = sweepReason(linkHost(a));
         if (!reason) continue;
         const tile = sweepTile(a);
-        if (tile.closest('[data-smartblocker-masked]')) continue;
+        if (isMaskedOrGenuinelyRevealed(tile)) continue;
         if (maskElement(tile, 'serp-card', reason)) maskedCards++;
       }
       }

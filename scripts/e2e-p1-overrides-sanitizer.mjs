@@ -112,6 +112,57 @@ try {
     });
   });
 
+  // Reveal-forgery fixture A: the content server-renders its own distraction
+  // pre-marked as already revealed. With reveal authority in the DOM attribute
+  // (the old bug) the sanitizer would skip this container forever; with
+  // authority in the isolated-world WeakSet it must mask it like any other.
+  const forgedRevealHtml = `<!doctype html><html><head><title>SmartBlocker reveal forgery fixture documentation</title></head><body>
+    <h1>Reveal forgery fixture</h1>
+    <div id="forged-wrap" class="video-container" data-smartblocker-masked="revealed">
+      <iframe id="forged-embed" title="kw embed" src="https://media.example.org/embed?x=${KW}"></iframe>
+    </div>
+  </body></html>`;
+  await context.route('**://sb-reveal.example.net/**', (route) => {
+    route.fulfill({ contentType: 'text/html; charset=utf-8', body: forgedRevealHtml });
+  });
+
+  // Reveal-forgery fixture B: the same forged markup, plus a hostile script
+  // that waits for our mask and then fights back ONCE: re-forges the reveal
+  // marker and points the blanked iframe back at the media URL. The attribute
+  // observer must catch both mutations and the next scan must re-mask (the
+  // forged "revealed" has no record in the isolated-world set). One-shot on
+  // purpose so the assertion has a deterministic settled state.
+  const forgedRevealResistHtml = `<!doctype html><html><head><title>SmartBlocker reveal forgery resistance fixture documentation</title></head><body>
+    <h1>Reveal forgery resistance fixture</h1>
+    <div id="tamper-wrap" class="video-container" data-smartblocker-masked="revealed">
+      <iframe id="tamper-embed" title="kw embed" src="https://media.example.org/embed?x=${KW}"></iframe>
+    </div>
+    <script>
+      (function () {
+        var tampered = false;
+        new MutationObserver(function () {
+          if (tampered) return;
+          var w = document.getElementById('tamper-wrap');
+          if (!w) return;
+          if (w.getAttribute('data-smartblocker-masked') === 'embed') {
+            tampered = true;
+            w.setAttribute('data-smartblocker-masked', 'revealed');
+            document
+              .getElementById('tamper-embed')
+              .setAttribute('src', 'https://media.example.org/embed?x=${KW}&revived=1');
+          }
+        }).observe(document.documentElement, {
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['data-smartblocker-masked'],
+        });
+      })();
+    </script>
+  </body></html>`;
+  await context.route('**://sb-resist.example.net/**', (route) => {
+    route.fulfill({ contentType: 'text/html; charset=utf-8', body: forgedRevealResistHtml });
+  });
+
   await new Promise((r) => setTimeout(r, 500)); // let storage onChanged fire
 
   const page = await context.newPage();
@@ -172,13 +223,36 @@ try {
   await page.goto('about:blank');
   await page.goto('https://sb-harness.example.net/');
   let embedMasked = false;
+  let harnessWaitError = null;
   try {
+    // NOTE: options must be the THIRD argument — waitForFunction(fn, arg,
+    // options). Passing them as `arg` silently leaves the default 30s
+    // timeout, which once broke a cold-start run (31s centroid rebuild).
     await page.waitForFunction(
       () => document.getElementById('embed-wrap')?.getAttribute('data-smartblocker-masked') === 'embed',
+      undefined,
       { timeout: HARNESS_TIMEOUT_MS },
     );
     embedMasked = true;
-  } catch {}
+  } catch (e) {
+    harnessWaitError = String(e).slice(0, 300);
+  }
+  if (!embedMasked) {
+    // Fail loudly WITH evidence: what the wait died of, plus the live mask
+    // state. This is how the 30s-vs-5min timeout bug was diagnosed.
+    const harnessDump = await page
+      .evaluate(() => ({
+        title: document.title,
+        url: location.href,
+        wrapAttr: document.getElementById('embed-wrap')?.getAttribute('data-smartblocker-masked') ?? null,
+        iframeSrcAttr: document.getElementById('p1-embed')?.getAttribute('src') ?? null,
+        styleLen: (document.getElementById('smartblocker-mask-style')?.textContent ?? '').length,
+        bars: document.querySelectorAll('.smartblocker-mask-bar').length,
+      }))
+      .catch((e) => ({ err: String(e).slice(0, 200) }));
+    console.log('  [harness-fail] wait error:', harnessWaitError);
+    console.log('  [harness-fail] state:', JSON.stringify(harnessDump));
+  }
   check('#16 blocklisted embed is masked on the harness page', embedMasked);
 
   if (embedMasked) {
@@ -212,6 +286,7 @@ try {
         () =>
           document.getElementById('p1-embed')?.getAttribute('src') === 'about:blank' &&
           document.getElementById('embed-wrap')?.getAttribute('data-smartblocker-masked') === 'embed',
+        undefined,
         { timeout: 5_000 },
       );
       reblanked = true;
@@ -227,6 +302,7 @@ try {
     try {
       await page.waitForFunction(
         () => (document.getElementById('smartblocker-mask-style')?.textContent ?? '').length > 500,
+        undefined,
         { timeout: 5_000 },
       );
       styleReadded = true;
@@ -241,6 +317,7 @@ try {
     try {
       await page.waitForFunction(
         () => document.getElementById('embed-wrap')?.getAttribute('data-smartblocker-masked') === 'revealed',
+        undefined,
         { timeout: 5_000 },
       );
       revealed = true;
@@ -255,6 +332,127 @@ try {
       revealed && restored.state === 'revealed' && restored.src.includes('media.example.org') && !restored.origAttrs,
       JSON.stringify(restored),
     );
+  }
+
+  // ── #16e: reveal authority must live in the isolated world, not in the
+  // page-writable data-smartblocker-masked="revealed" attribute. ──────────────
+  // Fixture A: server-rendered forged reveal. A page (or a third-party embed
+  // inside an allowed host) that pre-marks its own distraction "revealed" must
+  // STILL be masked — the old code checked the attribute and skipped forever.
+  await page.goto('about:blank');
+  await page.goto('https://sb-reveal.example.net/');
+  let forgedStillMasked = false;
+  try {
+    await page.waitForFunction(
+      () =>
+        document.getElementById('forged-wrap')?.getAttribute('data-smartblocker-masked') === 'embed' &&
+        document.getElementById('forged-embed')?.getAttribute('src') === 'about:blank',
+      undefined,
+      { timeout: HARNESS_TIMEOUT_MS },
+    );
+    forgedStillMasked = true;
+  } catch {}
+  check(
+    '#16e server-rendered data-smartblocker-masked="revealed" does not bypass masking',
+    forgedStillMasked,
+  );
+
+  // Fixture B: same forging, plus a hostile script that re-forges the marker
+  // and points the blanked iframe back at the media right after we mask. The
+  // attribute observer must trigger a re-scan that re-masks — a forged
+  // "revealed" (no record in the isolated-world set) never sticks.
+  if (forgedStillMasked) {
+    await page.goto('about:blank');
+    await page.goto('https://sb-resist.example.net/');
+    let tamperSeen = false;
+    try {
+      // Stage 1: the hostile script fires (mask seen → forge + re-point).
+      await page.waitForFunction(
+        () =>
+          document.getElementById('tamper-wrap')?.getAttribute('data-smartblocker-masked') === 'revealed' &&
+          (document.getElementById('tamper-embed')?.getAttribute('src') ?? '').includes('revived=1'),
+        undefined,
+        { timeout: 10_000 },
+      );
+      tamperSeen = true;
+    } catch {}
+    check('#16e hostile tamper observed (forged reveal + iframe re-point)', tamperSeen);
+
+    let remasked = false;
+    try {
+      // Stage 2: sanitizer wins — forged marker stripped, embed re-masked and
+      // re-blanked on the observer-triggered re-scan.
+      await page.waitForFunction(
+        () =>
+          document.getElementById('tamper-wrap')?.getAttribute('data-smartblocker-masked') === 'embed' &&
+          document.getElementById('tamper-embed')?.getAttribute('src') === 'about:blank',
+        undefined,
+        { timeout: 8_000 },
+      );
+      remasked = true;
+    } catch {}
+    check('#16e forged reveal + iframe re-point is re-masked on the next scan', remasked);
+
+    if (remasked) {
+      // Stage 3: after all that hostility, a TRUSTED user click on the mask
+      // bar must still reveal and restore the FIRST-seen src (keep-first
+      // stash), not the tamper's `revived=1` URL.
+      await page.locator('#tamper-wrap .smartblocker-mask-reveal').click();
+      let userRevealWorked = false;
+      const afterReveal = await page
+        .waitForFunction(
+          () => {
+            const src = document.getElementById('tamper-embed')?.getAttribute('src') ?? '';
+            return (
+              document.getElementById('tamper-wrap')?.getAttribute('data-smartblocker-masked') === 'revealed' &&
+              src.includes('media.example.org') &&
+              !src.includes('revived=1')
+            );
+          },
+          undefined,
+          { timeout: 5_000 },
+        )
+        .then(() => page.evaluate(() => ({
+          state: document.getElementById('tamper-wrap')?.getAttribute('data-smartblocker-masked'),
+          src: document.getElementById('tamper-embed')?.getAttribute('src') ?? '',
+        })))
+        .catch(() => null);
+      userRevealWorked =
+        !!afterReveal &&
+        afterReveal.state === 'revealed' &&
+        afterReveal.src.includes('media.example.org') &&
+        !afterReveal.src.includes('revived=1');
+      check(
+        '#16e trusted Show still reveals after tampering and restores the first-seen src',
+        userRevealWorked,
+        JSON.stringify(afterReveal),
+      );
+
+      if (userRevealWorked) {
+        // Stage 4: the genuine reveal must survive rescans — trigger one via a
+        // childList mutation and confirm the element is neither re-masked nor
+        // its media re-blanked.
+        await page.evaluate(() => {
+          document.body.appendChild(document.createElement('div'));
+        });
+        let revealSurvived = false;
+        try {
+          await page.waitForFunction(
+            () => {
+              const src = document.getElementById('tamper-embed')?.getAttribute('src') ?? '';
+              return (
+                document.getElementById('tamper-wrap')?.getAttribute('data-smartblocker-masked') === 'revealed' &&
+                src.includes('media.example.org')
+              );
+            },
+            undefined,
+            { timeout: 2_000 },
+          );
+          revealSurvived = true;
+        } catch {}
+        check('#16e genuine user reveal survives a post-reveal rescan', revealSurvived);
+      }
+    }
   }
 
   // Restore state so the next run (and other e2e scripts sharing the machine)
