@@ -245,7 +245,15 @@ Commit and push when appropriate.
       similarity vs per-category **centroid embeddings** + softmax
       (`prototypes.ts`). Centroid vectors are cached in storage.local
       (`centroidCache`), version-keyed over model id + active labels + seed
-      and user-correction texts — any change rebuilds them (~2.5s, one-time).
+      and user-correction texts + `CENTROID_CACHE_FORMAT` (in
+      `shared/prototype-cache.ts`) — a full cold rebuild re-embeds all ~600
+      seed texts: ~2.5s in Node, **~30s once in real Chromium** (measured
+      2026-11-14), so the FIRST classification after any cache-format bump can
+      be tens of seconds; suite waits need real timeouts and a re-run. Cached
+      seed vectors are hash-verified per position (2026-11-14) — seed edits
+      now rebuild only the changed categories and unchanged categories reuse
+      their caches, so the format tag only needs bumping for cache-SHAPE
+      changes, not seed additions.
     - `'nli'` (legacy fallback): zero-shot NLI, one pass PER label.
     On Chrome/Edge inference runs in the **offscreen document** via
     `classify-client.ts` (`EMBED`/`CLASSIFY` RPC); on Firefox in-process.
@@ -253,8 +261,13 @@ Commit and push when appropriate.
     `classifyViaOffscreen(text, labels)`, `embedViaOffscreen(texts)`.
   - `protection-verification.ts` — `VERIFY_PROTECTION` checks current
     `<all_urls>` permission and runs fresh production classification for the
-    built-in gaming/block and programming/allow fixtures. `COMPLETE_ONBOARDING`
-    repeats the checks before it alone persists `enabled + onboarded`; policy
+    built-in gaming/block and programming/allow fixtures. Verdict assessment
+    is **master-switch-independent** (policy fields only — a pre-onboarding
+    install with `enabled: false` still verifies `ready`). `COMPLETE_ONBOARDING`
+    repeats the checks before it alone persists `enabled + onboarded`; since
+    2026-11-14 (finding #9) fresh installs start with **`enabled: false`**, so
+    completion is the only automatic enable (a manual popup/`#blocking`
+    master-switch toggle is the only explicit one); policy
     fingerprints and a second permission check reject mid-run changes. No test
     tabs, modified rules, or weakened settings. Actual navigation enforcement
     remains separately covered by `scripts/e2e-test.mjs`.
@@ -413,7 +426,9 @@ Commit and push when appropriate.
   pipeline load, softmax
   temperature, 13 `LABELS`, thresholds, `DEFAULT_WHITELIST`,
   `FEEDBACK_ENDPOINT`), `settings.ts` (user-overridable `Settings` incl.
-  `whitelist`, `blocklist`, `shareFeedback` — the runtime source of truth),
+  `whitelist`, `blocklist`, `shareFeedback` — the runtime source of truth;
+  `DEFAULTS.enabled` is **false** pre-onboarding: blocking goes live only via
+  `COMPLETE_ONBOARDING` or an explicit master-switch toggle),
   `prototypes.ts` (centroid specs from `prototype-seeds.json` + similarity
   math; neutral centroids get a `neutral: ` label prefix and can never block;
   user-added custom categories get a label-text fallback centroid;

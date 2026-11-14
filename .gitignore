@@ -33,3 +33,6 @@ scripts/feedback-candidates.json
 .design-work/
 .ux-shots/
 companion/crates/smartblocker-companion/ui-dist/
+
+# 2026-11-14 audit-swarm evidence tree (reports, per-agent profiles, logs)
+.audit-swarm/
