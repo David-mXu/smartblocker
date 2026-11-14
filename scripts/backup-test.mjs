@@ -4,6 +4,7 @@
 //
 //   node scripts/backup-test.mjs
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 
 registerHooks({
@@ -99,6 +100,7 @@ globalThis.chrome = {
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const {
+  BACKUP_GLOBAL_FIELDS,
   BACKUP_MAX_BYTES,
   BACKUP_SCHEMA_ID,
   BACKUP_SCHEMA_VERSION,
@@ -113,7 +115,8 @@ const {
   scheduleLabel,
   serializeBackup,
 } = await import('../src/shared/backup.ts');
-const { defaultProfilePolicy, sanitizeProfilesState } = await import('../src/shared/profiles.ts');
+const { defaultProfilePolicy, sanitizeProfilesState, PROFILE_POLICY_FIELDS } =
+  await import('../src/shared/profiles.ts');
 const backupStore = await import('../src/shared/backup-store.ts');
 
 const NOW = 1_780_000_000_000;
@@ -645,6 +648,145 @@ await test('preview names the changes and counts removals for replace', () => {
   assert.ok(replace.counts.profilesRemoved >= 1);
   assert.ok(replace.changes.some((change) => change.name === 'Local only' && change.action === 'remove'));
   assert.ok(replace.counts.schedulesRemoved >= 1);
+});
+
+// ---------------------------------------------------------------------------
+console.log('whitelist safe-allow gate: over-broad globs never spread on import');
+
+const holeDoc = makeDoc(
+  makeState({
+    settings: { whitelist: ['imported.example', '*a*', '*.co*'] },
+    profilesState: {
+      activeProfileId: null,
+      profiles: [
+        {
+          id: 'p_hole',
+          name: 'Hole',
+          policy: { ...WORK_POLICY, whitelist: ['named.example', '*e*st*'] },
+        },
+        {
+          id: 'p_safe',
+          name: 'Safe',
+          policy: { ...WORK_POLICY, whitelist: ['*.safe.example', 'plain.example'] },
+        },
+      ],
+      defaultAppBlocklist: [],
+      defaultAppBlocklistUpdatedAt: 0,
+    },
+  }),
+);
+
+await test('parse keeps the over-broad globs in the document (gate fires at apply, not parse)', () => {
+  const parsed = parseBackup(serializeBackup(holeDoc), NOW);
+  assert.equal(parsed.ok, true);
+  assert.ok(parsed.document.default.settings.whitelist.includes('*a*'));
+  assert.ok(parsed.document.default.settings.whitelist.includes('*.co*'));
+  assert.deepEqual(parsed.warnings, []);
+});
+
+await test('merge drops over-broad backed-up whitelist globs from every policy, with warnings', () => {
+  const applied = mergeBackupState(local, holeDoc, options);
+  assert.ok(!applied.settings.whitelist.some((site) => site.startsWith('*') || site.includes('*a*')));
+  assert.ok(applied.settings.whitelist.includes('imported.example'));
+  assert.ok(applied.settings.whitelist.includes('local.example'));
+  assert.ok(applied.settings.whitelist.includes('shared.example'));
+  const holeProfile = applied.profiles.profiles.find((profile) => profile.id === 'p_hole');
+  assert.deepEqual(holeProfile.policy.whitelist, ['named.example']);
+  const safeProfile = applied.profiles.profiles.find((profile) => profile.id === 'p_safe');
+  assert.deepEqual(safeProfile.policy.whitelist, ['*.safe.example', 'plain.example']);
+  const dropped = applied.warnings.filter((warning) => /allowed-site wildcard/.test(warning));
+  assert.equal(dropped.length, 3);
+  assert.ok(dropped.every((warning) => /from the imported backup/.test(warning)));
+  assert.ok(dropped.some((warning) => /“\*a\*”/.test(warning)));
+  assert.ok(dropped.some((warning) => /“\*\.co\*”/.test(warning)));
+  assert.ok(dropped.some((warning) => /“\*e\*st\*”/.test(warning)));
+});
+
+await test('merge also drops an over-broad ALREADY-STORED whitelist entry, with its own warning', () => {
+  const localWithHole = makeState({ settings: { whitelist: ['local.example', '*com'] } });
+  const applied = mergeBackupState(localWithHole, holeDoc, options);
+  assert.ok(!applied.settings.whitelist.includes('*com'));
+  assert.ok(applied.settings.whitelist.includes('local.example'));
+  const stored = applied.warnings.filter((warning) => /allowed-site wildcard/.test(warning));
+  assert.equal(stored.length, 4);
+  assert.ok(stored.some((warning) => /“\*com” stored on this device/.test(warning)));
+});
+
+await test('replace drops over-broad whitelist globs from the incoming file, and the preview warns', () => {
+  const applied = replaceBackupState(local, holeDoc, options);
+  assert.deepEqual(applied.settings.whitelist, ['imported.example']);
+  const holeProfile = applied.profiles.profiles.find((profile) => profile.id === 'p_hole');
+  assert.deepEqual(holeProfile.policy.whitelist, ['named.example']);
+  const dropped = applied.warnings.filter((warning) => /allowed-site wildcard/.test(warning));
+  assert.equal(dropped.length, 3);
+  assert.ok(applied.warnings.every((warning) => /from the imported backup/.test(warning)));
+
+  const preview = buildBackupPreview(local, holeDoc, 'replace', options);
+  assert.ok(preview.warnings.some((warning) => /“\*a\*”/.test(warning)));
+});
+
+await test('safe wildcard allows and plain hostnames stay valid across the import gate', () => {
+  const safeDoc = makeDoc(
+    makeState({
+      settings: { whitelist: ['*.example.com', 'plain.example', '*example.org', 'foo*.example.net'] },
+      profilesState: {
+        activeProfileId: null,
+        profiles: [],
+        defaultAppBlocklist: [],
+        defaultAppBlocklistUpdatedAt: 0,
+      },
+    }),
+  );
+  const applied = mergeBackupState(local, safeDoc, options);
+  for (const entry of ['*.example.com', 'plain.example', '*example.org', 'foo*.example.net']) {
+    assert.ok(applied.settings.whitelist.includes(entry), `${entry} must survive the gate`);
+  }
+  assert.deepEqual(
+    applied.warnings.filter((warning) => /allowed-site wildcard/.test(warning)),
+    [],
+  );
+});
+
+// ---------------------------------------------------------------------------
+console.log('BACKUP_GLOBAL_FIELDS exhaustiveness');
+
+await test('BACKUP_GLOBAL_FIELDS covers every Settings global not excluded or policy-scoped', () => {
+  // settings.ts imports browser APIs, so it cannot be imported under Node type
+  // stripping; read its type declaration and mirror the Settings shape from
+  // the source text. The mirror is exact in BOTH directions so the test fails
+  // both when a new Settings field is missing from the backup and when the
+  // parsed shape goes stale.
+  const source = readFileSync(new URL('../src/shared/settings.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('export interface Settings {');
+  assert.ok(start >= 0, 'the Settings interface must exist in settings.ts');
+  const body = source.slice(start, source.indexOf('\n}', start));
+  const settingsKeys = [...body.matchAll(/^  (?:readonly )?([A-Za-z_$][\w$]*)\??:/gm)].map(
+    (match) => match[1],
+  );
+  assert.ok(settingsKeys.length >= 20, `expected the full Settings shape, parsed ${settingsKeys.length}`);
+
+  // The only Settings global deliberately excluded from backups: `onboarded`
+  // is transient first-run wizard state (backup.ts header + docs/backup.md).
+  const excluded = new Set(['onboarded']);
+  const covered = new Set([...PROFILE_POLICY_FIELDS, ...BACKUP_GLOBAL_FIELDS, ...excluded]);
+
+  for (const key of settingsKeys) {
+    assert.ok(
+      covered.has(key),
+      `Settings field "${key}" is carried by neither BACKUP_GLOBAL_FIELDS nor PROFILE_POLICY_FIELDS ` +
+        '— a future backup/restore would silently drop it. Add it to one of them.',
+    );
+  }
+  for (const key of covered) {
+    assert.ok(
+      settingsKeys.includes(key),
+      `Settings no longer has "${key}" — stale entry in BACKUP_GLOBAL_FIELDS or PROFILE_POLICY_FIELDS.`,
+    );
+  }
+  assert.ok(!BACKUP_GLOBAL_FIELDS.includes('onboarded'), 'onboarding transients never belong in backups');
+  for (const key of BACKUP_GLOBAL_FIELDS) {
+    assert.ok(!PROFILE_POLICY_FIELDS.includes(key), `${key} cannot be both global and profile-scoped`);
+  }
 });
 
 // ---------------------------------------------------------------------------

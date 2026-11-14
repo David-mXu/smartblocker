@@ -76,6 +76,7 @@ import {
   type ProfilesState,
 } from './profiles.ts';
 import { clampResumeAt, normalizeResumeMode, type ResumeMode } from './resume.ts';
+import { isValidWildcardWhitelistEntry } from './titles.ts';
 import type { Settings } from './settings.ts';
 
 export const BACKUP_SCHEMA_ID = 'smartblocker.config';
@@ -242,6 +243,48 @@ function normalizeText(value: string, maxLength: number): string {
 
 function normalizeListEntry(value: string): string {
   return normalizeText(value, 300);
+}
+
+/**
+ * Whitelist entries are ALLOW rules, so an over-broad glob such as "*a*" —
+ * or "*com", which matches every .com host — exempts nearly the entire web.
+ * An imported file or a legacy stored list can carry those past the editor
+ * (which validates via the same gate), so every spread path here filters
+ * entries through the EXACT grammar the runtime matcher enforces
+ * (titles.ts parseWhitelistWildcard); star-free legacy hostnames stay legal
+ * and are untouched. Drop-and-warn, never throw — the same repair semantics
+ * the import preview already uses for schedules and profile names.
+ */
+function safeWhitelistEntries(
+  entries: readonly string[],
+  warnings: string[] | undefined,
+  source: string,
+): string[] {
+  const out: string[] = [];
+  for (const entry of entries) {
+    if (typeof entry !== 'string') continue;
+    const value = normalizeListEntry(entry);
+    if (!value) continue;
+    if (value.includes('*') && !isValidWildcardWhitelistEntry(value)) {
+      warnings?.push(
+        `Dropped the allowed-site wildcard “${value}” ${source}; it exempts far more than one site.`,
+      );
+      continue;
+    }
+    out.push(value);
+  }
+  return out;
+}
+
+/** Gate one whole policy's whitelist (replace path and brand-new imported
+ *  profiles arrive here instead of through the merge union). */
+function gateWhitelist(
+  policy: ProfilePolicy,
+  warnings: string[] | undefined,
+  source = 'from the imported backup',
+): ProfilePolicy {
+  const whitelist = safeWhitelistEntries(policy.whitelist, warnings, source);
+  return whitelist.length === policy.whitelist.length ? policy : { ...policy, whitelist };
 }
 
 function normalizeLabel(value: string): string {
@@ -823,8 +866,13 @@ function unionList(
 }
 
 /** Merge policy lists by union with IMPORTED-FIRST precedence; scalars come
- *  from the imported document. Documented in docs/backup.md. */
-export function mergePolicies(local: ProfilePolicy, incoming: ProfilePolicy): ProfilePolicy {
+ *  from the imported document. Documented in docs/backup.md. `warnings`
+ *  collects the over-broad allowed-site globs dropped from either side. */
+export function mergePolicies(
+  local: ProfilePolicy,
+  incoming: ProfilePolicy,
+  warnings?: string[],
+): ProfilePolicy {
   const deletedBuiltinLabels = unionList(
     incoming.deletedBuiltinLabels,
     local.deletedBuiltinLabels,
@@ -849,8 +897,8 @@ export function mergePolicies(local: ProfilePolicy, incoming: ProfilePolicy): Pr
     blockedLabels,
     blockThreshold: incoming.blockThreshold,
     whitelist: unionList(
-      incoming.whitelist,
-      local.whitelist,
+      safeWhitelistEntries(incoming.whitelist, warnings, 'from the imported backup'),
+      safeWhitelistEntries(local.whitelist, warnings, 'stored on this device'),
       MAX_POLICY_LIST,
       normalizeListEntry,
     ),
@@ -915,10 +963,11 @@ function mergeSettings(
   current: Settings,
   incoming: BackupManagedSettings,
   now: number,
+  warnings?: string[],
 ): Settings {
   return {
     ...current,
-    ...mergePolicies(extractProfilePolicy(current), incoming),
+    ...mergePolicies(extractProfilePolicy(current), incoming, warnings),
     ...managedGlobalsFrom(current, incoming, now),
   };
 }
@@ -927,8 +976,9 @@ function replaceSettings(
   current: Settings,
   incoming: BackupManagedSettings,
   now: number,
+  warnings?: string[],
 ): Settings {
-  const policy = sanitizeProfilePolicy(incoming, defaultProfilePolicy());
+  const policy = gateWhitelist(sanitizeProfilePolicy(incoming, defaultProfilePolicy()), warnings);
   return {
     ...current,
     ...policy,
@@ -996,7 +1046,7 @@ function mergeProfiles(
           `Renamed imported profile “${desiredName}” to “${finalName}” to keep names unique.`,
         );
       }
-      const mergedPolicy = mergePolicies(target.policy, imported.policy);
+      const mergedPolicy = mergePolicies(target.policy, imported.policy, warnings);
       const mergedApps = unionList(
         imported.appBlocklist,
         target.appBlocklist,
@@ -1051,7 +1101,10 @@ function mergeProfiles(
       name: finalName,
       createdAt,
       updatedAt: safeTimestamp(imported.updatedAt, createdAt),
-      policy: sanitizeProfilePolicy(imported.policy, defaultProfilePolicy()),
+      policy: gateWhitelist(
+        sanitizeProfilePolicy(imported.policy, defaultProfilePolicy()),
+        warnings,
+      ),
       appBlocklist: normalizeAppBlocklist(imported.appBlocklist),
       appBlocklistUpdatedAt: safeTimestamp(imported.appBlocklistUpdatedAt, 0),
     };
@@ -1104,7 +1157,16 @@ function replaceProfiles(
     },
     now,
   );
-  return state;
+  // sanitizeProfilesState has no warnings channel of its own; gate each
+  // imported policy's whitelist here so replace never spreads over-broad
+  // allow globs into a stored profile.
+  return {
+    ...state,
+    profiles: state.profiles.map((profile) => ({
+      ...profile,
+      policy: gateWhitelist(profile.policy, warnings),
+    })),
+  };
 }
 
 function pinRule(rule: ScheduleRule, options: BackupApplyOptions): ScheduleRule {
@@ -1219,7 +1281,7 @@ export function mergeBackupState(
   const schedulesChanged = !rulesEqual(current.schedules, schedules);
   const categoryChanged = !rulesEqual(current.categorySchedules, categorySchedules);
   return {
-    settings: mergeSettings(current.settings, incoming.default.settings, options.now),
+    settings: mergeSettings(current.settings, incoming.default.settings, options.now, warnings),
     profiles,
     schedules,
     schedulesUpdatedAt: schedulesChanged ? options.now : current.schedulesUpdatedAt,
@@ -1250,7 +1312,12 @@ export function replaceBackupState(
   const schedulesChanged = !rulesEqual(current.schedules, schedules);
   const categoryChanged = !rulesEqual(current.categorySchedules, categorySchedules);
   return {
-    settings: replaceSettings(current.settings, incoming.default.settings, options.now),
+    settings: replaceSettings(
+      current.settings,
+      incoming.default.settings,
+      options.now,
+      warnings,
+    ),
     profiles,
     schedules,
     schedulesUpdatedAt: schedulesChanged ? options.now : current.schedulesUpdatedAt,

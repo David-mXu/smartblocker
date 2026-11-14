@@ -38,6 +38,10 @@ function isLiteralDnsHost(host: string): boolean {
   return host === 'localhost' || LITERAL_HOST_RE.test(host);
 }
 
+/** Label-SHAPE gate only (lengths, charset, no empty/hyphen-edge labels) —
+ *  it deliberately does NOT judge breadth. parseWhitelistWildcard applies
+ *  the safe-allow anchor (hasLiteralHostConstraint) after it, for host globs
+ *  and URL rules alike. */
 function isHostGlob(host: string): boolean {
   if (
     !host ||
@@ -104,6 +108,14 @@ function parseWhitelistWildcard(input: string): WhitelistWildcard | null {
     if (host.startsWith('*.') && !host.slice(2).includes('*') && isLiteralDnsHost(host.slice(2))) {
       return { kind: 'suffix', value: host.slice(2) };
     }
+    // Host globs must end in the same safe-allow anchor as URL rules
+    // (hasLiteralHostConstraint): a star-free literal DNS host suffix
+    // ending the string, whose final label is at least 2 characters in a
+    // multi-label host (e.g. "*.example.com", "foo*.example.net"). Globs
+    // like "*a*", "*.co*", "*e*st*", "*.*foo" or "*com" would otherwise
+    // anchor on 1–3 generic characters and exempt nearly the entire web:
+    // "*com" matches EVERY .com host, and "*a*" matches most hosts.
+    if (!hasLiteralHostConstraint(host)) return null;
     return { kind: 'host', value: host };
   }
 

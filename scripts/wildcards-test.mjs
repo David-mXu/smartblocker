@@ -12,6 +12,7 @@ import {
   matchingWhitelistEntries,
 } from '../src/shared/titles.ts';
 import { normalizeDomain, normalizeKeyword } from '../src/shared/domains.ts';
+import { DEFAULT_WHITELIST } from '../src/shared/config.ts';
 import { sanitizePage } from '../src/content/sanitize-page.ts';
 
 let passed = 0;
@@ -171,6 +172,72 @@ test('defensive allow rejection covers match-everything and hostless rule varian
   // Safe counterexamples ensure rejection is not simply disabling all globs.
   assert.equal(isWhitelisted('https://example.com/a', ['https://example.com/*']), true);
   assert.equal(isWhitelisted('https://sub.example.com/a', ['https://*.example.com/*']), true);
+});
+
+test('host-only globs without a literal host suffix never validate, match, or enter the editor', () => {
+  // Previously accepted shapes that anchored on 1–3 generic characters and so
+  // exempted nearly the entire web (verified live pre-fix: "*a*" allowed
+  // facebook.com, store.steampowered.com and nasa.gov; "*com" allowed every
+  // .com host; "*.co*" allowed every .co TLD site).
+  const overBroad = [
+    '*a*',
+    '*.co*',
+    '*e*st*',
+    '*.*foo',
+    '*com',
+    'a*',
+    '*a',
+    '*mail*',
+    '*.example.*',
+    'google.*',
+  ];
+  for (const unsafe of overBroad) {
+    assert.equal(isValidWildcardWhitelistEntry(unsafe), false, unsafe);
+    assert.equal(normalizeDomain(unsafe).ok, false, unsafe); // ListEditor feedback path
+  }
+  for (const url of ['https://facebook.com/', 'https://store.steampowered.com/app/1', 'https://nasa.gov/']) {
+    assert.deepEqual(matchingWhitelistEntries(url, ['*a*', '*com', '*.co*']), [], url);
+    assert.equal(isWhitelisted(url, ['*a*']), false, url);
+  }
+});
+
+test('confirming-allow shapes survive the tightened host-glob grammar', () => {
+  // A host glob is safe exactly when its text after the last star is a
+  // complete literal DNS host: "*.example.com" (sugar), "foo*.example.com",
+  // "*example.com". Plain star-free hostnames take the legacy branch entirely.
+  assert.deepEqual(normalizeDomain('*.example.com'), { ok: true, value: '*.example.com' });
+  assert.deepEqual(normalizeDomain('example.com'), { ok: true, value: 'example.com' });
+  assert.equal(isValidWildcardWhitelistEntry('foo*.example.com'), true);
+  assert.equal(isWhitelisted('https://example.com/a', ['*.example.com']), true);
+  assert.equal(isWhitelisted('https://deep.sub.example.com/a', ['*.example.com']), true);
+  assert.equal(isWhitelisted('https://foo.example.com/', ['foo*.example.com']), true);
+  assert.equal(isWhitelisted('https://notexample.com/', ['*example.com']), true);
+  assert.equal(isWhitelisted('https://example.com:8443/x', ['example.com']), true);
+});
+
+test('DEFAULT_WHITELIST sentinel entries still validate and exempt their hosts', () => {
+  assert.ok(DEFAULT_WHITELIST.length > 0);
+  for (const entry of DEFAULT_WHITELIST) {
+    // The default list is star-free legacy hostnames, which bypass the
+    // wildcard grammar entirely — assert that stays true, since one star
+    // entry here would need the new anchor to remain narrow.
+    assert.equal(entry.includes('*'), false, `${entry} is expected to be star-free`);
+  }
+  for (const [url, entry] of [
+    ['https://mail.google.com/u/0/', 'mail.google.com'],
+    ['https://github.com/David-mXu/smartblocker', 'github.com'],
+    ['https://stackoverflow.com/questions/1', 'stackoverflow.com'],
+    ['http://localhost:3000/dev', 'localhost'],
+    ['https://127.0.0.1:8080/x', '127.0.0.1'],
+    ['https://claude.ai/chat', 'claude.ai'],
+  ]) {
+    assert.equal(
+      matchingWhitelistEntries(url, DEFAULT_WHITELIST).includes(entry),
+      true,
+      `${url} should stay exempt via ${entry}`,
+    );
+  }
+  assert.equal(matchingWhitelistEntries('https://www.google.com/search?q=x', DEFAULT_WHITELIST).length, 0, 'SERPs stay classified');
 });
 
 test('malformed wildcard allows and invalid URLs never crash or allow', () => {
