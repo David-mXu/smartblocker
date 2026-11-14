@@ -19,6 +19,7 @@ import {
   meanNormalize,
   prototypesVersion,
 } from '../shared/prototypes';
+import { buildSpecVectors, CENTROID_CACHE_FORMAT, type CachedSeedVectors } from '../shared/prototype-cache';
 import type { ClassifyInput, ClassifyOutcome, InferResult } from '../shared/messages';
 import { classifyViaOffscreen, embedViaOffscreen, supportsOffscreen } from './classify-client';
 
@@ -144,21 +145,30 @@ async function embedTexts(
 
 // ---- Centroid store (embed backend) ----
 // Centroid vectors are derived data: rebuilt whenever their version (model id
-// + active labels + seed/user-correction texts) changes, cached in
-// storage.local so a fresh SW start skips the ~1s rebuild.
+// + active labels + seed/user-correction texts + CENTROID_CACHE_FORMAT)
+// changes, cached in storage.local so a fresh SW start skips the ~1s rebuild.
+// `seedHashes` is parallel to `seedVectors` — the per-position text hashes the
+// vectors were built from — so incremental rebuilds can PROVE which cached
+// vectors are still valid (see shared/prototype-cache.ts for the invariant).
 type CentroidCache = {
   version: string;
   names: string[];
   vectors: number[][];
   seedVectors?: number[][][];
-  specVersions?: string[];
+  seedHashes?: string[][];
 };
 
 let centroidsInFlight: Promise<CentroidCache> | null = null;
 
 async function getCentroids(labels: string[]): Promise<CentroidCache & { buildMs: number }> {
   const specs = centroidSpecs(labels, await getPrototypeExamples());
-  const version = prototypesVersion(EMBED_MODEL_ID, specs) + ':mp1';
+  // The prototypesVersion hash already spans every text, so seed/correction
+  // EDITS always change it — the CENTROID_CACHE_FORMAT tag on top is NOT what
+  // makes them safe (hash-verified per-position reuse is, see the loop
+  // below); it only forces a one-time full rebuild when the persisted cache
+  // SHAPE changes. Both are appended so centroids and the title-cache
+  // modelKey (see classify) invalidate in lockstep.
+  const version = prototypesVersion(EMBED_MODEL_ID, specs) + CENTROID_CACHE_FORMAT;
 
   const stored = await api.storage.local.get('centroidCache');
   const cached = stored.centroidCache as CentroidCache | undefined;
@@ -177,52 +187,41 @@ async function getCentroids(labels: string[]): Promise<CentroidCache & { buildMs
     const names: string[] = [];
     const vectors: number[][] = [];
     const seedVectors: number[][][] = [];
-    const specVersions: string[] = [];
+    const seedHashes: string[][] = [];
 
     // Build a lookup of previously cached per-category seed vectors so adding
     // a single user correction (OVERRIDE or REPORT_FN) only embeds the changed
-    // category's new seed text (~12ms) instead of re-embedding all 518 seeds (~25s).
-    const prevByName = new Map<
-      string,
-      { vec: number[]; seedVecs: number[][]; specVer?: string }
-    >();
+    // category's new seed text (~12ms) instead of re-embedding all 518 seeds
+    // (~25s). Reuse is HASH-VERIFIED, never length-guessed: via
+    // buildSpecVectors a cached vector is trusted for a text only when the
+    // persisted per-position hash proves it was embedded from that exact
+    // text. Any insert/remove/reorder/replace in the cached region — heads
+    // and middles, including the 'neutral: user approved' head-drop case the
+    // old code special-cased away — fails its position hash and forces a
+    // full rebuild of that category; only a verified prefix + fresh tail is
+    // incrementally embedded.
+    const prevByName = new Map<string, CachedSeedVectors>();
     if (cached && cached.seedVectors && cached.names.length === cached.seedVectors.length) {
       for (let i = 0; i < cached.names.length; i++) {
         prevByName.set(cached.names[i], {
-          vec: cached.vectors[i],
           seedVecs: cached.seedVectors[i],
-          specVer: cached.specVersions?.[i],
+          hashes: cached.seedHashes?.[i],
         });
       }
     }
 
     for (const spec of specs) {
-      const sVer = prototypesVersion(EMBED_MODEL_ID, [spec]);
-      const prev = prevByName.get(spec.name);
-      let vecs: number[][];
-      if (prev && prev.specVer === sVer && prev.seedVecs.length === spec.texts.length) {
-        vecs = prev.seedVecs;
-      } else if (
-        prev &&
-        prev.seedVecs.length > 0 &&
-        prev.seedVecs.length < spec.texts.length &&
-        spec.name !== 'neutral: user approved'
-      ) {
-        // User feedback appended new examples to the tail of an existing category's
-        // static seeds: reuse the static prefix vectors and only embed the new tail!
-        const tailTexts = spec.texts.slice(prev.seedVecs.length);
-        const { vectors: tailVecs } = await embedTexts(tailTexts);
-        vecs = [...prev.seedVecs, ...tailVecs];
-      } else {
-        const res = await embedTexts(spec.texts);
-        vecs = res.vectors;
-      }
+      const { vecs, hashes } = await buildSpecVectors(
+        spec.texts,
+        prevByName.get(spec.name),
+        (texts) => embedTexts(texts).then((r) => r.vectors),
+      );
       names.push(spec.name);
       vectors.push(meanNormalize(vecs));
       seedVectors.push(vecs);
-      specVersions.push(sVer);
+      seedHashes.push(hashes);
     }
-    const built: CentroidCache = { version, names, vectors, seedVectors, specVersions };
+    const built: CentroidCache = { version, names, vectors, seedVectors, seedHashes };
     await api.storage.local.set({ centroidCache: built });
     return built;
   })();
@@ -378,7 +377,7 @@ export async function classify(input: ClassifyInput, bypassCache = false): Promi
       ? `embed:${EMBED_MODEL_ID}:${prototypesVersion(
           EMBED_MODEL_ID,
           centroidSpecs(labels, await getPrototypeExamples()),
-        )}:mp1:${fcKey}`
+        )}${CENTROID_CACHE_FORMAT}:${fcKey}`
       : `nli:${MODEL_ID}`;
   const key = inputCacheKey(input, modelKey);
   const text = buildClassifierText(input);

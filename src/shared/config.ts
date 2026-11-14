@@ -19,8 +19,11 @@ export const EMBED_MODEL_ID = 'Xenova/bge-small-en-v1.5';
 // current main SHA:
 //   curl -s https://huggingface.co/api/models/Xenova/bge-small-en-v1.5 | grep -o '"sha":"[0-9a-f]*"' | head -1
 // NOTE: cached title verdicts and centroids are keyed by model ID, not
-// revision — when bumping, also bump the ':mp1' version suffix in
-// classifier.ts getCentroids()/classify() so stale caches are invalidated.
+// revision — when bumping, also bump CENTROID_CACHE_FORMAT in
+// src/shared/prototype-cache.ts (used by classifier.ts getCentroids() AND
+// the classify() title-cache modelKey, in lockstep) so stale caches are
+// invalidated. Seed-text edits no longer need a bump: cached seed vectors
+// are hash-verified per position and rebuild only the changed categories.
 export const EMBED_MODEL_REVISION = 'ea104dacec62c0de699686887e3f920caeb4f3e3';
 // Softmax temperature over centroid cosine similarities, calibrated on the
 // eval set so the natural operating point sits at the default 0.5 threshold.
