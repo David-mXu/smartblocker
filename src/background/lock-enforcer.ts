@@ -170,10 +170,17 @@ async function checkClockSkew(): Promise<void> {
   }
 
   // Detector 2: cumulative unexplained drift since lock start — catches the
-  // sub-tolerance ratchet that detector 1 cannot see.
+  // sub-tolerance ratchet that detector 1 cannot see. Reference is prevWallMs,
+  // NOT nowWall (same as detector 1): nowWall already contains the drifted
+  // time, so a deadline inside the band (nowWall - unexplained, nowWall] —
+  // one the wall clock LEAPT OVER — would read as already expired and be
+  // skipped uncompensated, letting a sub-tolerance ratchet timed to a
+  // deadline shave up to tolerance + one check interval off a lock. Using the
+  // last honest tick makes both detectors treat jumped-over deadlines
+  // identically. Backward drift still never compensates (fail-safe).
   const unexplained = Math.round(nowWall - anchor.wall0 - (nowMono - anchor.mono0));
   if (unexplained > CLOCK_SKEW_TOLERANCE_MS) {
-    await shiftActiveDeadlines(nowWall, unexplained);
+    await shiftActiveDeadlines(prevWallMs, unexplained);
     console.warn(
       `[SmartBlocker] cumulative clock drift of ${unexplained}ms since lock start — extending active lock ends`,
     );
