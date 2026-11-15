@@ -122,9 +122,66 @@ appeared only after parallel builders edited `src/shared/lock.ts` and
 run was 30/0 and none of my files are in that import graph. Attributed to the
 concurrent lock/settings work, not these fixes.
 
-## Left for follow-up
+## Follow-up round (2026-11-15): the pattern finished, and a cousin bug in a shared promise
 
-The commit-before-write pattern also lives in `src/shared/settings.ts` (:334,
-:350) and `src/shared/lock.ts` (:123, :619) — out of my scope this pass, same
-one-line reorder plus invalidation applies. Legacy pre-cap feedback records
-are intentionally left as stored; the uploader pre-check quarantines them.
+The commit-before-write reorder this note left as follow-up is now done in the
+remaining three stores, and a structurally related bug in `classifier.ts`
+turned out to deserve the same "one failure must not poison other callers"
+treatment.
+
+**`settings.ts`, `lock.ts`, `profile-store.ts` — invalidate, never revert.**
+The same `try { await set(); cache = next } catch { cache = null; throw }`
+buffer now guards `writeSettings` (both branches — the active-profile one had
+*two* caches to move: the settings cache and `primeProfilesState`),
+`lock.ts writeLockState` plus the merge body's commit, and
+`profile-store.ts writeProfilesState`. The lock file needed care: its queue's
+merge math and op bodies were left bit-for-bit identical — only the timing of
+the in-memory commit moved, which is safe because the doc-commented consumer
+(inline `readLockState(true)` after a write inside the same op) can only run
+after the awaited `set()` resolved anyway. A rejected lock write previously
+could leave the service worker *believing a lock was armed that never
+persisted* — or worse, believing one had unlocked.
+
+**`classifier.ts getCentroids` — a shared promise is a failure fan-out.** The
+centroid build deduplicates concurrent callers through one module-level
+`centroidsInFlight` promise. Two lessons:
+
+- Verify the premise before fixing it. The suspected "rejected promise parked
+  forever" was *not* present — the existing `try/finally` already cleared the
+  reference on rejection. The real defects were subtler: a *waiter* rethrew
+  the shared rejection (one transient embed failure failed every concurrent
+  classification that deduped onto that build), and the cleanup was
+  unconditional instead of identity-guarded (correct only by microtask
+  ordering).
+- Sharing a promise shares its failure. The fix splits the semantics by role:
+  the *builder* still propagates its rejection (exactly one caller/classification
+  fails, so `classify()` can fail closed), while a *waiter* maps the rejection
+  to "no build in progress" and treats it as permission to start a fresh,
+  bounded rebuild:
+
+  ```ts
+  const inFlight = await centroidsInFlight.then((b) => b, () => null);
+  if (inFlight && inFlight.version === version) return { ...inFlight, buildMs: 0 };
+  // else fall through: allocate a fresh build
+  ```
+
+  plus `finally { if (centroidsInFlight === buildPromise) centroidsInFlight = null; }`
+  so cleanup of an older build can never clobber a newer one a waiter started.
+  This is the same principle as the write-queue tail that swallows errors: a
+  shared long-lived handle must not let one rejection poison every later user.
+
+**How to prove a cache-timing fix.** A stash-based A/B against *real* modules
+(imported under Node type stripping, browser `chrome` global mocked à la
+`profiles-test.mjs`, with a storage mock that can inject a failed `set()`) makes
+the phantom observable, not hypothetical: with the old code, 5 of 6 checks fail
+on state that never persisted (phantom settings threshold, phantom profile,
+phantom armed `timerUntil`, phantom merged lock); with the fix, 6/6 pass. The
+harness lives at `.audit-swarm/builders/scratch-cache-reject-check.mjs`.
+Suites after: lock-math 184/0, lock-types 26/0, breaks 14/0, usage-stats 30/0,
+backup 24/0, profiles 17/0, centroid-cache 16/0, typecheck clean.
+
+Remaining honest gap: `getCentroids` itself has no automated test —
+`centroid-cache-test.mjs` cannot import it (browser APIs + transformers.js at
+module load), so its fix is covered by the reasoning above and by the unchanged
+pure core (`prototype-cache.ts`) still passing. Legacy pre-cap feedback records
+remain as stored; the uploader pre-check quarantines them.

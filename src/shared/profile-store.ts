@@ -46,8 +46,18 @@ export function primeProfilesState(next: ProfilesState): void {
 }
 
 async function writeProfilesState(next: ProfilesState): Promise<ProfilesState> {
+  // Commit the cache only after the storage write succeeds (mirrors
+  // feedback.ts save()): a rejected set() fires no storage.onChanged, so a
+  // pre-write commit would leave this context serving a phantom profile
+  // state. On failure the cache is invalidated — storage is the source of
+  // truth — and the rejection propagates to the profile-mutation caller.
+  try {
+    await api.storage.local.set({ [PROFILES_STORAGE_KEY]: next });
+  } catch (e) {
+    cache = null;
+    throw e;
+  }
   cache = next;
-  await api.storage.local.set({ [PROFILES_STORAGE_KEY]: next });
   return next;
 }
 

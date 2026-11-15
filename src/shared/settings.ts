@@ -336,13 +336,24 @@ async function writeSettings(patch: Partial<Settings>, echoId?: string): Promise
     const next = applyProfilePolicy(nextBase, hasPolicyPatch
       ? nextState.profiles.find((profile) => profile.id === active.id)!.policy
       : active.policy);
+    // Commit both in-memory caches (this one + profile-store's primed state)
+    // only AFTER the storage write succeeds, mirroring feedback.ts save(): a
+    // rejected set() fires no storage.onChanged, so a pre-write commit would
+    // leave this context serving phantom settings with nothing to rescue it.
+    // On failure both caches are invalidated — storage is the source of
+    // truth — and the rejection propagates so the dropped write surfaces.
+    try {
+      await api.storage.local.set({
+        [STORAGE_KEY]: nextBase,
+        ...(hasPolicyPatch ? { [PROFILES_STORAGE_KEY]: nextState } : {}),
+        ...(echoId ? { [COMPANION_BLOCKING_ECHO_KEY]: echoId } : {}),
+      });
+    } catch (e) {
+      cache = null;
+      throw e;
+    }
     cache = next;
     if (hasPolicyPatch) primeProfilesState(nextState);
-    await api.storage.local.set({
-      [STORAGE_KEY]: nextBase,
-      ...(hasPolicyPatch ? { [PROFILES_STORAGE_KEY]: nextState } : {}),
-      ...(echoId ? { [COMPANION_BLOCKING_ECHO_KEY]: echoId } : {}),
-    });
     return next;
   }
 
@@ -352,11 +363,18 @@ async function writeSettings(patch: Partial<Settings>, echoId?: string): Promise
     defaultPolicy,
   );
   const next: Settings = { ...nextBase, ...nextPolicy };
+  // Cache commits only after the write lands — same phantom-state contract
+  // as the active-profile branch above and feedback.ts save().
+  try {
+    await api.storage.local.set({
+      [STORAGE_KEY]: next,
+      ...(echoId ? { [COMPANION_BLOCKING_ECHO_KEY]: echoId } : {}),
+    });
+  } catch (e) {
+    cache = null;
+    throw e;
+  }
   cache = next;
-  await api.storage.local.set({
-    [STORAGE_KEY]: next,
-    ...(echoId ? { [COMPANION_BLOCKING_ECHO_KEY]: echoId } : {}),
-  });
   return next;
 }
 

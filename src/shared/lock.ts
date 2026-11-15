@@ -140,12 +140,24 @@ export function getLockState(): Promise<LockState> {
 
 /** Persist a new lock state. Callers must already hold the one write-queue
  *  slot (runLockOp): this is a raw read-modify-write step, and its whole
- *  ordering guarantee comes from the queue around it. Also sets the cache so
- *  the next inline read (readLockState(true)) inside the same op sees the
- *  value just written. */
+ *  ordering guarantee comes from the queue around it. Commits the cache only
+ *  AFTER the storage write succeeds, so the next inline read
+ *  (readLockState(true)) inside the same op — which can only run once the
+ *  awaited write resolved — sees the value just written. A rejected set()
+ *  fires no storage.onChanged, so a pre-write commit would leave this
+ *  context serving a phantom lock state (e.g. believing a lock is armed that
+ *  never persisted) with nothing to rescue it; on failure the cache is
+ *  invalidated, never reverted — storage is the source of truth. The state
+ *  computations calling this are untouched: monotonic semantics live in
+ *  lock-math.ts and the op bodies, not in cache timing. */
 async function writeLockState(next: LockState): Promise<void> {
+  try {
+    await api.storage.local.set({ [STORAGE_KEY]: next });
+  } catch (e) {
+    cache = null;
+    throw e;
+  }
   cache = next;
-  await api.storage.local.set({ [STORAGE_KEY]: next });
 }
 
 export async function getLockStatus(now = Date.now()): Promise<LockStatus> {
@@ -722,10 +734,21 @@ async function mergeRemoteLockStateLocked(remote: unknown): Promise<boolean> {
     existingPin.updatedAt !== pin.updatedAt
   );
   if (changed || pinChanged) {
-    cache = merged;
     const payload: Record<string, unknown> = { [STORAGE_KEY]: merged };
     if (pin) payload[PARTNER_ARM_KEY] = pin;
-    await api.storage.local.set(payload);
+    // Same contract as writeLockState: commit the merged snapshot to this
+    // context's cache only after the write lands; a rejected set() fires no
+    // onChanged and must not leave the context serving an unmerged/unpersisted
+    // state. Nothing about the merge computation or ordering changes here —
+    // the boolean below still reflects the pre-write diff, and a throw skips
+    // the return entirely, so callers never re-broadcast a dropped merge.
+    try {
+      await api.storage.local.set(payload);
+    } catch (e) {
+      cache = null;
+      throw e;
+    }
+    cache = merged;
   }
   return changed || pinChanged;
 }
