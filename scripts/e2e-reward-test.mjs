@@ -50,6 +50,16 @@ try {
   const sw = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker', { timeout: 20_000 });
   sw.on('console', (msg) => console.log('  [sw]', msg.text()));
   await sw.evaluate(() => chrome.storage.local.clear());
+  // Blocking must be ON for reward earning. Since 2026-11-14 (onboarding
+  // gate: DEFAULTS.enabled = false) an ambient default no longer provides
+  // it, and the timer lock armed below would refuse a later setSettings —
+  // seed it explicitly, like the other e2e fixtures (#9 ripple).
+  await sw.evaluate(async () => {
+    const stored = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({
+      settings: { ...(stored.settings ?? {}), enabled: true, onboarded: true },
+    });
+  });
 
   const opts = await context.newPage();
   await opts.goto(`chrome-extension://${EXTENSION_ID}/options.html#allowance`);
