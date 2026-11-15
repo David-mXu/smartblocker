@@ -1454,8 +1454,8 @@ impl Shared {
     }
 
     fn partner_arm_at(&self, conn_id: u64, now: i64, now_mono: u64) {
-        let stamp = match u64::try_from(now) {
-            Ok(stamp) => stamp,
+        let now_stamp = match u64::try_from(now) {
+            Ok(now_stamp) => now_stamp,
             Err(_) => {
                 self.command_result(conn_id, false, "invalid partner arm time".to_string());
                 return;
@@ -1496,25 +1496,48 @@ impl Shared {
                                         Err("random partner arm generation collided; retry arm"
                                             .to_string())
                                     } else {
-                                        let next = Self::merged_partner_lock(
-                                            &lock,
-                                            Some(generation.clone()),
-                                            stamp,
-                                            now,
-                                        );
-                                        if armed_partner_generation(&next)
-                                            != Some(generation.as_str())
-                                        {
-                                            Err("partner arm merge did not select the new generation"
-                                                .to_string())
+                                        // Stamp strictly upward, mirroring the
+                                        // release path's release_stamp exactly.
+                                        // A release may stamp ahead of the wall
+                                        // clock (prev + 1); if the clock then
+                                        // regresses, re-arming at the raw `now`
+                                        // would re-stamp backwards, and BOTH
+                                        // the shared LWW merge (keeps the older,
+                                        // higher stamp, so the new generation
+                                        // is never selected) and the extension's
+                                        // strictly-upward partner-stamp pin
+                                        // would reject that rearm indefinitely —
+                                        // fail-closed, but self-heal defeats
+                                        // itself. Reaching the exhausted error
+                                        // requires the previous stamp to sit at
+                                        // u64::MAX.
+                                        let previous_stamp =
+                                            lock.partner_arm_updated_at.unwrap_or(0);
+                                        let arm_stamp =
+                                            now_stamp.max(previous_stamp.saturating_add(1));
+                                        if arm_stamp <= previous_stamp {
+                                            Err("partner arm stamp is exhausted".to_string())
                                         } else {
-                                            match self.persist_lock_state_serialized(&next) {
-                                                Err(error) => Err(format!(
-                                                    "couldn't persist partner arm: {error}"
-                                                )),
-                                                Ok(()) => {
-                                                    *lock = next.clone();
-                                                    Ok((next, generation))
+                                            let next = Self::merged_partner_lock(
+                                                &lock,
+                                                Some(generation.clone()),
+                                                arm_stamp,
+                                                now,
+                                            );
+                                            if armed_partner_generation(&next)
+                                                != Some(generation.as_str())
+                                            {
+                                                Err("partner arm merge did not select the new generation"
+                                                    .to_string())
+                                            } else {
+                                                match self.persist_lock_state_serialized(&next) {
+                                                    Err(error) => Err(format!(
+                                                        "couldn't persist partner arm: {error}"
+                                                    )),
+                                                    Ok(()) => {
+                                                        *lock = next.clone();
+                                                        Ok((next, generation))
+                                                    }
                                                 }
                                             }
                                         }
@@ -2685,21 +2708,76 @@ fn serve_connection(id: u64, stream: ipc::Stream, shared: Arc<Shared>) {
                 meaningful = true;
                 shared.lock_command(id, duration_ms);
             }
+            // Partner commands (key add / arm / beginOperation / redeem) are
+            // the accountability WRITE path, so they require an AUTHENTICATED
+            // connection — the inbound half of the asymmetry that already
+            // redacts partner fields in every outbound frame to anonymous
+            // peers and pins partner_arm fields in merge_in for BOTH trust
+            // classes. Any same-uid local IPC client (notably the deliberately
+            // unauthenticated Tauri UI) must not be able to register a partner
+            // key or arm/release a partner lock. The legitimate extension
+            // flow is unaffected: its relay hellos carry a known pairing
+            // token, so the browser connection is authed. Refusal reuses the
+            // standard error frame, matching the other write gates.
             Some(CompanionMessage::PartnerAddKey { public_key, .. }) => {
                 meaningful = true;
-                shared.partner_add_key(id, &public_key);
+                if authed {
+                    shared.partner_add_key(id, &public_key);
+                } else {
+                    shared.reply_to(
+                        id,
+                        &CompanionMessage::Error {
+                            v: PROTOCOL_VERSION,
+                            message: "partner commands require an authenticated connection"
+                                .to_string(),
+                        },
+                    );
+                }
             }
             Some(CompanionMessage::PartnerArm { .. }) => {
                 meaningful = true;
-                shared.partner_arm(id);
+                if authed {
+                    shared.partner_arm(id);
+                } else {
+                    shared.reply_to(
+                        id,
+                        &CompanionMessage::Error {
+                            v: PROTOCOL_VERSION,
+                            message: "partner commands require an authenticated connection"
+                                .to_string(),
+                        },
+                    );
+                }
             }
             Some(CompanionMessage::PartnerBeginOperation { .. }) => {
                 meaningful = true;
-                shared.partner_begin(id);
+                if authed {
+                    shared.partner_begin(id);
+                } else {
+                    shared.reply_to(
+                        id,
+                        &CompanionMessage::Error {
+                            v: PROTOCOL_VERSION,
+                            message: "partner commands require an authenticated connection"
+                                .to_string(),
+                        },
+                    );
+                }
             }
             Some(CompanionMessage::PartnerRedeem { token, .. }) => {
                 meaningful = true;
-                shared.partner_redeem(id, &token);
+                if authed {
+                    shared.partner_redeem(id, &token);
+                } else {
+                    shared.reply_to(
+                        id,
+                        &CompanionMessage::Error {
+                            v: PROTOCOL_VERSION,
+                            message: "partner commands require an authenticated connection"
+                                .to_string(),
+                        },
+                    );
+                }
             }
             Some(CompanionMessage::AllowanceBootstrap { allowance, .. }) => {
                 meaningful = true;
@@ -5069,6 +5147,53 @@ mod tests {
             shared.store.load_partner_state().unwrap().public_keys.len(),
             2
         );
+    }
+
+    #[test]
+    fn partner_rearm_after_a_forward_stamped_release_stamps_strictly_upward() {
+        let (_dir, shared) = test_shared();
+        let cli = add_conn(&shared, 93, false);
+        let signing = test_signing();
+        let now = shared.wall_ms();
+        add_immediately_active_key(&shared, 93, &cli, &signing, now);
+
+        // Simulate the persisted aftermath of a release whose stamp was
+        // pushed AHEAD of the wall clock (the redeem path stamps
+        // max(now, prev + 1)), followed by a wall-clock regression: the
+        // stored partner stamp sits 60s in the future while the fresh arm
+        // arrives at `regressed`, behind that stamp. Partner trust state is
+        // independent of lock-state.json, so observe_at still passes — with a
+        // raw-`now` arm stamp the shared LWW merge would keep the older,
+        // higher stamp forever ("merge did not select the new generation"),
+        // and the extension's strictly-upward partner pin would reject the
+        // rearm even if it landed. The arm must stamp prev + 1 like redeem.
+        let regressed = now + 3;
+        let ahead_stamp = (now + 60_000) as u64;
+        let seeded = LockState {
+            partner_arm_generation: None,
+            partner_arm_updated_at: Some(ahead_stamp),
+            ..LockState::default()
+        };
+        shared.store.save_lock_state(&seeded).unwrap();
+        *shared.lock_state.lock().unwrap() = seeded;
+
+        shared.partner_arm_at(93, regressed, TEST_MONO);
+        assert_eq!(
+            latest_command_result(&cli)["ok"],
+            true,
+            "rearm behind a forward-stamped release must not be refused forever"
+        );
+        let rearmed = shared.lock_state.lock().unwrap().clone();
+        assert!(
+            armed_partner_generation(&rearmed).is_some(),
+            "a fresh arm generation is armed"
+        );
+        assert_eq!(
+            rearmed.partner_arm_updated_at,
+            Some(ahead_stamp + 1),
+            "arm stamps strictly above the previous release stamp"
+        );
+        assert_eq!(shared.store.load_lock_state(), rearmed);
     }
 
     #[test]

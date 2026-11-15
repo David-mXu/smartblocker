@@ -163,22 +163,32 @@ nonzero. Add `--socket NAME` to target a non-default/test daemon.
 
 ```bash
 ./target/release/smartblocker-daemon partner-keygen                                    # prints a secret + public pair once
-./target/release/smartblocker-daemon partner add-key PUBLIC_KEY_HEX                    # activates after 24 hours
-./target/release/smartblocker-daemon partner arm                                       # requires an already-active key and no other lock
-./target/release/smartblocker-daemon partner begin                                     # prints the pending operation JSON
-./target/release/smartblocker-daemon partner sign OPERATION_JSON EXPIRES_MS PRIVATE_KEY_HEX
-./target/release/smartblocker-daemon partner redeem SBP1.<payload>.<signature>
+./target/release/smartblocker-daemon partner-sign OPERATION_JSON EXPIRES_MS PRIVATE_KEY_HEX
+./target/release/smartblocker-daemon partner add-key PUBLIC_KEY_HEX                    # requires an AUTHENTICATED connection; activates after 24 hours
+./target/release/smartblocker-daemon partner arm                                       # requires an AUTHENTICATED connection; needs an already-active key and no other lock
+./target/release/smartblocker-daemon partner begin                                     # requires an AUTHENTICATED connection; prints the pending operation JSON
+./target/release/smartblocker-daemon partner redeem SBP1.<payload>.<signature>         # requires an AUTHENTICATED connection
 ```
 
 Run `partner-keygen` on the partner's device and give the user only
 `PUBLIC_KEY_HEX`. Its private half must stay there. `partner-keygen` and
-`partner sign` operate entirely offline and never contact the daemon. Signing
+`partner-sign` operate entirely offline and never contact the daemon. Signing
 binds the installation, exact arm generation, operation ID, nonce, and expiry
 (15 minutes maximum). The daemon uses strict Ed25519 verification; a code
 redeems only that exact arm and leaves timer/Frozen/schedule/password/delay/
 random-text locks and ordinary `enabled` unchanged. Replay tombstones are
 persisted before release, so a second use or a stale arm cannot succeed.
 There is no expedited activation route; changing keys never releases an arm.
+
+Partner enrollment is deliberately UI-only. The four wire-mutating commands
+(`add-key`, `arm`, `begin`, `redeem`) are accepted only from AUTHENTICATED
+daemon connections — the supported path is the extension options page
+(`#locks` → Accountability partner), whose native-messaging relay hellos with
+a known pairing token — so issuing them from the bare CLI (`partner …` over
+`send_command`, which never authenticates) is refused. `partner-keygen` and
+`partner-sign` stay exactly as above: offline helpers that never touch the
+daemon. Restoring a terminal flow later would require a CLI-auth hello with a
+non-browser identity that cannot pollute the watchdog's liveness accounting.
 
 `allowance-state.json` stores revisioned per-category allowance, opening,
 Pomodoro, and idempotency receipts. Browser commands are accepted only with the

@@ -14,6 +14,10 @@ the P0-3/4 hardening holds. PASS = attack fails / defense holds.
   5. legitimate pairing (TOFU hello) authenticates and sees full state
   6. new pairing is refused while a lock is active (no mid-lock self-pair)
   7. authenticated unlock tombstone propagates and persists (#8 regression)
+  10. unauthenticated partner commands (addKey/arm/begin/redeem) are refused
+      and no partner key is registered (inbound write-path gate)
+  11. partner rearm behind a forward-stamped release stamps strictly upward
+      (prev + 1), so a wall-clock regression can't wedge the rearm forever
 
 How to run:
 
@@ -73,9 +77,9 @@ def check(ok, label, extra=""):
         FAIL += 1
 
 
-def conn():
+def conn(sock=SOCKET):
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.connect("\0" + SOCKET)
+    s.connect("\0" + sock)
     s.settimeout(5)
     return s
 
@@ -117,9 +121,9 @@ def sync(lock_state):
     s.close()
 
 
-def paired_conn(token):
+def paired_conn(token, sock=SOCKET):
     """Open a conn and authenticate it with a known pairing token."""
-    s = conn()
+    s = conn(sock)
     recv(s)  # redacted greeting
     send(s, {"type": "hello", "v": 2, "extVersion": "0.6.0", "browser": "chrome",
              "extensionId": EXTENSION_ID, "pairing": token})
@@ -135,7 +139,7 @@ def now_ms():
     return int(time.time() * 1000)
 
 
-def wait_for_listener(proc, stderr_log, timeout_s=10.0):
+def wait_for_listener(proc, stderr_log, timeout_s=10.0, sock=SOCKET):
     """Poll until the scratch socket answers (or the daemon dies trying)."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
@@ -143,7 +147,7 @@ def wait_for_listener(proc, stderr_log, timeout_s=10.0):
             tail = Path(stderr_log).read_text(errors="replace")[-2000:]
             sys.exit(f"daemon exited during startup (code {proc.returncode}):\n{tail}")
         try:
-            s = conn()
+            s = conn(sock)
             s.close()
             return
         except OSError:
@@ -264,6 +268,125 @@ try:
     check(disk.get("passwordHash") is None and disk.get("passwordTs", 0) > 0,
           "paired unlock tombstone accepted + persisted (no re-arm loop)",
           f"ts={disk.get('passwordTs')}")
+
+    print("=== 10. unauthenticated partner commands refused (write-path gate) ===")
+    # Outbound frames already redact partner state for anonymous peers; the
+    # four inbound partner commands must be gated the same way — any same-uid
+    # IPC client (e.g. the deliberately unauthenticated UI) must not register
+    # a partner key or arm/release a partner gate. The legitimate extension
+    # relay is unaffected: its hello carries a known pairing token, so that
+    # connection IS authenticated. The wire keeps the CLI's renamed tags
+    # (addKey/arm/beginOperation/redeem), not the Rust variant names.
+    partner_cases = [
+        ("addKey", {"type": "addKey", "v": 2, "publicKey": "ab" * 32}),
+        ("arm", {"type": "arm", "v": 2}),
+        ("begin", {"type": "beginOperation", "v": 2}),
+        ("redeem", {"type": "redeem", "v": 2, "token": "SBP1.bogus.sig"}),
+    ]
+    replies = []
+    for name, frame in partner_cases:
+        raw = conn()
+        recv(raw)  # redacted greeting
+        send(raw, frame)
+        replies.append((name, recv(raw)))
+        raw.close()
+    refused = all(
+        reply and reply.get("type") == "error"
+        and "authenticated" in reply.get("message", "")
+        for _, reply in replies
+    )
+    check(refused,
+          "addKey/arm/beginOperation/redeem all refused on an unauthenticated conn",
+          f"replies={[(n, r and r.get('message')) for n, r in replies]}")
+    partner_disk = json.load(open(os.path.join(DATA, "partner-state.json")))
+    check(len(partner_disk.get("publicKeys", [])) == 0,
+          "refused addKey registered no partner key on disk",
+          f"keys={len(partner_disk.get('publicKeys', []))}")
+
+    print("=== 11. partner rearm stamps strictly upward across a regressed rearm ===")
+    # Second scratch daemon. lock-state.json carries the persisted aftermath of
+    # a forward-stamped release (the redeem path stamps max(now, prev + 1),
+    # which can sit ahead of the wall clock) plus a wall-clock regression:
+    # the stored partner stamp says `now + 60s` while partner-state.json holds
+    # an already-activated key. The pre-fix daemon stamped the raw regressed
+    # `now`, its own LWW merge kept the older/higher stamp, and "partner arm
+    # merge did not select the new generation" refused the rearm indefinitely
+    # (and the extension's strictly-upward partner pin would reject it too).
+    # The fix mirrors the redeem path: arm stamps prev + 1.
+    DATA2 = tempfile.mkdtemp(prefix="sb-security2-")
+    SOCKET2 = f"smartblocker-security2-{os.getpid()}"
+    keygen = subprocess.run([DAEMON, "partner-keygen"], capture_output=True,
+                            text=True, check=True).stdout
+    partner_public = dict(line.split("=", 1)
+                          for line in keygen.strip().splitlines())["PUBLIC_KEY_HEX"]
+    seed_now = now_ms()
+    high_stamp = seed_now + 60_000
+    with open(os.path.join(DATA2, "lock-state.json"), "w") as f:
+        json.dump({"partnerArmGeneration": None, "partnerArmUpdatedAt": high_stamp}, f)
+    with open(os.path.join(DATA2, "partner-state.json"), "w") as f:
+        # Already past BOTH activation dimensions (wall + mono-backed proof),
+        # so the key is active immediately at daemon startup — mirroring the
+        # seeded shape used by scripts/e2e-partner-test.mjs.
+        json.dump({
+            "version": 1,
+            "installationId": "11" * 32,
+            "publicKeys": [{
+                "publicKey": partner_public,
+                "addedAtMs": seed_now - 86_400_001,
+                "activeAtMs": seed_now - 1,
+                "addedMonoMs": 0,
+                "activeMonoMs": 86_400_000,
+                "activationObservedAtMs": seed_now - 1,
+                "activationObservedMonoMs": 86_400_000,
+            }],
+            "pendingOperations": [], "spentCodes": [],
+            "lastObservedAtMs": seed_now - 1,
+        }, f)
+    daemon2_log = os.path.join(DATA2, "daemon2-stderr.log")
+    daemon2 = None
+    try:
+        with open(daemon2_log, "wb") as log2_fp:
+            daemon2 = subprocess.Popen(
+                [DAEMON, "run", "--socket", SOCKET2, "--data-dir", DATA2],
+                env={**os.environ, "SMARTBLOCKER_NO_WATCHDOG": "1"},
+                stdout=log2_fp,
+                stderr=log2_fp,
+            )
+        wait_for_listener(daemon2, daemon2_log, sock=SOCKET2)
+        s2, pair_reply = paired_conn("rearm-token", sock=SOCKET2)  # TOFU adoption while unlocked
+        check(pair_reply and pair_reply.get("type") == "companionStatus",
+              "rearm scratch daemon pairs (TOFU, unlocked)")
+        send(s2, {"type": "arm", "v": 2})
+        arm_reply = None
+        # partner_arm broadcast-replies every conn with the new lockStateSync
+        # (sender included) before the commandResult ack arrives.
+        for _ in range(4):
+            frame = recv(s2)
+            if frame is None:
+                break
+            if frame.get("type") == "commandResult":
+                arm_reply = frame
+                break
+        s2.close()
+        accepted = (arm_reply and arm_reply.get("type") == "commandResult"
+                    and arm_reply.get("ok") is True)
+        rearm_disk = json.load(open(os.path.join(DATA2, "lock-state.json")))
+        generation = rearm_disk.get("partnerArmGeneration")
+        stamp = rearm_disk.get("partnerArmUpdatedAt")
+        check(accepted and isinstance(generation, str) and len(generation) == 64,
+              "rearm behind a forward-stamped release succeeds via the authed relay path",
+              f"reply={arm_reply and arm_reply.get('message')}")
+        check(isinstance(stamp, int) and stamp > high_stamp,
+              "rearm stamps strictly upward (prev + 1), never the regressed wall",
+              f"stamp={stamp} prevHigh={high_stamp}")
+    finally:
+        if daemon2 is not None:
+            daemon2.terminate()
+            try:
+                daemon2.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                daemon2.kill()
+        shutil.rmtree(DATA2, ignore_errors=True)
 finally:
     daemon.terminate()
     try:
