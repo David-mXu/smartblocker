@@ -177,13 +177,23 @@ async function getCentroids(labels: string[]): Promise<CentroidCache & { buildMs
   }
 
   // Another call may already be rebuilding the same version — don't duplicate.
+  // A REJECTED in-flight build reads as "no build in progress": its failure
+  // propagates to the builder's own caller (the only path allowed to fail
+  // the classification for that hiccup — classify() then fails closed once);
+  // a waiter instead falls through and starts a fresh build, so one
+  // transient embed/storage failure cannot fail every concurrent
+  // classification that deduped onto it. The fresh attempt stays bounded
+  // (one per waiter): it either succeeds or propagates its own rejection.
   if (centroidsInFlight) {
-    const inFlight = await centroidsInFlight;
-    if (inFlight.version === version) return { ...inFlight, buildMs: 0 };
+    const inFlight = await centroidsInFlight.then(
+      (built) => built,
+      () => null,
+    );
+    if (inFlight && inFlight.version === version) return { ...inFlight, buildMs: 0 };
   }
 
   const t0 = performance.now();
-  centroidsInFlight = (async () => {
+  const buildPromise: Promise<CentroidCache> = (async () => {
     const names: string[] = [];
     const vectors: number[][] = [];
     const seedVectors: number[][][] = [];
@@ -225,15 +235,22 @@ async function getCentroids(labels: string[]): Promise<CentroidCache & { buildMs
     await api.storage.local.set({ centroidCache: built });
     return built;
   })();
+  centroidsInFlight = buildPromise;
+  // Release the dedupe slot no matter how the build settles (success OR
+  // rejection — the finally below runs when the await settles either way, so
+  // a transient failure can never leave a rejected promise parked here for
+  // the SW's lifetime). The identity guard means cleanup of this build can
+  // never clobber a NEWER build a waiter already started because this one's
+  // version went stale mid-flight.
   try {
-    const built = await centroidsInFlight;
+    const built = await buildPromise;
     console.log(
       `[SmartBlocker] built ${built.names.length} centroids (${version}) in ` +
         `${Math.round(performance.now() - t0)}ms`,
     );
     return { ...built, buildMs: performance.now() - t0 };
   } finally {
-    centroidsInFlight = null;
+    if (centroidsInFlight === buildPromise) centroidsInFlight = null;
   }
 }
 
