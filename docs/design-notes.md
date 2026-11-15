@@ -273,17 +273,23 @@ unlocked state is the same height (516px), so nothing jumps. Order:
 2. `#lock-line` amber when locked: "Locked: focus session — 3h 12m left
    (until 4:28 PM)".
 3. **This page** card (focal; `ThisPageCard.tsx`, logic in
-   `popup-model.ts`): host in mono + a status dot + one sentence, e.g.
-   "Allowed — looks like programming…", "Blocked — likely video games",
-   "Blocked by your rule “/cart”", "Matches your channel rule @…",
-   "Always allowed — it's on your allowed sites", "Blocking is paused" +
-   "Turn blocking on", "SmartBlocker doesn't check this kind of page",
-   "Not checked yet". Scores become words: ≥0.85 "very likely", ≥0.65
-   "likely", else "possibly" — never a raw %. Actions: "Should've been
-   blocked" (reveals category + Report), "Always allow this site" /
-   "Remove from allowed". Source: the background's per-tab record
-   (`src/shared/tab-status.ts`, `storage.session`) plus local derivation
-   (allowed list, paused, unsupported URL).
+   `popup-model.ts`): host in mono, then a **two-line stacked verdict**
+   (`#page-verdict`, verified 2026-11-14) — a bold headline paragraph with
+   a colored status dot, and a muted one-sentence detail paragraph beneath
+   it. Headlines are single words or short phrases: "Allowed", "Blocked",
+   "Always allowed", "Blocking is paused", "Not checked", "Not checked
+   yet"; the detail carries the reason: "Possibly video games.",
+   "Looks like programming.", "Matches your rule “/cart”.",
+   "Matches your channel rule @…", "It's on your allowed sites, so it's
+   never checked.", "Nothing is being blocked right now." (paired with the
+   "Turn blocking on" action), "SmartBlocker doesn't check this kind of
+   page.", "Reload the page to check it.". Classifier scores become words
+   inside the detail: ≥0.85 "very likely", ≥0.65 "likely", else "possibly"
+   — never a raw %. Actions: "Should've been blocked" (reveals category +
+   Report), "Always allow this site" / "Remove from allowed". Source: the
+   background's per-tab record (`src/shared/tab-status.ts`,
+   `storage.session`) plus local derivation (allowed list, paused,
+   unsupported URL).
 4. **What are you working on?** focus goal + open-tab context.
 5. **Focus session** (`FocusSession.tsx`): 1h / 4h / 8h radio chips +
    amber "Start focus session" with the consequence inline ("Blocks
@@ -438,6 +444,22 @@ longer exists.
   `#lock-random-verify-btn`, `#lock-random-msg`, `#break-mode`,
   `#break-delay-minutes`, `#break-duration-minutes`, `#break-text-length`,
   `#incognito-warning`.
+- `#allowance` (route label "Breaks"): `#allowance-category` (select),
+  `#allowance-minutes`, `#allowance-openings`, `#allowance-reward-cap`,
+  `#allowance-wait-base`, `#allowance-wait-step`, `#allowance-wait-max`,
+  `#opening-idle`, `#opening-lifetime` (number inputs),
+  `#reward-earning` (switch), `#reward-work-minutes` /
+  `#reward-award-minutes` (rendered only while reward earning is on),
+  `#allowance-save` (the page's one explicit save),
+  `#reward-status-badge` (section aside), `#reward-status`
+  (`role="status"`), `#reward-progress-label`, `#reward-progress-bar`,
+  `#relief-duration`, `#allowance-msg` (`role="status"`). Relief start/end
+  buttons carry text contracts, not ids: "Use allowance", "Open a session",
+  "Pomodoro break (5 min)", "End allowance", "Close opening". Focus-cycle
+  section: `#focus-mode`, `#focus-work-minutes`, `#focus-break-minutes`,
+  `#focus-cycle-count`, `#focus-cycle-start`, `#focus-cycle-cancel`,
+  `#focus-cycle-msg`. Configuration inputs disable while locked; grant
+  usage never shortens a lock.
 - `#schedule`: `#schedule-list` (`.schedule-row`, `.day-label`,
   `.schedule-remove`, `.schedule-duplicate` with
   `#schedule-duplicate-<rule id>`), `#schedule-add`, `#schedule-save`,
@@ -456,6 +478,11 @@ longer exists.
   `sb-notify:break-end`, `sb-notify:allowance-low`; OS notification ids:
   `smartblocker-notify-schedule-start`, `…-break-end`, `…-allowance-low`
   (no sound; `silent: true`).
+- `#preferences`: `#first-day-of-week` (Select: Sunday / Monday),
+  `#hour24-toggle` (switch), `#preferences-preview` (days + 9:00–17:00
+  sample range, rendered in the chosen format; includes an `sr-only`
+  text equivalent). Display-only; autosaves; both controls disable while
+  locked.
 - `#usage`: `#usage-pages-silenced`, `#usage-override-rate` (dash for an empty
   denominator), `#usage-active-time`, `#usage-protection-coverage`,
   `#usage-protected-time`, `#usage-unprotected-time`, `#usage-locked-time`,

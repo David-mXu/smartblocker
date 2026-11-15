@@ -386,8 +386,13 @@ Commit and push when appropriate.
   `pages/*`, `welcome/*`) — sidebar settings, ONE page at a time via hash
   routes: `#dashboard` (read-only Now / Next / Relief plus today's focus-hours
   and category timeline), `#blocking` (switch, strictness presets, categories,
-  history review), `#sites` (`ListEditor` Always allow / Always block), `#focus`,
-  `#locks` (+ incognito-access warning), `#schedule` (focus hours with an
+  history review), `#profiles` (named settings snapshots: Activate /
+  Duplicate / Rename / two-step Delete, active profile's desktop apps and
+  connection status), `#sites` (`ListEditor` Always allow / Always block), `#focus`,
+  `#locks` (+ incognito-access warning + "Accountability partner" section),
+  `#allowance` (Breaks & allowance: per-category daily minutes/openings/
+  reward earning/waiting escalation, live reward status + progress bar,
+  relief requests, Pomodoro focus-cycle section), `#schedule` (focus hours with an
   optional per-rule settings-lock lead), `#notifications` (silent reminder
   toggles + minute leads), `#preferences` (display-only first day of week +
   24-hour time), `#usage`
