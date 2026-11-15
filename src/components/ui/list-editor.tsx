@@ -20,8 +20,9 @@ export interface ListEditorProps {
   items: string[];
   onChange: (next: string[]) => void;
   /** 'domain' normalizes pasted URLs to hosts; 'keyword' keeps substrings;
-   *  'channel' normalizes YouTube handles (@ optional, stored lowercase). */
-  mode: 'domain' | 'keyword' | 'channel';
+   *  'channel' normalizes YouTube handles (@ optional, stored lowercase);
+   *  'title' keeps title patterns and rejects risky wildcard shapes. */
+  mode: 'domain' | 'keyword' | 'title' | 'channel';
   /** Accessible name of the add field, e.g. "Add an allowed site". */
   inputLabel: string;
   placeholder?: string;

@@ -261,9 +261,52 @@ function extractYouTubeVideoId(rawUrl: string): string | null {
   return null;
 }
 
+// oEmbed quota (hostile-page pump guard). The resolver is opt-in
+// (settings.resolveEmbedTitles, default OFF), but a hostile page could embed
+// placeholder-titled YouTube iframes with ROTATING distinct video IDs: the
+// 300-entry cache is keyed by ID so rotation defeats it, and every sanitizer
+// re-scan queues up to 20 more lookups — a fetch pump (latency bandit + a
+// metadata-egress amplifier to www.youtube.com). Two bounds, both enforced
+// BEFORE the fetch (cache hits and shared in-flight results never consume
+// quota):
+//   1. Per-tab, reset at every top-level navigation (arm() bumps
+//      navGeneration = a new document generation; sub-frame loads and SERP
+//      re-scans stay inside the same top-document budget). Residual: a page
+//      can history.pushState to re-arm and reset its own budget —
+//   2. ...which the rolling one-hour window below bounds for the whole
+//      service worker. Exhaustion is indistinguishable from a failed lookup:
+//      the resolver returns null and callers fall back to DOM/URL titles
+//      exactly as they do for a dead oEmbed endpoint — no fetch, no error,
+//      no observable difference for the hostile page.
+const OEMBED_FETCHES_PER_DOCUMENT = 25;
+const OEMBED_GLOBAL_WINDOW_MS = 60 * 60 * 1000;
+const OEMBED_GLOBAL_WINDOW_CAP = 500;
+const oembedFetchesPerTab = new Map<number, number>();
+let oembedWindowStart = 0;
+let oembedWindowCount = 0;
+
+/** Consume one oEmbed fetch slot for `tabId`'s current document generation
+ *  (plus the SW-lifetime rolling window). False = quota exhausted: the
+ *  caller must behave exactly like a failed lookup (return null). */
+function grantOembedFetch(tabId: number | undefined): boolean {
+  const now = Date.now();
+  if (now - oembedWindowStart >= OEMBED_GLOBAL_WINDOW_MS) {
+    oembedWindowStart = now;
+    oembedWindowCount = 0;
+  }
+  if (oembedWindowCount >= OEMBED_GLOBAL_WINDOW_CAP) return false;
+  if (tabId !== undefined) {
+    const used = oembedFetchesPerTab.get(tabId) ?? 0;
+    if (used >= OEMBED_FETCHES_PER_DOCUMENT) return false;
+    oembedFetchesPerTab.set(tabId, used + 1);
+  }
+  oembedWindowCount++;
+  return true;
+}
+
 async function resolveYouTubeMeta(
   videoId: string,
-  source: { privacyPreserving: boolean },
+  source: { privacyPreserving: boolean; tabId?: number },
 ): Promise<{ title: string; author: string } | null> {
   // youtube-nocookie embeds and lite-youtube-style privacy facades exist
   // precisely so the page never talks to YouTube's servers — resolving
@@ -279,6 +322,9 @@ async function resolveYouTubeMeta(
   if (cached) return cached;
   const inflight = ytOembedInFlight.get(videoId);
   if (inflight) return inflight;
+  // Pump guard: over the per-document / rolling-window budget this is
+  // identical to any other unresolvable ID (null, no fetch, no error).
+  if (!grantOembedFetch(source.tabId)) return null;
 
   const task = (async () => {
     try {
@@ -392,6 +438,7 @@ export async function evaluateSubItems(
     if (ytId && (!title || /^youtube video player$/i.test(title))) {
       const ytMeta = await resolveYouTubeMeta(ytId, {
         privacyPreserving: isPrivacyPreservingEmbed(item),
+        tabId: senderTabId,
       });
       if (ytMeta) {
         title = cleanTitle(ytMeta.title) ?? ytMeta.title;
@@ -635,6 +682,9 @@ function clearTabTimers(tabId: number): void {
 function arm(tabId: number, url: string) {
   clearSubFrameStateForTab(tabId);
   clearTabTimers(tabId);
+  // New top-level document generation: the per-tab oEmbed resolution budget
+  // (resolveYouTubeMeta quota) starts fresh with it.
+  oembedFetchesPerTab.delete(tabId);
   if (isClassifiableUrl(url)) {
     armedAt.set(tabId, Date.now());
     armedUrl.set(tabId, url);
@@ -933,6 +983,7 @@ async function onSubFrame(
       if (ytId && !title) {
         const ytMeta = await resolveYouTubeMeta(ytId, {
           privacyPreserving: /(?:^|\.)youtube-nocookie\.com$/i.test(embedHost),
+          tabId,
         });
         if (ytMeta) {
           ytTitle = cleanTitle(ytMeta.title) ?? ytMeta.title;
@@ -1925,6 +1976,7 @@ export function initBlocker() {
     inFlightKey.delete(tabId);
     navGeneration.delete(tabId);
     serpTitleGeneration.delete(tabId);
+    oembedFetchesPerTab.delete(tabId);
     clearSubFrameStateForTab(tabId);
     void clearTabStatus(tabId);
   });

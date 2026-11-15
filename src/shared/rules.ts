@@ -114,8 +114,46 @@ export function matchChannel(
 //      would match every title — a footgun the compiler refuses).
 // ---------------------------------------------------------------------------
 
+/**
+ * Upper bound on cached compiled title rules. matchTitleRule runs for every
+ * title check on every armed tab, so without a cache each rule would be
+ * re-compiled (normalized + split + escaped + `new RegExp`) on every single
+ * check, and a pathological stored rule would pay its backtracking risk on
+ * every title instead of once per compile.
+ */
+export const TITLE_RULE_CACHE_MAX = 256;
+/** Authoring guard: max `*` gaps a NEW rule may use (see normalizeTitleRule). */
+export const TITLE_RULE_MAX_GAPS = 8;
+
+// Module-level Map keyed by the raw rule text, insertion-ordered so a delete
+// + re-set on hit gives LRU refresh and `keys().next()` gives the victim for
+// eviction. Rules are stateless (no /g flag, so re.test has no lastIndex
+// hazard), so sharing one RegExp object across calls is safe. The cache is
+// per-module-instance: when the MV3 service worker is reaped the cache dies
+// with it and the first check per rule recompiles (sub-millisecond) —
+// correctness never depends on it. Compiled nulls (invalid rules) are cached
+// too, so a garbage stored entry is not re-normalized on every title check.
+const titleRuleCache = new Map<string, RegExp | null>();
+
 export function compileTitleRule(rule: string): RegExp | null {
   if (typeof rule !== 'string') return null;
+  if (titleRuleCache.has(rule)) {
+    const cached = titleRuleCache.get(rule) as RegExp | null;
+    // LRU: re-insert to move this key to the back of the eviction order.
+    titleRuleCache.delete(rule);
+    titleRuleCache.set(rule, cached);
+    return cached;
+  }
+  const compiled = compileTitleRuleUncached(rule);
+  titleRuleCache.set(rule, compiled);
+  if (titleRuleCache.size > TITLE_RULE_CACHE_MAX) {
+    const oldest = titleRuleCache.keys().next().value;
+    if (oldest !== undefined) titleRuleCache.delete(oldest);
+  }
+  return compiled;
+}
+
+function compileTitleRuleUncached(rule: string): RegExp | null {
   const norm = normalizeForTitleRule(rule);
   if (!norm) return null;
   // Consecutive `*`s are one wildcard. Split on star runs and trim each part:
@@ -146,6 +184,59 @@ export function matchTitleRule(title: string | null | undefined, rules: string[]
     if (re && re.test(haystack)) return raw.trim();
   }
   return null;
+}
+
+/**
+ * Authoring-time guard for NEW title rules, callable by the options editors
+ * (domains.ts mergeEntries mode 'title', keyed through this like channel
+ * entries go through normalizeChannelHandle).
+ *
+ * The compiler escapes metachars, so a rule can never inject regex — but a
+ * USER-AUTHORED rule like "a*a*a*a*a*a*b" joined with [\s\S]* against an
+ * attacker-chosen title is an exponential-backtracking footgun inside
+ * re.test, stalling the scanner on the page that owns the title. The guard
+ * refuses structurally risky shapes at entry time:
+ *
+ *   - at most TITLE_RULE_MAX_GAPS wildcard gaps (each gap doubles the
+ *     worst-case backtracking work; 8 keeps the fan-in trivially bounded),
+ *   - at least one literal run of >= 2 non-space characters (single-char
+ *     literals are both the ReDoS building block and useless filters).
+ *
+ * EXISTING stored rules are untouched: matchTitleRule/compileTitleRule keep
+ * evaluating anything they already accepted (the compile cache makes even a
+ * pathological stored rule cost its compile once). This function only decides
+ * what may be ADDED from the editor UI.
+ *
+ * Canonicalization matches normalizeKeyword (domains.ts), which previously
+ * validated these entries: trim + lowercase + whitespace collapse.
+ */
+export function normalizeTitleRule(input: string): NormalizeResult {
+  const value = input.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!value) return { ok: false, error: 'Enter a title pattern, like minecraft*speedrun' };
+  if (value.length < 3) {
+    return { ok: false, error: 'Use at least 3 characters so it doesn’t block everything' };
+  }
+  const gaps = (value.match(/\*+/g) ?? []).length;
+  if (gaps > TITLE_RULE_MAX_GAPS) {
+    return {
+      ok: false,
+      error: `"${value}" uses ${gaps} * wildcards — keep it to ${TITLE_RULE_MAX_GAPS} or fewer so matching stays fast`,
+    };
+  }
+  const parts = value
+    .split(/\*+/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+  if (parts.length === 0) {
+    return { ok: false, error: 'Add some text to match — a * on its own would block every page' };
+  }
+  if (!parts.some((p) => p.replace(/\s/g, '').length >= 2)) {
+    return {
+      ok: false,
+      error: `"${value}" needs at least one run of 2 or more letters, like "minecraft*speedrun"`,
+    };
+  }
+  return { ok: true, value };
 }
 
 /**

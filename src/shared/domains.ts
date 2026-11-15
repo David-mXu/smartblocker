@@ -12,8 +12,12 @@
  *   trimmed + lowercased — "/cart" and "black friday" are valid entries.
  * - Channel entries (the YouTube channel rules) are HANDLES: the leading @ is
  *   optional, stored lowercase (rules.ts normalizeChannelHandle).
+ * - Title-pattern entries are TITLE RULES with optional * gaps (rules.ts
+ *   matchTitleRule); normalizeTitleRule keeps their canonical form and
+ *   refuses structurally risky shapes (too many wildcard gaps, single-letter
+ *   literals) at entry time — stored rules keep evaluating.
  */
-import { normalizeChannelHandle } from './rules.ts';
+import { normalizeChannelHandle, normalizeTitleRule } from './rules.ts';
 import { isValidWildcardWhitelistEntry } from './titles.ts';
 
 export type NormalizeResult = { ok: true; value: string } | { ok: false; error: string };
@@ -57,11 +61,14 @@ export function normalizeKeyword(input: string): NormalizeResult {
 /**
  * Split pasted/typed text into candidate entries: newlines and commas always
  * separate; for domain and channel lists whitespace does too (domains and
- * handles never contain it), while keyword lists keep inner spaces
- * ("black friday").
+ * handles never contain it), while keyword and title lists keep inner spaces
+ * ("black friday", "minecraft * speedrun").
  */
-export function splitEntries(text: string, mode: 'domain' | 'keyword' | 'channel'): string[] {
-  const sep = mode === 'keyword' ? /[\n,;]+/ : /[\n,;\s]+/;
+export function splitEntries(
+  text: string,
+  mode: 'domain' | 'keyword' | 'title' | 'channel',
+): string[] {
+  const sep = mode === 'keyword' || mode === 'title' ? /[\n,;]+/ : /[\n,;\s]+/;
   return text
     .split(sep)
     .map((s) => s.trim())
@@ -79,10 +86,16 @@ export interface MergeResult {
 export function mergeEntries(
   existing: string[],
   inputs: string[],
-  mode: 'domain' | 'keyword' | 'channel',
+  mode: 'domain' | 'keyword' | 'title' | 'channel',
 ): MergeResult {
   const norm =
-    mode === 'domain' ? normalizeDomain : mode === 'channel' ? normalizeChannelHandle : normalizeKeyword;
+    mode === 'domain'
+      ? normalizeDomain
+      : mode === 'channel'
+        ? normalizeChannelHandle
+        : mode === 'title'
+          ? normalizeTitleRule
+          : normalizeKeyword;
   const seen = new Set(existing.map((e) => e.toLowerCase()));
   const items = [...existing];
   const added: string[] = [];

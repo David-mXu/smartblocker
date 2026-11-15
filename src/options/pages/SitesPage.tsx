@@ -128,7 +128,7 @@ export function SitesPage({ state }: { state: OptionsState }) {
               <div className="px-4 py-3.5">
                 <ListEditor
                   id="title-rules"
-                  mode="keyword"
+                  mode="title"
                   items={settings.titleRules}
                   onChange={(next) => void save({ titleRules: next })}
                   inputLabel="Add a title pattern"

@@ -14,6 +14,9 @@ import {
   matchChannel,
   matchTitleRule,
   normalizeChannelHandle,
+  normalizeTitleRule,
+  TITLE_RULE_CACHE_MAX,
+  TITLE_RULE_MAX_GAPS,
 } from '../src/shared/rules.ts';
 import { decideBlock, EVAL_SETTINGS } from './lib/eval-harness.mjs';
 import { effectiveBlockScore, shouldBlockClassifierVerdict } from '../src/shared/prototypes.ts';
@@ -151,6 +154,107 @@ test('first matching rule wins and returns its trimmed raw text', () => {
 });
 test('rules that fail to compile are skipped, not fatal', () => {
   assert.equal(matchTitleRule('game over', ['*', 'over']), 'over');
+});
+
+// --- compile cache (perf + ReDoS: rules compiled once, not per title check) ---
+// matchTitleRule used to recompile every rule RegExp on EVERY title check —
+// the cache makes repeated checks return the same compiled object.
+test('compile cache: repeated compiles of one rule return the SAME RegExp object', () => {
+  const first = compileTitleRule('cache*probe');
+  const again = compileTitleRule('cache*probe');
+  assert.ok(first instanceof RegExp);
+  assert.equal(first, again); // strict identity — a cache hit, not a recompile
+});
+test('compile cache: repeated matchTitleRule calls keep matching identically', () => {
+  const rules = ['minecraft*speedrun', 'world of warcraft', 'a*b'];
+  const t = 'Minecraft hardcore — any% speedrun attempts';
+  const r1 = matchTitleRule(t, rules);
+  const r2 = matchTitleRule(t, rules);
+  assert.equal(r1, 'minecraft*speedrun');
+  assert.equal(r2, r1);
+});
+test('compile cache: shared cached RegExp is stateless (no /g lastIndex hazard)', () => {
+  const re = compileTitleRule('state*less');
+  assert.equal(re.test('state of less'), true);
+  assert.equal(re.lastIndex, 0);
+  assert.equal(re.test('state of less'), true); // a /g flag would strand it at the end
+});
+test('compile cache: LRU refresh keeps a recently used rule alive across eviction pressure', () => {
+  const mark = 'lru*probe';
+  compileTitleRule(mark);
+  for (let i = 0; i < TITLE_RULE_CACHE_MAX - 1; i++) compileTitleRule(`lrufill${i}*x`);
+  const refreshed = compileTitleRule(mark); // LRU-reinserted: now the newest entry
+  for (let i = 0; i < 5; i++) compileTitleRule(`lrufillmore${i}*x`);
+  assert.equal(compileTitleRule(mark), refreshed); // still the cached object
+});
+test('compile cache: eviction at the cap preserves matching semantics byte-for-byte', () => {
+  const re1 = compileTitleRule('evict*probe');
+  assert.ok(re1 instanceof RegExp);
+  // Push TITLE_RULE_CACHE_MAX distinct rules through the cache so 'evict*probe'
+  // ages past the back of the LRU and is evicted.
+  for (let i = 0; i < TITLE_RULE_CACHE_MAX; i++) compileTitleRule(`evictfill${i}*x`);
+  const re2 = compileTitleRule('evict*probe');
+  assert.notEqual(re1, re2); // recompiled — the old object was evicted
+  assert.equal(re2.test('evict this probe'), true);
+  assert.equal(re2.test('evict nothing alike'), false);
+});
+test('compile cache: invalid rules stay null through the cache', () => {
+  assert.equal(compileTitleRule('*'), null);
+  assert.equal(compileTitleRule('*'), null); // cached null, still null
+  assert.equal(matchTitleRule('anything', ['*']), null);
+});
+
+// --- authoring guard (normalizeTitleRule) — refuses structurally risky NEW
+// rules; stored rules are untouched and keep evaluating through the cache.
+const gapRule = (n) => Array.from({ length: n + 1 }, () => 'ab').join('*'); // n star gaps
+test('guard: rules within the gap cap are accepted (7 and 8 gaps)', () => {
+  assert.equal(gapRule(7).split('*').length - 1, 7);
+  assert.deepEqual(normalizeTitleRule(gapRule(7)), { ok: true, value: gapRule(7) });
+  assert.deepEqual(normalizeTitleRule(gapRule(8)), { ok: true, value: gapRule(8) });
+  assert.equal(8, TITLE_RULE_MAX_GAPS); // boundary constant sanity
+});
+test('guard: rules over the gap cap are rejected with an actionable message', () => {
+  const r = normalizeTitleRule(gapRule(9));
+  assert.equal(r.ok, false);
+  assert.match(r.error, /\*/); // names the wildcard as the problem
+  assert.match(r.error, /8/); // states the actual limit
+});
+test('guard: single-character-literal-only rules are rejected', () => {
+  for (const risky of ['a*b', '*a*', '**a*b**', 'a* b *c']) {
+    const r = normalizeTitleRule(risky);
+    assert.equal(r.ok, false, `expected reject: ${risky}`);
+    assert.match(r.error, /2 or more letters/);
+  }
+});
+test('guard: star-only and too-short rules are rejected', () => {
+  assert.equal(normalizeTitleRule('*').ok, false);
+  assert.equal(normalizeTitleRule('* * *').ok, false); // star runs, no literals
+  assert.equal(normalizeTitleRule('ab').ok, false); // keep normalizeKeyword's 3-char floor
+});
+test('guard: sane rules pass with the canonical stored form', () => {
+  assert.deepEqual(normalizeTitleRule('  MineCraft  *SpeedRun '), {
+    ok: true,
+    value: 'minecraft *speedrun',
+  });
+  assert.deepEqual(normalizeTitleRule('world of warcraft'), {
+    ok: true,
+    value: 'world of warcraft',
+  });
+});
+test('guard is authoring-side only: stored risky rules still evaluate identically', () => {
+  // 9 gaps + single-char literals — refused at entry, but a stored rule with
+  // these shapes keeps matching (cache makes the compile cost once).
+  const nine = gapRule(9);
+  const title = 'xx ' + 'ab '.repeat(10) + 'yy';
+  assert.equal(matchTitleRule(title, [nine]), nine);
+  assert.equal(matchTitleRule(title, [nine]), nine); // same verdict through the cache
+  assert.equal(matchTitleRule('a big b', ['a*b']), 'a*b'); // legacy single-char rule stored
+});
+test('existing sane rules match byte-identically through the cache', () => {
+  assert.equal(matchTitleRule('Fortnite Battle Pass', ['battle pass']), 'battle pass');
+  assert.equal(matchTitleRule('Minecraft - epic 100 day speedrun', ['minecraft*speedrun']), 'minecraft*speedrun');
+  assert.equal(matchTitleRule('speedrun then minecraft', ['minecraft*speedrun']), null);
+  assert.equal(matchTitleRule('lofi beats - YouTube', ['*lofi']), '*lofi');
 });
 
 // ===========================================================================
