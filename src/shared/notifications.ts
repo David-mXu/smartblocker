@@ -22,6 +22,7 @@
 import {
   EMPTY_LOCK_STATE,
   MAX_BREAK_MS,
+  isInScheduleWindow,
   validateCategoryScheduleRule,
   validateScheduleRule,
 } from './lock-math.ts';
@@ -388,18 +389,24 @@ function deriveScheduleCandidate(
   for (let hop = 0; hop < maxHops; hop++) {
     const start = nextScheduleStart(rules, cursor);
     if (start === null || start <= cursor) return null;
-    // A rule contributed to this start iff its own next start from the same
-    // cursor is this instant. Grouping lets overlapping rules share one
-    // reminder instead of firing one toast per rule id.
-    const contributors = entries.filter(
-      (entry) => nextScheduleStart([entry.rule], cursor) === start,
+    // Attribute by COVERAGE at the start instant: a rule that is in-window
+    // then is genuinely part of this lock. (Comparing each rule's own next
+    // start fails when the combined list skips a start already inside an
+    // active stack — the per-rule call doesn't know the other windows — and
+    // the old fallback then labelled every category.) In-window rules also
+    // include the one whose window begins exactly at `start` (half-open).
+    const startDate = new Date(start);
+    const contributors = entries.filter((entry) =>
+      isInScheduleWindow([entry.rule], startDate),
     );
     if (!fired.has(scheduleDedupeKey(start))) {
-      return buildScheduleEvent(
-        start,
-        leadMinutes,
-        contributors.length > 0 ? contributors : entries,
-      );
+      // Attribute ONLY real contributors. Falling back to every entry (the
+      // old behavior) labelled an unrelated category's window whenever no
+      // single rule's next start matched exactly (e.g. a currently-active
+      // rule shifting the combined start). With none attributable, the
+      // event goes out un-categorized — an honest generic message beats a
+      // confidently wrong one (2026-11-21 audit).
+      return buildScheduleEvent(start, leadMinutes, contributors);
     }
     cursor = start;
   }

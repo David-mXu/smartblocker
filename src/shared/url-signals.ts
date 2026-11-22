@@ -234,3 +234,48 @@ export function applyUrlSignals(
         : meta.context,
   };
 }
+
+// ── YouTube surfaces (shared with the offline evaluator) ────────────────────
+// The runtime makes a deliberate page-level policy call: browsing/discovery
+// surfaces are ALLOWED and their video cards are classified individually by
+// the sanitizer, while playback pages are classified normally. The evaluator
+// must mirror this or its "must-block" numbers silently count a decision the
+// product never makes (2026-11-21: 37 committed cases were affected).
+
+function youtubeHost(url: string): string | null {
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^(?:www|m|music)\./, '');
+  } catch {
+    return null;
+  }
+}
+
+/** A real video playback page (`/watch`, `/shorts/`, `/live/`, `/embed/`, `/v/`). */
+export function isYouTubeVideoPage(url: string): boolean {
+  const h = youtubeHost(url);
+  if (h !== 'youtube.com' && h !== 'youtube-nocookie.com') return false;
+  try {
+    return /^\/(?:watch|shorts\/|embed\/|live\/|v\/)/i.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
+/** True when `url` is a YouTube browsing/discovery surface (homepage `/`,
+ *  channel pages `/@...`, `/channel/...`, `/c/...`, `/user/...`, feeds
+ *  `/feed/...`, playlists `/playlist`, or `/results` search pages) rather than
+ *  an actual video playback page. Mirrors `blocker.ts`'s pre-inference
+ *  exemption — keep both call sites on this one implementation. */
+export function isYouTubeBrowsingSurface(url: string): boolean {
+  if (youtubeHost(url) !== 'youtube.com') return false;
+  if (isYouTubeVideoPage(url)) return false;
+  try {
+    const u = new URL(url);
+    return (
+      u.pathname === '/' ||
+      /^\/(?:@|channel\/|c\/|user\/|feed\/|results\b|playlist\b)/i.test(u.pathname)
+    );
+  } catch {
+    return false;
+  }
+}

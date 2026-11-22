@@ -30,8 +30,10 @@
  *  1. forcing the ONE-TIME cold rebuild (~2.5s) when the persisted cache
  *     shape changes — old shape = no `seedHashes`, which could otherwise
  *     only be detected per-rebuild;
- *  2. recording which cache format is on disk, e.g. after a model-REVISION
- *     bump (see config.ts EMBED_MODEL_REVISION note).
+ *  2. recording which cache format is on disk. A model-REVISION bump is
+ *     gated separately by the `modelId`/`modelRevision` fields classifier.ts
+ *     writes next to the vectors (added 2026-11-21) — the format tag alone
+ *     never saw the revision, so a bump used to reuse old-model vectors.
  * Bump `:mp1` -> ':mp2' here when the persisted structure changes. */
 export const CENTROID_CACHE_FORMAT = ':mp2';
 

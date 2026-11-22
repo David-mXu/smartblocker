@@ -76,6 +76,9 @@ writeFileSync(
 
 // Stale SW script cache (same hazard as the main e2e).
 rmSync(resolve(PROFILE, 'Default/Service Worker/ScriptCache'), { recursive: true, force: true });
+// A killed Chromium can leave a broken SW registration; drop the
+// registration DB too (CacheStorage = the model stays).
+rmSync(resolve(PROFILE, 'Default/Service Worker/Database'), { recursive: true, force: true });
 
 const children = [];
 function startDaemon() {

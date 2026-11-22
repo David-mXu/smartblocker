@@ -232,7 +232,9 @@ function normalizeListEntry(value: string): string {
 }
 
 function normalizeAppBlocklistTimestamp(value: unknown): number {
-  return safeTimestamp(value, 0);
+  // Never trust a future stamp: it would make every later real edit (and the
+  // companion's clamp-free comparison) lose the LWW race forever.
+  return Math.min(safeTimestamp(value, 0), Date.now());
 }
 
 /** v1 → v2 whitelist migration (moved from settings.ts so profiles and the

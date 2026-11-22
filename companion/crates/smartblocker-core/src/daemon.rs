@@ -557,6 +557,12 @@ impl Shared {
                 sanitized.random_text_updated_at = current.random_text_updated_at;
                 sanitized.schedules = current.schedules.clone();
                 sanitized.schedules_updated_at = current.schedules_updated_at;
+                // Category-scoped schedules are the same ordered-operation
+                // class: an anonymous peer could otherwise replace the list
+                // (or its stamp) and delete an INACTIVE window before it ever
+                // fires. Pin both, like the legacy pair above.
+                sanitized.category_schedules = current.category_schedules.clone();
+                sanitized.category_schedules_updated_at = current.category_schedules_updated_at;
             }
             let merged = merge_lock_states(&current, &sanitized, self.wall_ms());
             if merged == *current {
@@ -877,9 +883,22 @@ impl Shared {
             return;
         }
         let incoming = crate::apps::normalize_app_blocklist(&apps);
-        let stamp = updated_at.max(0).min(MAX_JS_SAFE_INTEGER as i64);
+        // A far-future stamp (a corrupted/imported backup can carry 9e15)
+        // would freeze cross-browser app-list sync forever: every honest
+        // edit at now loses. Clamp to our own clock, the same policy as
+        // passwordTs/schedulesUpdatedAt elsewhere in this file.
+        let now_wall = self.wall_ms().max(0);
+        let stamp = updated_at
+            .max(0)
+            .min(now_wall)
+            .min(MAX_JS_SAFE_INTEGER as i64);
         let mut config = self.store.load_config();
-        let current_stamp = config.app_blocklist_updated_at.max(0);
+        // Heal a previously persisted future stamp the same way.
+        let current_stamp = config
+            .app_blocklist_updated_at
+            .max(0)
+            .min(now_wall)
+            .min(MAX_JS_SAFE_INTEGER as i64);
         let mut changed = false;
         if stamp >= current_stamp {
             let locked = {
@@ -1954,7 +1973,16 @@ fn apply_clock_compensation(
     let shifted = {
         let mut current = shared.lock_state.lock().unwrap();
         let mut next = current.clone();
-        for slot in [&mut next.timer_until, &mut next.frozen_until] {
+        // delay_until is a wall-clock unlock deadline like the other two:
+        // leaving it un-shifted made the daemon report a delay as ready
+        // immediately after a forward jump (the extension normally masks it,
+        // but a disconnected browser or older peer would not). Some(0) means
+        // "armed, still waiting" and is inert under the > test.
+        for slot in [
+            &mut next.timer_until,
+            &mut next.frozen_until,
+            &mut next.delay_until,
+        ] {
             if matches!(*slot, Some(t) if t > reference_wall_ms) {
                 *slot = slot.map(|t| t + shift_ms);
             }
@@ -3090,6 +3118,7 @@ pub fn spawn_daemon(opts: DaemonOptions) -> bool {
 mod tests {
     use super::*;
     use crate::ipc::traits::Listener as _;
+    use crate::lock_math::CategoryScheduleRule;
     use crate::lock_math::ScheduleRule;
     use serde_json::json;
 
@@ -3577,6 +3606,7 @@ mod tests {
         *shared.lock_state.lock().unwrap() = LockState {
             timer_until: Some(now_wall - 5_000), // already over
             frozen_until: Some(now_wall + 600_000),
+            delay_until: Some(now_wall + 120_000), // active delay gate
             ..LockState::default()
         };
         // Sanity: the persisted anchor file must not be touched by shifting —
@@ -3591,6 +3621,11 @@ mod tests {
         let now = shared.lock_state.lock().unwrap().clone();
         assert_eq!(now.timer_until, Some(now_wall - 5_000));
         assert_eq!(now.frozen_until, Some(now_wall + 700_000));
+        assert_eq!(
+            now.delay_until,
+            Some(now_wall + 220_000),
+            "an active delay deadline shifts with the same compensation"
+        );
         assert_eq!(shared.store.load_lock_state(), now);
         let frames = frames_in(&cap);
         assert_eq!(frames.len(), 1);
@@ -3668,6 +3703,44 @@ mod tests {
         );
         assert_eq!(shared.lock_state.lock().unwrap().schedules.len(), 1);
         assert_eq!(shared.lock_state.lock().unwrap().schedules[0].id, "keep");
+
+        // Category-scoped schedules are the same forgeable-stamp class: an
+        // anonymous empty list + fresh stamp must not delete an INACTIVE
+        // scoped window before it fires (2026-11-21 audit).
+        let base2 = shared.lock_state.lock().unwrap().clone();
+        *shared.lock_state.lock().unwrap() = LockState {
+            category_schedules: Some(vec![CategoryScheduleRule {
+                schedule: ScheduleRule {
+                    id: "keep-cat".into(),
+                    label: None,
+                    days: vec![1, 2, 3, 4, 5],
+                    start_minutes: 540,
+                    end_minutes: 1020,
+                    lead_minutes: None,
+                    tz_offset_minutes: None,
+                    tz_name: None,
+                },
+                categories: vec!["video games".into()],
+            }]),
+            category_schedules_updated_at: 100,
+            ..base2
+        };
+        shared.merge_in(
+            &LockState {
+                category_schedules: Some(vec![]),
+                category_schedules_updated_at: 9_999_999,
+                ..LockState::default()
+            },
+            7,
+            false,
+        );
+        let kept = shared.lock_state.lock().unwrap().category_schedules.clone();
+        assert_eq!(kept.as_ref().map(|v| v.len()), Some(1));
+        assert_eq!(
+            kept.unwrap()[0].schedule.id,
+            "keep-cat",
+            "anonymous rewrite must not delete a scoped window"
+        );
 
         // Timer/frozen still merge from anonymous writers (strictening-only).
         shared.merge_in(

@@ -285,6 +285,36 @@ test('overlapping global + category start shares one reminder', () => {
   assert.deepEqual(events[0].categories, ['video games']);
   assert.match(events[0].message, /^Focus hours start at/);
 });
+test('an active unrelated category is not attributed to the next start', () => {
+  // Monday 08:00: "social media" has been running since 07:00 (its start is
+  // in the past); the next upcoming start is video games at 10:00. The old
+  // fallback labelled the reminder with BOTH categories.
+  const social = {
+    id: 'social',
+    days: [MON],
+    startMinutes: 7 * 60,
+    endMinutes: 11 * 60,
+    categories: ['social media and networking'],
+  };
+  const games = {
+    id: 'games',
+    days: [MON, 2],
+    startMinutes: 10 * 60,
+    endMinutes: 10 * 60 + 30,
+    categories: ['video games'],
+  };
+  const result = plan({
+    lockState: { categorySchedules: [social, games] },
+    now: at(2026, 7, 6, 8, 0),
+  });
+  const event = scheduleAlarm(result);
+  assert.ok(event);
+  // Monday 10:00 is skipped because the stack is already continuously locked
+  // (social runs until 11:00); the next real start is Tuesday 10:00.
+  assert.equal(event.eventAt, at(2026, 7, 7, 10, 0));
+  assert.deepEqual(event.categories, ['video games']);
+});
+
 test('overlapping windows skip a start that is already inside the stack', () => {
   const wide = {
     id: 'wide',

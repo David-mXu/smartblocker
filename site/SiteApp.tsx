@@ -116,6 +116,11 @@ export function SiteApp() {
 
   useGSAP(
     () => {
+      // Vestibular safety: honor the OS reduced-motion preference by skipping
+      // every entrance/scrub/pin animation outright (the site stays fully
+      // readable — CSS reveals nothing that motion was expected to show).
+      if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+
       // Hero entrance
       gsap.from('.hero-reveal', {
         y: 28,

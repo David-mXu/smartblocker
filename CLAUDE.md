@@ -22,7 +22,7 @@ default OFF) blocks `<meta name="rating">`-declared pages and `.xxx` hosts.
 Batch 1 of Phase 5 also added **auto-resume** (`resumeMode`/`resumeAt` +
 `resume-enforcer.ts`: re-enable blocking on browser cold-start, at the next
 scheduled-block start, or at a chosen time ≤24h out). **The full
-multi-phase roadmap lives in `ROADMAP.md`.** Implemented through Phase 2.9: user-configurable categories
+multi-phase roadmap lives in `ROADMAP.md`.** Implemented through the Phase 5 parity closeout: user-configurable categories
 + onboarding, richer page signals, the **embedding-prototype classifier**
 (2026-07 bake-off winner — see Model facts), a block screen with a "this is
 actually productive" override, a **feedback loop** (corrections are stored
@@ -137,10 +137,31 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   build:chrome`): real download bytes, corrupt-import rejection, merge and
   confirmed replace applies, lock refusal with no live writes, and pre-restore
   recovery. Writes `docs/audits/assets/2026-11-09-backup.png`.
+- `node scripts/e2e-dashboard-test.mjs` — Now/Next/Relief dashboard suite
+  (run after `npm run build:chrome`): route/default ordering, live lock and
+  expired-timer refresh, schedule lanes, no URL/title leakage, and 390px
+  no-horizontal-scroll. Uses a throwaway `/tmp` profile.
+- `node scripts/e2e-profiles.mjs` — named-profile suite: create/rename/
+  duplicate/activate/delete, policy overlay isolation, and active-profile
+  chip. Rebinds settings, so it owns a throwaway `/tmp` profile; honors
+  `SB_SKIP_BUILD=1`.
+- `node scripts/e2e-schedule-prefs.mjs` — focused schedule lead-in +
+  display-preference + custom-block-message suite (deterministic blocklist
+  matches only — no model download). Uses `.e2e-profile-prefs`.
+- `node scripts/e2e-partner-test.mjs` — accountability-partner enrollment
+  and offline-signed release codes against the real browser flow, plus the
+  24-hour activation delay. Uses throwaway `/tmp` profile + data dir.
+- `node scripts/e2e-reward-test.mjs` — productive-work reward accrual and
+  relief flow (seeds `{enabled,onboarded}` explicitly — blocking defaults
+  OFF). Uses a throwaway `/tmp` profile.
 - `node scripts/rules-test.mjs` — pure unit tests for the deterministic rule
   core: title-rule compiler/matcher + channel rules (`src/shared/rules.ts`,
   same type-stripping constraints), the shared classifier block predicate, and
   proof-of-protection configuration/verdict policy.
+- `node scripts/titles-test.mjs` — pure tests for the title pipeline
+  (`src/shared/titles.ts` `cleanTitle`): suffix stripping, generic/URL
+  rejection, CJK, the 300/512 length bounds, surrogate-safe truncation, and a
+  timing guard proving a page-controlled whitespace flood is linear.
 - `node scripts/wildcards-test.mjs` — pure unit tests for URL/title blocklist
   and whitelist wildcard grammar + legacy normalization, safe allow rejection,
   popup shared-API wiring, and direct serialized-sanitizer matcher parity.
@@ -225,10 +246,11 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   the network (cache URL assertion).
 - `node scripts/e2e-security-blockscreen.mjs` + `python3
   scripts/security-companion-test.py` — the ported red-team PoCs (blockscreen
-  tamper resistance; daemon IPC 9/9 defenses). CI runs both plus
-  `cargo audit` (`.github/workflows/security.yml`); the Playwright extension
-  e2es are deliberately excluded from CI (model download + persistent
-  profiles = flake farm).
+  tamper resistance; daemon IPC 14/14 defenses). `security.yml` runs the
+  companion cargo audit/test pair plus the IPC PoC and `lock-math`; the
+  Playwright extension suites (including the blockscreen one) run in the
+  nightly lane, never in PR CI (model download + persistent profiles = flake
+  farm).
 
 Run typecheck + build + e2e before considering any background change done
 (+ `npm run eval` when anything touching classification changed: seeds,
@@ -501,9 +523,10 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   cleanup delete expired rows, export excludes them, and `POST /v1/delete`
   removes an installId's rows (rate-limited 1/hr; unverifiable-token honest
   weakness documented in wrangler.toml + PRIVACY). NOT part of the extension build;
-  deploy is manual (see wrangler.toml header; set `FEEDBACK_ENDPOINT` after
-  deploying). **Not deployed yet** — `database_id` is still a placeholder and
-  `FEEDBACK_ENDPOINT` is `''`, so no real records flow. Full network
+  deploy is manual, but it IS deployed: `wrangler.toml` carries the real
+  `database_id` and `FEEDBACK_ENDPOINT` is the live worker URL (updated
+  2026-11-21 — earlier notes claiming otherwise were stale). Nothing flows
+  unless the user opts in (`shareFeedback`, default OFF). Full network
   inventory (enforced by the `extension_pages` CSP in `manifests/*`):
   one-time HF model download, opt-in `resolveEmbedTitles` oEmbed lookups
   (default false; never for nocookie/facade sources), and this worker —
@@ -650,7 +673,7 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   programming/science titles sometimes landing in neutral documentation/work
   centroids — harmless for blocking (neutral never blocks), visible in top-1.
 - 2026-07-29 measurement overhaul + `v2` eval slice (121 url-bearing cases,
-  104 grounded by real `--capture` scrapes). Metrics are reported PER SLICE so
+  98 grounded by real `--capture` scrapes; 23 carry `noCapture`). Metrics are reported PER SLICE so
   the v1 numbers above stay directly comparable; `v1` is unchanged at
   **88.8 / 2.1 / 80.5**. New figures: `v2` **83.6% top-1, 0.0% productive FP,
   62.8% must-block recall, 85.8% e2e**; combined (395 cases) **87.4% top-1,

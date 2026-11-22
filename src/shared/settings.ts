@@ -210,12 +210,19 @@ export { migrateProfileLabels as migrateLabels };
 export { migrateProfileWhitelist as migrateWhitelist };
 
 let cache: Settings | null = null;
+/** Bumped on every invalidation. A read that started before a write must not
+ *  install its pre-write result as the cache afterwards ("cache resurrection":
+ *  the SW then serves stale policy until the next write). */
+let cacheEpoch = 0;
 
 // Invalidate the in-memory cache when any context (options page, popup) writes
 // new settings OR activates/edits a named profile, so a long-lived service
 // worker / offscreen doc sees the new effective policy.
 api.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && (changes[STORAGE_KEY] || changes[PROFILES_STORAGE_KEY])) cache = null;
+  if (area === 'local' && (changes[STORAGE_KEY] || changes[PROFILES_STORAGE_KEY])) {
+    cache = null;
+    cacheEpoch++;
+  }
 });
 
 /** Display preferences are presentation only. Sanitizing on READ (and again on
@@ -255,14 +262,18 @@ export async function getDefaultSettings(): Promise<Settings> {
  *  profile's scoped policy replacing Default only for those fields. */
 export async function getSettings(): Promise<Settings> {
   if (cache) return cache;
+  const epoch = cacheEpoch;
   const base = await getDefaultSettings();
   const profiles = await getProfilesState();
   const active =
     profiles.activeProfileId === null
       ? null
       : profiles.profiles.find((profile) => profile.id === profiles.activeProfileId) ?? null;
-  cache = active ? applyProfilePolicy(base, active.policy) : base;
-  return cache;
+  const next = active ? applyProfilePolicy(base, active.policy) : base;
+  // Only cache when nothing invalidated us mid-read; the caller still gets
+  // this read's answer either way.
+  if (epoch === cacheEpoch) cache = next;
+  return next;
 }
 
 function pickPolicyPatch(patch: Partial<Settings>): Partial<ProfilePolicy> {

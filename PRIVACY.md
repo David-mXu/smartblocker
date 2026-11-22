@@ -144,11 +144,14 @@ linked to the old ones. Records contain page titles and hostnames only, so
 what a shared row says about you is limited to "some install corrected the
 model on this page".
 
-**Sharing is not live yet.** The feedback worker is not currently deployed
-(`feedback-worker/wrangler.toml` still has a placeholder `database_id`) and
-the extension ships with `FEEDBACK_ENDPOINT` empty, so nothing is uploaded
-even with the toggle on. This section describes the behavior that will apply
-the day those switches flip.
+**Sharing is live but OFF unless you turn it on.** The feedback worker is
+deployed (`feedback-worker/wrangler.toml` carries its real `database_id`) and
+the extension ships a live `FEEDBACK_ENDPOINT`, so with the *"Share
+corrections"* toggle ON, unsent records are uploaded about once a day. With
+the toggle OFF (the default) nothing is ever sent. Server-side retention is
+90 days (a daily cron plus write-time cleanup delete expired rows), the
+export endpoint is token-protected, and `POST /v1/delete` removes an
+installId's rows. Uploads are bounded per install/day and per IP/day.
 
 Prefer not to flip the toggle but still want to help? Use **Export as JSON**
 and attach the file to a GitHub issue.

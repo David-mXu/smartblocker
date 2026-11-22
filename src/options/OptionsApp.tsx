@@ -144,11 +144,15 @@ export function OptionsApp() {
   const namedActive = state.profiles ? activeProfile(state.profiles) : null;
   const PageComponent = page.Component;
 
+  // Settings not loaded yet (or the load failed): never claim "Blocking on" —
+  // fresh installs are `enabled: false` until onboarding completes.
   const statusPill = lock.locked ? (
     <Badge variant="commit" dot>
       {lock.short}
     </Badge>
-  ) : settings && !settings.enabled ? (
+  ) : !settings ? (
+    <Badge dot>Checking…</Badge>
+  ) : !settings.enabled ? (
     <Badge dot>Paused</Badge>
   ) : (
     <Badge variant="success" dot>
@@ -193,9 +197,11 @@ export function OptionsApp() {
       )}
 
       {/* Lock seal — global, under the header, only while locked. */}
+      {/* Minute-granularity ticks must not re-announce the whole banner. */}
       <div
         id="lock-status"
         role="status"
+        aria-live="off"
         style={{ display: lock.locked ? 'block' : 'none' }}
         className="border-b border-accent/30 bg-accent/10"
       >

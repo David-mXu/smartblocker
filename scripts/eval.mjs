@@ -276,8 +276,30 @@ if (!baseline) {
     console.log(`  REGRESSED  -${regressed.length}`);
     for (const f of regressed) show(f);
   }
-  if (added.length) console.log(`  NEW         ${added.length} case(s) not in baseline`);
-  if (removed.length) console.log(`  GONE        ${removed.length} baseline case(s) no longer present`);
+  // NEW and GONE are gate failures, not footnotes (2026-11-21 audit): adding
+  // failing cases or deleting the hard ones used to print "PASS: no
+  // regressions" and exit 0. Additions that pass are allowed; anything else
+  // needs an explicit --update-baseline, so the baseline keeps telling the
+  // truth about what the gate has actually seen.
+  let addedFailures = 0;
+  let removedCount = 0;
+  if (added.length) {
+    const addedFailing = added.filter((r) => !(decisionOk(r) && top1Ok(r)));
+    addedFailures = addedFailing.length;
+    console.log(
+      `  NEW         ${added.length} case(s) not in baseline` +
+        (addedFailures ? ` — ${addedFailures} FAILING` : ''),
+    );
+    for (const r of addedFailing.slice(0, VERBOSE ? Infinity : 10)) {
+      const exp = Array.isArray(r.expected) ? r.expected.join(' | ') : r.expected;
+      console.log(`      "${r.text.slice(0, 62)}" -> ${r.label} (${r.decision}), expected [${exp}]`);
+    }
+    if (!VERBOSE && addedFailures > 10) console.log(`      ... and ${addedFailures - 10} more (--verbose)`);
+  }
+  if (removed.length) {
+    removedCount = removed.length;
+    console.log(`  GONE        ${removed.length} baseline case(s) no longer present`);
+  }
   if (!fixed.length && !regressed.length && !added.length && !removed.length) {
     console.log('  no per-case changes');
   }
@@ -290,11 +312,19 @@ if (!baseline) {
     );
   }
 
-  if (regressed.length) {
-    console.log(`\nFAIL: ${regressed.length} regression(s). Review them, or accept with --update-baseline.`);
+  if (regressed.length || addedFailures || removedCount) {
+    const parts = [];
+    if (regressed.length) parts.push(`${regressed.length} regression(s)`);
+    if (addedFailures) parts.push(`${addedFailures} failing NEW case(s)`);
+    if (removedCount) parts.push(`${removedCount} case(s) removed from the dataset`);
+    console.log(
+      `\nFAIL: ${parts.join(', ')}. Review, or accept the result with --update-baseline.`,
+    );
     exitCode = 1;
-  } else if (fixed.length) {
-    console.log(`\nPASS: ${fixed.length} case(s) improved, none regressed.`);
+  } else if (fixed.length || added.length) {
+    console.log(
+      `\nPASS: ${fixed.length} case(s) improved, ${added.length} new case(s) all passing, none regressed.`,
+    );
   } else {
     console.log('\nPASS: no regressions.');
   }

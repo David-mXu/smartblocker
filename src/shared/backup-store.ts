@@ -227,17 +227,25 @@ export async function applyBackupText(
     mode,
     text: preText,
   };
-  await api.storage.local.set({ [PRE_RESTORE_STORAGE_KEY]: slot });
 
-  // Re-check immediately before the commit: a lock may have started while
-  // this page was open. The pre-restore slot is not live config, so it is
-  // safe to have captured it already.
+  // Final lock check BEFORE overwriting the previous recovery point: a refused
+  // restore must leave the user's old pre-restore slot intact (it used to be
+  // destroyed by a slot write that preceded this check).
   await assertUnlocked(Date.now());
 
+  // Re-read the lock at COMMIT time. The snapshot above was taken before an
+  // awaited pre-restore write and the second lock check; a timer/password/
+  // frozen lock armed in that window must survive the restore. Writing the
+  // stale snapshot erased it (2026-11-21 audit). Residual: this write still
+  // bypasses lock.ts's serialized queue, so a lock armed in the few
+  // instructions between this read and the set remains theoretically
+  // racy — the window is now milliseconds, not an entire UI round-trip.
+  const latestLock = await getLockState();
   await api.storage.local.set({
+    [PRE_RESTORE_STORAGE_KEY]: slot,
     settings: applied.settings,
     [PROFILES_STORAGE_KEY]: applied.profiles,
-    lockState: applySchedulesToLockState(lockState, applied),
+    lockState: applySchedulesToLockState(latestLock, applied),
   });
 
   const preview = buildBackupPreview(current, parsed.document, mode, options);

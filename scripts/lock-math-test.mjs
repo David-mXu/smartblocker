@@ -342,6 +342,28 @@ test('break operation: duration and total horizon cannot exceed 24h', () => {
   assert.throws(() => makeBreakOperation(NOW, 24 * 3_600_000, 60_000));
 });
 
+// --- schedule structure normalization (2026-11-21 audit) ---
+test('validateScheduleRule requires a bounded non-empty id', () => {
+  assert.match(validateScheduleRule({ ...workdays, id: '' }) ?? '', /IDs/);
+  assert.match(validateScheduleRule({ ...workdays, id: 'x'.repeat(65) }) ?? '', /IDs/);
+  assert.equal(validateScheduleRule(workdays), null);
+});
+test('validateScheduleRule rejects duplicate days at the boundary', () => {
+  assert.match(validateScheduleRule({ ...workdays, days: [1, 1, 2] }) ?? '', /unique/);
+});
+test('sanitizeLockState dedupes duplicate ids and days instead of losing windows', () => {
+  const raw = {
+    schedules: [
+      { id: 'same', days: [1, 1, 2], startMinutes: 540, endMinutes: 600 },
+      { id: 'same', days: [3], startMinutes: 700, endMinutes: 800 },
+      { id: 'other', days: [4], startMinutes: 700, endMinutes: 800 },
+    ],
+  };
+  const out = sanitizeLockState(raw, 1_000, 10_000);
+  assert.deepEqual(out.schedules.map((r) => r.id), ['same', 'other']);
+  assert.deepEqual(out.schedules[0].days, [1, 2]);
+});
+
 // --- cross-language golden fixtures (shared with the Rust companion) ---
 // The same file drives smartblocker-core's cargo tests; a case failing here or
 // there means the TS and Rust lock implementations have drifted apart.

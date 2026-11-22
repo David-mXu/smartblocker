@@ -24,12 +24,18 @@ const B_KEYWORD = 'sb-race-block';
 const B_URL = `https://games.arcade.example/play?mark=${B_KEYWORD}`;
 
 rmSync(resolve(PROFILE, 'Default/Service Worker/ScriptCache'), { recursive: true, force: true });
+// A killed Chromium can leave a broken SW registration; drop the
+// registration DB too (CacheStorage = the model stays).
+rmSync(resolve(PROFILE, 'Default/Service Worker/Database'), { recursive: true, force: true });
 
 async function launchWithServiceWorker() {
   for (let attempt = 1; attempt <= 3; attempt++) {
     const ctx = await chromium.launchPersistentContext(PROFILE, {
       channel: 'chromium',
       headless: true,
+      // A hung profile (a zombie browser from an earlier killed run) can make
+      // launch wait forever; fail fast so the retry can repair the profile.
+      timeout: 60_000,
       args: [`--disable-extensions-except=${EXT_PATH}`, `--load-extension=${EXT_PATH}`],
     });
     let worker = ctx.serviceWorkers()[0];
@@ -86,6 +92,23 @@ try {
 
   await tab.waitForSelector('#smartblocker-overlay', { timeout: 20_000 });
   console.log('PASS page B block screen present right after navigation');
+
+  // Premise check: the race only exists while page A's verdict is STILL in
+  // flight (the centroid rebuild window). On an implausibly fast machine the
+  // old test could pass without ever exercising the race; make that explicit.
+  const aAlreadyResolved = await sw.evaluate(
+    (t) =>
+      chrome.storage.local
+        .get('latencySamples')
+        .then(({ latencySamples = [] }) => latencySamples.some((s) => s.title === t)),
+    A_TITLE,
+  );
+  if (aAlreadyResolved) {
+    console.log('FAIL race premise not met: page A had already resolved before page B blocked');
+    process.exitCode = 1;
+  } else {
+    console.log('PASS page A is still in flight when page B blocks (race window open)');
+  }
 
   // Wait until A's ALLOW verdict actually resolved (logSample fires after the
   // else-branch side effects), then give any would-be teardown time to run.

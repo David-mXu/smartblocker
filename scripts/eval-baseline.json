@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-05T15:13:59.032Z",
+  "generatedAt": "2026-11-22T13:44:39.019Z",
   "config": {
     "modelId": "Xenova/bge-small-en-v1.5",
     "temperature": 0.026,
@@ -9,7 +9,7 @@
   "summary": {
     "top-1 accuracy": 95.42,
     "productive FP rate": 0.37,
-    "must-block recall": 97.58,
+    "must-block recall": 97.57,
     "collateral FP rate": 0,
     "e2e decision accuracy": 98.73
   },
@@ -52,14 +52,14 @@
     "v6": {
       "top-1 accuracy": 95.57,
       "productive FP rate": 0.6,
-      "must-block recall": 98.98,
+      "must-block recall": 98.97,
       "collateral FP rate": 0,
       "e2e decision accuracy": 99.26
     },
     "v7": {
       "top-1 accuracy": 98.02,
       "productive FP rate": 0.29,
-      "must-block recall": 97.4,
+      "must-block recall": 97.39,
       "collateral FP rate": 0,
       "e2e decision accuracy": 98.69
     },
@@ -13670,7 +13670,7 @@
     "https://www.youtube.com/@HonkaiStarRail|Honkai Star Rail Official YouTube": {
       "label": "video games",
       "score": 0.775,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://zzz.hoyoplay.com/|Zenless Zone Zero Official Site": {
       "label": "video games",
@@ -13700,12 +13700,12 @@
     "https://www.youtube.com/@hololive|hololive Official YouTube": {
       "label": "video games",
       "score": 0.7028,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/@Nijisanji|NIJISANJI Official YouTube": {
       "label": "video games",
       "score": 0.7439,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.twitch.tv/twitchdir|Twitch Director — VTuber Highlights": {
       "label": "video games",
@@ -13725,12 +13725,12 @@
     "https://www.youtube.com/@GawrGura|Gawr Gura — Hololive English YouTube": {
       "label": "video games",
       "score": 0.845,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/@RosieVale|Rooster VTuber Gaming Stream": {
       "label": "video games",
       "score": 0.7272,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://livecharts.gg/vtubers|LiveCharts — VTuber Streaming Rankings": {
       "label": "video games",
@@ -13740,7 +13740,7 @@
     "https://www.youtube.com/@VShojo|VShojo — VTuber Agency YouTube": {
       "label": "video games",
       "score": 0.7843,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.twitch.tv/directory/game/League%20of%20Legends|Twitch League of Legends Directory": {
       "label": "video games",
@@ -25970,7 +25970,7 @@
     "https://www.youtube.com/feed/trending|YouTube — Trending Videos Homepage": {
       "label": "social media and networking",
       "score": 0.5066,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://google.com/cloud/cloud-functions-—-serverless-compute-docs|Cloud Functions — Serverless Compute Docs": {
       "label": "programming and software development",
@@ -29145,7 +29145,7 @@
     "https://www.youtube.com/|YouTube": {
       "label": "video games",
       "score": 0.7823,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/shorts|Shorts — YouTube": {
       "label": "social media and networking",
@@ -29155,12 +29155,12 @@
     "https://www.youtube.com/feed/subscriptions|Subscriptions — YouTube": {
       "label": "social media and networking",
       "score": 0.3967,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf|Playlist — YouTube": {
       "label": "video games",
       "score": 0.8038,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/tv|YouTube TV": {
       "label": "video games",
@@ -33470,7 +33470,7 @@
     "https://www.youtube.com/feed/trending|YouTube — Trending": {
       "label": "social media and networking",
       "score": 0.5519,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.pinterest.com/feed/|Pinterest — Your Feed": {
       "label": "social media and networking",
@@ -47435,127 +47435,127 @@
     "https://www.youtube.com/results?search_query=elden%20ring%20100%20percent%20walkthrough|YouTube search results for \"elden ring 100 percent walkthrough\"": {
       "label": "video games",
       "score": 0.8549,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=zelda%20totk%20speedrun%20any%20percent|YouTube search results for \"zelda totk speedrun any percent\"": {
       "label": "video games",
       "score": 0.8732,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=minecraft%20lets%20play%20episode%2042|YouTube search results for \"minecraft lets play episode 42\"": {
       "label": "video games",
       "score": 0.6814,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=cyberpunk%202077%20full%20walkthrough|YouTube search results for \"cyberpunk 2077 full walkthrough\"": {
       "label": "video games",
       "score": 0.892,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=valorant%20ranked%20grind%20to%20radiant|YouTube search results for \"valorant ranked grind to radiant\"": {
       "label": "video games",
       "score": 0.8595,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=streamer%20drama%20megathread%202026|YouTube search results for \"streamer drama megathread 2026\"": {
       "label": "memes and entertainment",
       "score": 0.4749,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=kai%20cenat%20isaac%20reaction%20video|YouTube search results for \"kai cenat isaac reaction video\"": {
       "label": "memes and entertainment",
       "score": 0.7778,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=prank%20war%20challenges%20fails|YouTube search results for \"prank war challenges fails\"": {
       "label": "memes and entertainment",
       "score": 0.8857,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=dude%20perfect%20trick%20shots%20compilation|YouTube search results for \"dude perfect trick shots compilation\"": {
       "label": "memes and entertainment",
       "score": 0.7527,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=celebrity%20fails%20compilation|YouTube search results for \"celebrity fails compilation\"": {
       "label": "memes and entertainment",
       "score": 0.8361,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=movie%20trailer%20react%20video|YouTube search results for \"movie trailer react video\"": {
       "label": "memes and entertainment",
       "score": 0.6935,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=summer%20try%20on%20haul%202026|YouTube search results for \"summer try on haul 2026\"": {
       "label": "online shopping",
       "score": 0.6767,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=amazon%20must%20haves%20under%2025%20dollars|YouTube search results for \"amazon must haves under 25 dollars\"": {
       "label": "online shopping",
       "score": 0.7644,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=aliexpress%20tech%20gadgets%20haul|YouTube search results for \"aliexpress tech gadgets haul\"": {
       "label": "online shopping",
       "score": 0.7404,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=sneaker%20restock%20drop%20guide|YouTube search results for \"sneaker restock drop guide\"": {
       "label": "online shopping",
       "score": 0.8274,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=shopping%20with%20me%20grwm|YouTube search results for \"shopping with me grwm\"": {
       "label": "online shopping",
       "score": 0.7581,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=gates%20of%20olympus%20bonus%20buy%20strategy|YouTube search results for \"gates of olympus bonus buy strategy\"": {
       "label": "gambling and betting",
       "score": 0.8316,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=sweet%20bonanza%20maxwin%20stream|YouTube search results for \"sweet bonanza maxwin stream\"": {
       "label": "gambling and betting",
       "score": 0.779,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=online%20slots%20big%20win%20compilation|YouTube search results for \"online slots big win compilation\"": {
       "label": "gambling and betting",
       "score": 0.8384,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=no%20deposit%20casino%20bonus%20codes%202026|YouTube search results for \"no deposit casino bonus codes 2026\"": {
       "label": "gambling and betting",
       "score": 0.4555,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=crash%20game%20provably%20fair%20strategy|YouTube search results for \"crash game provably fair strategy\"": {
       "label": "gambling and betting",
       "score": 0.7858,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=poker%20bankroll%20management%20pro%20player|YouTube search results for \"poker bankroll management pro player\"": {
       "label": "gambling and betting",
       "score": 0.8785,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=nba%20picks%20today%20free%20bet|YouTube search results for \"nba picks today free bet\"": {
       "label": "gambling and betting",
       "score": 0.8968,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=blackjack%20card%20counting%20tutorial|YouTube search results for \"blackjack card counting tutorial\"": {
       "label": "gambling and betting",
       "score": 0.8076,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/results?search_query=roulette%20martingale%20strategy|YouTube search results for \"roulette martingale strategy\"": {
       "label": "gambling and betting",
       "score": 0.8017,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.reddit.com/search/?q=compiler%20design%20front%20end%20back%20end%20pipeline|Reddit search results for \"compiler design front end back end pipeline\"": {
       "label": "programming and software development",
@@ -62160,7 +62160,7 @@
     "https://www.youtube.com/results?search_query=elden+ring+all+bosses|elden ring all bosses - YouTube": {
       "label": "video games",
       "score": 0.9566,
-      "decision": "block"
+      "decision": "allow"
     },
     "https://www.youtube.com/watch?v=20X3fG7gU90|100 DAYS in ROBLOX Brookhaven RP! (gone wrong)": {
       "label": "video games",

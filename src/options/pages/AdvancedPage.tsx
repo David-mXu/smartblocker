@@ -37,23 +37,30 @@ export function AdvancedPage({ state }: { state: OptionsState }) {
   const handleTestPair = async () => {
     setStatusText('Classifying… the first run downloads the model (~34 MB).');
     setOutText('');
-    const res: TestPairResponse = await api.runtime.sendMessage({ type: 'TEST_PAIR' });
-    setStatusText('');
-    if (!res?.ok || !res.results) {
-      setOutText(`Error: ${res?.error ?? 'no response from background'}`);
-      return;
+    try {
+      const res: TestPairResponse = await api.runtime.sendMessage({ type: 'TEST_PAIR' });
+      if (!res?.ok || !res.results) {
+        setOutText(`Error: ${res?.error ?? 'no response from background'}`);
+        return;
+      }
+      setOutText(
+        res.results
+          .map((r) => {
+            const dist = r.all.labels.map((l, i) => `  ${pct(r.all.scores[i]).padStart(4)} ${l}`).join('\n');
+            return (
+              `"${r.text}"\n-> ${r.label} (${pct(r.score)})` +
+              `${r.cached ? ' [cached]' : ` [load ${Math.round(r.loadMs)}ms, infer ${Math.round(r.inferMs)}ms]`}\n${dist}`
+            );
+          })
+          .join('\n\n'),
+      );
+    } catch (e) {
+      // A rejected RPC (SW restart, model error) used to leave the status line
+      // on "Classifying…" forever with no way to retry.
+      setOutText(`Error: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setStatusText('');
     }
-    setOutText(
-      res.results
-        .map((r) => {
-          const dist = r.all.labels.map((l, i) => `  ${pct(r.all.scores[i]).padStart(4)} ${l}`).join('\n');
-          return (
-            `"${r.text}"\n-> ${r.label} (${pct(r.score)})` +
-            `${r.cached ? ' [cached]' : ` [load ${Math.round(r.loadMs)}ms, infer ${Math.round(r.inferMs)}ms]`}\n${dist}`
-          );
-        })
-        .join('\n\n'),
-    );
   };
 
   const renderScan = (s: HistoryScanState | undefined) => {
@@ -86,14 +93,28 @@ export function AdvancedPage({ state }: { state: OptionsState }) {
 
   const handleScanHistory = async () => {
     setStatusText('Scanning history...');
-    await api.runtime.sendMessage({ type: 'SCAN_HISTORY' });
+    try {
+      await api.runtime.sendMessage({ type: 'SCAN_HISTORY' });
+    } catch (e) {
+      setStatusText('');
+      setOutText(`Error starting the scan: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     pollTimerRef.current = setInterval(async () => {
-      const { historyScan } = await api.storage.local.get('historyScan');
-      renderScan(historyScan as HistoryScanState | undefined);
-      if (historyScan && (historyScan as HistoryScanState).status !== 'running') {
+      try {
+        const { historyScan } = await api.storage.local.get('historyScan');
+        renderScan(historyScan as HistoryScanState | undefined);
+        if (historyScan && (historyScan as HistoryScanState).status !== 'running') {
+          if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+          setStatusText('');
+        }
+      } catch (e) {
+        // Storage read failed (extension update/teardown): stop polling and
+        // report instead of spinning silently.
         if (pollTimerRef.current) clearInterval(pollTimerRef.current);
         setStatusText('');
+        setOutText(`Error reading scan progress: ${e instanceof Error ? e.message : String(e)}`);
       }
     }, 1000);
   };

@@ -39,6 +39,9 @@ function check(ok, label) {
 
 // Same stale-SW-script-cache hazard as e2e-test.mjs.
 rmSync(resolve(PROFILE, 'Default/Service Worker/ScriptCache'), { recursive: true, force: true });
+// A killed Chromium can leave a broken SW registration; drop the
+// registration DB too (CacheStorage = the model stays).
+rmSync(resolve(PROFILE, 'Default/Service Worker/Database'), { recursive: true, force: true });
 
 async function launchWithServiceWorker() {
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -205,6 +208,71 @@ try {
     cStyle.visibility === 'visible' &&
     cStyle.opacity === '1';
   check(cOk, `pre-emptive #smartblocker-overlay{display:none!important} is inert (computed ${JSON.stringify(cStyle)})`);
+
+  // ── (d) inline-style / shadow-tree tampering ──────────────────────────
+  // A page can target the host by id and add inline !important declarations
+  // (which outrank a stylesheet only when they ARE inline) or empty the open
+  // shadow root. The mount guard re-asserts the authoritative cssText and
+  // restores the card.
+  await tab.goto(blockUrl('inline'));
+  check(await waitForOverlay(tab), 'setup: blocklist keyword mounts the block screen (inline page)');
+  await tab.evaluate(() => {
+    const el = document.getElementById('smartblocker-overlay');
+    if (!el) return;
+    el.style.setProperty('display', 'none', 'important');
+    el.style.setProperty('pointer-events', 'none', 'important');
+    el.style.setProperty('opacity', '0', 'important');
+    el.style.setProperty('z-index', '-1', 'important');
+    el.setAttribute('hidden', '');
+    el.setAttribute('inert', '');
+    el.shadowRoot?.replaceChildren();
+  });
+  let dState = null;
+  {
+    const deadline = Date.now() + 3_000;
+    while (Date.now() < deadline) {
+      dState = await tab.evaluate(() => {
+        const el = document.getElementById('smartblocker-overlay');
+        if (!el) return { missing: true };
+        const cs = getComputedStyle(el);
+        return {
+          display: cs.display,
+          visibility: cs.visibility,
+          opacity: cs.opacity,
+          pointerEvents: cs.pointerEvents,
+          zIndex: cs.zIndex,
+          hidden: el.hasAttribute('hidden'),
+          inert: el.hasAttribute('inert'),
+          shadowChildren: el.shadowRoot?.childElementCount ?? 0,
+        };
+      });
+      if (
+        !dState.missing &&
+        dState.display === 'flex' &&
+        dState.opacity === '1' &&
+        !dState.hidden &&
+        dState.shadowChildren > 0
+      ) {
+        break;
+      }
+      await tab.waitForTimeout(100);
+    }
+  }
+  const dOk =
+    !!dState &&
+    !dState.missing &&
+    dState.display === 'flex' &&
+    dState.visibility === 'visible' &&
+    dState.opacity === '1' &&
+    dState.pointerEvents === 'auto' &&
+    dState.zIndex === '2147483647' &&
+    !dState.hidden &&
+    !dState.inert &&
+    dState.shadowChildren > 0;
+  check(
+    dOk,
+    `inline display/pointer-events/opacity/z-index and shadowRoot.replaceChildren are re-asserted (${JSON.stringify(dState)})`,
+  );
 
   // Final storage audit across all three attacks: still nothing recorded.
   const finalState = await sw.evaluate(() => chrome.storage.local.get(['overrides', 'feedback']));

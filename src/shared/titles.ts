@@ -304,10 +304,28 @@ const GENERIC_TITLES = new Set([
   'redirecting...',
 ]);
 
+/** Hard bound on a cleaned title. `build-input.ts` budgets 300 chars of
+ *  classifier input in total, so anything longer is display-only noise. */
+export const MAX_TITLE_LENGTH = 300;
+/** Bound applied to the RAW tab title before any regex work. The suffix
+ *  alternation below is quadratic in a long whitespace run (a page-supplied
+ *  2,000-space title took 15s, stalling the service worker); 512 chars is far
+ *  beyond any real title and keeps every regex trivially linear. */
+export const MAX_RAW_TITLE_LENGTH = 512;
+
+function boundTitle(raw: string, limit: number): string {
+  if (raw.length <= limit) return raw;
+  let cut = raw.slice(0, limit);
+  // Never end on half of a surrogate pair (the companion's serde_json and the
+  // extension's own storage both reject lone surrogates).
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+  return cut;
+}
+
 /** Strip site suffixes; return null for titles too generic or empty to classify. */
 export function cleanTitle(raw: string | undefined | null): string | null {
   if (!raw) return null;
-  const t = raw
+  const t = boundTitle(raw, MAX_RAW_TITLE_LENGTH)
     .replace(/^(?:\(\d+\)\s*|(?:🐴|🔊|▶️?)\s*)+/u, '') // "(3) " unread-count or tab-marker prefix
     .replace(/\s*\(\d{1,2}:\d{2}(:\d{2})?\)$/, '') // "(2:26)" live playback timer (brain.fm etc.)
     .replace(/\s*[-|–]\s*YouTube$/i, '')
@@ -322,5 +340,5 @@ export function cleanTitle(raw: string | undefined | null): string | null {
   // Require at least one letter or digit (supports short brand names like "X",
   // "eBay", "ESPN" and CJK titles like "淘宝", "微博"), and reject placeholder shells.
   if (!t || !/[\p{L}\p{N}]/u.test(t) || GENERIC_TITLES.has(t.toLowerCase())) return null;
-  return t;
+  return boundTitle(t, MAX_TITLE_LENGTH).trimEnd();
 }

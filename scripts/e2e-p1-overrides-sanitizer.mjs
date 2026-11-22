@@ -5,7 +5,7 @@
 // Profile (and the cached model) persists in .e2e-profile-p1/ across runs; the
 // first run downloads the bge model (~35MB) while the harness page classifies.
 import { chromium } from 'playwright';
-import { rmSync } from 'node:fs';
+import { readlinkSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const EXT_PATH = resolve('dist/chrome');
@@ -16,14 +16,47 @@ const HARNESS_TIMEOUT_MS = 5 * 60_000; // first run downloads the model (~35MB)
 // serving a stale background.js after a rebuild. Drop only ScriptCache —
 // CacheStorage (the downloaded model) must survive across runs.
 rmSync(resolve(PROFILE, 'Default/Service Worker/ScriptCache'), { recursive: true, force: true });
+// A killed Chromium can leave a broken SW registration; drop the
+// registration DB too (CacheStorage = the model stays).
+rmSync(resolve(PROFILE, 'Default/Service Worker/Database'), { recursive: true, force: true });
 
 // Same retry pattern as e2e-test.mjs: launching immediately after a previous
 // run sometimes yields a context where the extension never loads.
+
+// A killed/mid-crash run leaves Chromium's ProcessSingleton symlink behind and
+// the next launch dies instantly ("Failed to create a ProcessSingleton"). Clear
+// it only when the recorded pid is gone, so a genuinely running instance is
+// never disturbed.
+function clearStaleSingleton(dir) {
+  const lock = resolve(dir, 'SingletonLock');
+  try {
+    const target = readlinkSync(lock);
+    const pid = Number(target.slice(target.lastIndexOf('-') + 1));
+    if (!Number.isInteger(pid) || pid <= 0) return;
+    try {
+      process.kill(pid, 0);
+      return; // still alive — leave it alone
+    } catch {
+      // ESRCH: dead owner
+    }
+    rmSync(lock, { force: true });
+    rmSync(resolve(dir, 'SingletonCookie'), { force: true });
+    rmSync(resolve(dir, 'SingletonSocket'), { force: true });
+    console.log('… cleared a stale profile SingletonLock');
+  } catch {
+    // no lock / unreadable — nothing to do
+  }
+}
+
 async function launchWithServiceWorker() {
   for (let attempt = 1; attempt <= 3; attempt++) {
+    clearStaleSingleton(PROFILE);
     const ctx = await chromium.launchPersistentContext(PROFILE, {
       channel: 'chromium',
       headless: true,
+      // A hung profile (a zombie browser from an earlier killed run) can make
+      // launch wait forever; fail fast so the retry can repair the profile.
+      timeout: 60_000,
       args: [
         `--disable-extensions-except=${EXT_PATH}`,
         `--load-extension=${EXT_PATH}`,
@@ -42,6 +75,15 @@ async function launchWithServiceWorker() {
     if (worker) return { context: ctx, sw: worker };
     console.log(`… extension did not load (attempt ${attempt}), relaunching`);
     await ctx.close();
+    // A killed Chromium can leave a BROKEN service-worker registration in the
+    // profile: every later launch loads no SW at all. Drop the registration
+    // database (ScriptCache alone is not enough) but KEEP CacheStorage — that
+    // is the downloaded model.
+    rmSync(resolve(PROFILE, 'Default/Service Worker/Database'), { recursive: true, force: true });
+    rmSync(resolve(PROFILE, 'Default/Service Worker/ScriptCache'), { recursive: true, force: true });
+    // A killed Chromium can leave a broken SW registration; drop the
+    // registration DB too (CacheStorage = the model stays).
+    rmSync(resolve(PROFILE, 'Default/Service Worker/Database'), { recursive: true, force: true });
     await new Promise((r) => setTimeout(r, 2_000));
   }
   throw new Error('service worker did not boot after 3 launches');
@@ -161,6 +203,21 @@ try {
   </body></html>`;
   await context.route('**://sb-resist.example.net/**', (route) => {
     route.fulfill({ contentType: 'text/html; charset=utf-8', body: forgedRevealResistHtml });
+  });
+
+  // State-forgery fixture: the page pre-tags its embed with our state/id
+  // attributes. Before 2026-11-21 those page-writable attributes were trusted
+  // as "already handled", so the embed was never classified or masked (the
+  // whole embed guard could be bypassed with two attributes). Authority now
+  // lives in isolated-world memory; the forged markers must be ignored.
+  const forgedStateHtml = `<!doctype html><html><head><title>SmartBlocker state forgery fixture documentation</title></head><body>
+    <h1>State forgery fixture</h1>
+    <div id="state-wrap" class="video-container" data-smartblocker-state="forged" data-smartblocker-id="sb-embed-1">
+      <iframe id="state-embed" title="kw embed" src="https://media.example.org/embed?x=${KW}"></iframe>
+    </div>
+  </body></html>`;
+  await context.route('**://sb-state.example.net/**', (route) => {
+    route.fulfill({ contentType: 'text/html; charset=utf-8', body: forgedStateHtml });
   });
 
   await new Promise((r) => setTimeout(r, 500)); // let storage onChanged fire
@@ -333,6 +390,24 @@ try {
       JSON.stringify(restored),
     );
   }
+
+
+  // ── state/id forgery: page-written "already handled" markers are ignored ──
+  await page.goto('about:blank');
+  await page.goto('https://sb-state.example.net/');
+  let stateForgeryMasked = false;
+  try {
+    await page.waitForFunction(
+      () => document.getElementById('state-wrap')?.getAttribute('data-smartblocker-masked') === 'embed',
+      undefined,
+      { timeout: HARNESS_TIMEOUT_MS },
+    );
+    stateForgeryMasked = true;
+  } catch {}
+  check(
+    'page-forged data-smartblocker-state/id do not bypass embed classification',
+    stateForgeryMasked,
+  );
 
   // ── #16e: reveal authority must live in the isolated world, not in the
   // page-writable data-smartblocker-masked="revealed" attribute. ──────────────

@@ -257,10 +257,44 @@ test('existing sane rules match byte-identically through the cache', () => {
   assert.equal(matchTitleRule('lofi beats - YouTube', ['*lofi']), '*lofi');
 });
 
+// --- linear matching (ReDoS hardening, 2026-11-21) ---
+test('stored risky rules match without catastrophic backtracking', () => {
+  // Guard-passing shape (2-char literals, 4 gaps) against a hostile 300-char
+  // title: the regex engine took 57s, the ordered-literal matcher is linear.
+  const risky = 'ab*ab*ab*ab*c';
+  const hostile = 'ab '.repeat(100); // 300 chars, no final "c"
+  const t0 = performance.now();
+  assert.equal(matchTitleRule(hostile, [risky]), null);
+  assert.equal(matchTitleRule(hostile + ' c', [risky]), risky);
+  const ms = performance.now() - t0;
+  assert.ok(ms < 1_000, `title-rule match took ${ms.toFixed(1)}ms (expected < 1s; the regex took 57s)`);
+});
+test('ordered-literal matching is equivalent to the old regex for sane rules', () => {
+  const cases = [
+    ['minecraft*speedrun', 'Minecraft - epic 100 day speedrun', true],
+    ['minecraft*speedrun', 'speedrun then minecraft', false],
+    ['*lofi', 'lofi beats - YouTube', true],
+    ['lofi*', 'lofi beats - YouTube', true],
+    ['one***three', 'one two three', true],
+    ['a*b', 'a big b', true],
+    ['a*b', 'ba', false],
+    ['no-star', 'a no-star here', true],
+  ];
+  for (const [rule, title, expected] of cases) {
+    assert.equal(matchTitleRule(title, [rule]) !== null, expected, `${rule} on "${title}"`);
+  }
+});
+test('guard normalizes fullwidth stars and invisible chars before counting gaps', () => {
+  // NFKC folds `＊` to `*`; before this, the guard counted 0 gaps and admitted
+  // a 9-wildcard rule that the compiler then turned into a slow pattern.
+  const nine = Array(10).fill('ab').join('＊'); // 9 gaps
+  assert.equal(normalizeTitleRule(nine).ok, false);
+  assert.equal(normalizeTitleRule('mine​craft*speedrun').value, 'minecraft*speedrun');
+});
+
 // ===========================================================================
 // Channel rules
 // ===========================================================================
-
 // --- normalizeChannelHandle ---
 test('strips the optional leading @', () => {
   assert.deepEqual(normalizeChannelHandle('@MrBeast'), { ok: true, value: 'mrbeast' });
@@ -322,9 +356,21 @@ test('null / missing channel never matches', () => {
 test('empty list never matches', () => {
   assert.equal(matchChannel('MrBeast (youtube.com)', []), null);
 });
+test('invisible and compatibility characters cannot evade a channel rule', () => {
+  for (const variant of [
+    'Mr​Beast', // zero-width space
+    'Mr‍Beast', // zero-width joiner
+    'Mr­Beast', // soft hyphen
+    '‎MrBeast', // left-to-right mark
+    'ＭｒＢｅａｓｔ', // fullwidth
+  ]) {
+    assert.equal(matchChannel(variant, ['mrbeast']), 'mrbeast', JSON.stringify(variant));
+  }
+  assert.deepEqual(normalizeChannelHandle('ＭｒＢｅａｓｔ'), { ok: true, value: 'mrbeast' });
+  assert.deepEqual(normalizeChannelHandle('Mr​Beast'), { ok: true, value: 'mrbeast' });
+});
 test('no substring matching: "beast" cannot catch "mrbeast2" and vice versa', () => {
-  assert.equal(matchChannel('mrbeast2', ['mrbeast']), null);
-  assert.equal(matchChannel('beast', ['mrbeast']), null);
+  assert.equal(matchChannel('mrbeast2', ['mrbeast']), null);  assert.equal(matchChannel('beast', ['mrbeast']), null);
 });
 test('whitespace-insensitive: a stored handle matches a spaced display name', () => {
   assert.equal(matchChannel('Marques Brownlee (youtube.com)', ['marquesbrownlee']), 'marquesbrownlee');

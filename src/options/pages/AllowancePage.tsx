@@ -44,7 +44,12 @@ function NumberField({ id, label, value, onChange, disabled, max = 1440 }: {
       <Input
         id={id} type="number" min={0} max={max} step={1} value={value}
         disabled={disabled} className="w-24 tabular-nums"
-        onChange={(event) => onChange(event.target.valueAsNumber)}
+        onChange={(event) => {
+          // valueAsNumber is NaN for an empty/partial field; storing that
+          // poisons config and serializes as null.
+          const next = event.target.valueAsNumber;
+          if (Number.isFinite(next)) onChange(next);
+        }}
       />
     </label>
   );
@@ -192,7 +197,7 @@ export function AllowancePage({ state }: { state: OptionsState }) {
         <SettingsGroup>
           <SettingRow label="Category" description="Each category has independent daily minutes, openings, rewards, and waiting escalation.">
             <select
-              id="allowance-category" value={category}
+              id="allowance-category" aria-label="Allowance category" value={category}
               disabled={disabled}
               onChange={(event) => setCategory(event.target.value)}
               className="h-9 rounded-lg border border-input bg-background px-2 text-sm text-foreground"
@@ -224,6 +229,7 @@ export function AllowancePage({ state }: { state: OptionsState }) {
           >
             <Switch
               id="reward-earning"
+              aria-label="Earn reward from productive work"
               checked={config.rewardEarning === true}
               disabled={disabled || state.lock.locked}
               onChange={(event) => {
@@ -296,9 +302,12 @@ export function AllowancePage({ state }: { state: OptionsState }) {
       >
         <SettingsGroup>
           <SettingRow label="Relief duration" description="Requested minutes are capped to the unreserved pool. Waiting time is not charged.">
-            <Input id="relief-duration" type="number" min={1} max={1440} value={durationMinutes}
+            <Input id="relief-duration" aria-label="Relief duration in minutes" type="number" min={1} max={1440} value={durationMinutes}
               disabled={disabled || Boolean(liveGrant)} className="w-24"
-              onChange={(event) => setDurationMinutes(event.target.valueAsNumber)} />
+              onChange={(event) => {
+                const next = event.target.valueAsNumber;
+                if (Number.isFinite(next)) setDurationMinutes(next);
+              }} />
           </SettingRow>
           <div className="flex flex-wrap gap-2 px-4 py-4">
             <Button disabled={disabled || Boolean(liveGrant)} onClick={() => void execute(action('request', id(), Math.max(1, durationMinutes) * MINUTE), 'Allowance requested.')}>
@@ -331,7 +340,7 @@ export function AllowancePage({ state }: { state: OptionsState }) {
         <p id="allowance-msg" role="status" className="m-0 px-1 text-xs text-muted-foreground">{message}</p>
         <p className="m-0 px-1 text-xs text-faint">Revision {authority.revision} · reset at local midnight · deterministic rules and classifier-unavailable fail-closed screens are never relaxed.</p>
       </SettingsSection>
-      <FocusCycleSection category={category} />
+      <FocusCycleSection category={category} locked={state.lock.locked} />
     </Page>
   );
 }

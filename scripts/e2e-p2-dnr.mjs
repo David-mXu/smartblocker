@@ -34,6 +34,9 @@ const KW = `sb-p2-kw-${RUN}`; // deterministic blocklist trigger (no classifier)
 // Chromium caches the MV3 service-worker SCRIPT in the profile — drop only
 // ScriptCache (CacheStorage must survive; this suite never needs the model).
 rmSync(resolve(PROFILE, 'Default/Service Worker/ScriptCache'), { recursive: true, force: true });
+// A killed Chromium can leave a broken SW registration; drop the
+// registration DB too (CacheStorage = the model stays).
+rmSync(resolve(PROFILE, 'Default/Service Worker/Database'), { recursive: true, force: true });
 
 async function launchWithServiceWorker() {
   for (let attempt = 1; attempt <= 3; attempt++) {

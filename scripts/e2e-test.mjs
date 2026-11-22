@@ -4,7 +4,7 @@
 // Profile (and the cached model) persists in .e2e-profile/ across runs.
 // SB_E2E_PROFILE can select an isolated profile without deleting the usual one.
 import { chromium } from 'playwright';
-import { readFileSync, rmSync } from 'node:fs';
+import { readFileSync, readlinkSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const EXT_PATH = resolve('dist/chrome');
@@ -15,15 +15,48 @@ const MODEL_TIMEOUT_MS = 5 * 60_000; // first run downloads the model (~35MB)
 // serving a stale background.js after a rebuild. Drop only ScriptCache —
 // CacheStorage (the downloaded model) must survive across runs.
 rmSync(resolve(PROFILE, 'Default/Service Worker/ScriptCache'), { recursive: true, force: true });
+// A killed Chromium can leave a broken SW registration; drop the
+// registration DB too (CacheStorage = the model stays).
+rmSync(resolve(PROFILE, 'Default/Service Worker/Database'), { recursive: true, force: true });
 
 // Launching immediately after a previous run sometimes yields a context where
 // the extension never loads (no SW ever appears, and navigations can't wake
 // what isn't registered) — retry with a fresh launch when that happens.
+
+// A killed/mid-crash run leaves Chromium's ProcessSingleton symlink behind and
+// the next launch dies instantly ("Failed to create a ProcessSingleton"). Clear
+// it only when the recorded pid is gone, so a genuinely running instance is
+// never disturbed.
+function clearStaleSingleton(dir) {
+  const lock = resolve(dir, 'SingletonLock');
+  try {
+    const target = readlinkSync(lock);
+    const pid = Number(target.slice(target.lastIndexOf('-') + 1));
+    if (!Number.isInteger(pid) || pid <= 0) return;
+    try {
+      process.kill(pid, 0);
+      return; // still alive — leave it alone
+    } catch {
+      // ESRCH: dead owner
+    }
+    rmSync(lock, { force: true });
+    rmSync(resolve(dir, 'SingletonCookie'), { force: true });
+    rmSync(resolve(dir, 'SingletonSocket'), { force: true });
+    console.log('… cleared a stale profile SingletonLock');
+  } catch {
+    // no lock / unreadable — nothing to do
+  }
+}
+
 async function launchWithServiceWorker() {
   for (let attempt = 1; attempt <= 3; attempt++) {
+    clearStaleSingleton(PROFILE);
     const ctx = await chromium.launchPersistentContext(PROFILE, {
       channel: 'chromium',
       headless: true,
+      // A hung profile (a zombie browser from an earlier killed run) can make
+      // launch wait forever; fail fast so the retry can repair the profile.
+      timeout: 60_000,
       args: [
         `--disable-extensions-except=${EXT_PATH}`,
         `--load-extension=${EXT_PATH}`,
@@ -42,6 +75,15 @@ async function launchWithServiceWorker() {
     if (worker) return { context: ctx, sw: worker };
     console.log(`… extension did not load (attempt ${attempt}), relaunching`);
     await ctx.close();
+    // A killed Chromium can leave a BROKEN service-worker registration in the
+    // profile: every later launch loads no SW at all. Drop the registration
+    // database (ScriptCache alone is not enough) but KEEP CacheStorage — that
+    // is the downloaded model.
+    rmSync(resolve(PROFILE, 'Default/Service Worker/Database'), { recursive: true, force: true });
+    rmSync(resolve(PROFILE, 'Default/Service Worker/ScriptCache'), { recursive: true, force: true });
+    // A killed Chromium can leave a broken SW registration; drop the
+    // registration DB too (CacheStorage = the model stays).
+    rmSync(resolve(PROFILE, 'Default/Service Worker/Database'), { recursive: true, force: true });
     await new Promise((r) => setTimeout(r, 2_000));
   }
   throw new Error('service worker did not boot after 3 launches');
@@ -503,7 +545,31 @@ try {
   });
 
   await tab.goto('https://www.google.com/search?q=nvidia+rtx+5090');
-  await tab.waitForTimeout(3_000);
+  // `card-aita` is masked asynchronously: its Reddit host is deliberately NOT a
+  // deterministic social host (r/learnprogramming must stay visible), so the
+  // sanitizer queues it for a classifier round-trip. A fixed 3s wait raced that
+  // verdict under load and produced a one-card "flake" with every other mask
+  // correct. Wait for the settle state itself, then snapshot.
+  await tab
+    .waitForFunction(
+      () => {
+        const masked = (id) => !!document.getElementById(id)?.getAttribute('data-smartblocker-masked');
+        return (
+          masked('tads') &&
+          masked('shelf-videos') &&
+          masked('shelf-news') &&
+          masked('shelf-social') &&
+          masked('card-bestbuy') &&
+          masked('card-aita') &&
+          masked('hero-title') &&
+          masked('hero-digest') &&
+          masked('sweep-social')
+        );
+      },
+      undefined,
+      { timeout: 45_000 },
+    )
+    .catch(() => {}); // fall through to the snapshot; the assertion reports what's missing
 
   const serpOverlayCount = await tab.locator('#smartblocker-overlay').count();
   const serpMaskState = await tab.evaluate(() => ({
@@ -624,6 +690,64 @@ try {
     const { settings = {} } = await chrome.storage.local.get('settings');
     await chrome.storage.local.set({ settings: { ...settings, maskSearchElements: true } });
   });
+
+  // 4d. Master switch OFF is a FULL sanitizer teardown: every mask is removed
+  // and the MutationObserver is disconnected. Before this fix a page that was
+  // open at disable time kept masking lazy-loaded cards forever.
+  await tab
+    .waitForFunction(
+      () => !!document.getElementById('card-bestbuy')?.getAttribute('data-smartblocker-masked'),
+      undefined,
+      { timeout: 30_000 },
+    )
+    .catch(() => {});
+  await sw.evaluate(async () => {
+    const { settings = {} } = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({ settings: { ...settings, enabled: false } });
+  });
+  let teardownCleared = false;
+  try {
+    await tab.waitForFunction(() => !document.querySelector('[data-smartblocker-masked]'), undefined, {
+      timeout: 20_000,
+    });
+    teardownCleared = true;
+  } catch {}
+  // Append a DETERMINISTIC (blocklist-host) card after teardown. With the
+  // observer still attached it would be masked after the 140ms debounce; a
+  // disconnected sanitizer leaves it alone.
+  await tab.evaluate(() => {
+    const card = document.createElement('div');
+    card.className = 'MjjYud';
+    card.id = 'card-late';
+    card.innerHTML =
+      '<a href="https://www.bestbuy.ca/en-ca/shop/late"><h3>NVIDIA GeForce RTX 5090 - Best Buy</h3></a>' +
+      '<div class="VwiC3b">Up to 5% Cash Back. Shop the RTX 5090 at Best Buy.</div>';
+    document.getElementById('rso')?.appendChild(card);
+  });
+  await tab.waitForTimeout(1_500);
+  const lateMaskedWhileOff = await tab.evaluate(
+    () => !!document.getElementById('card-late')?.getAttribute('data-smartblocker-masked'),
+  );
+  // Re-enable: the tab must re-mask, including the card added while off.
+  await sw.evaluate(async () => {
+    const { settings = {} } = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({ settings: { ...settings, enabled: true } });
+  });
+  let lateMaskedAfterOn = false;
+  try {
+    await tab.waitForFunction(
+      () => document.getElementById('card-late')?.getAttribute('data-smartblocker-masked') === 'serp-card',
+      undefined,
+      { timeout: 30_000 },
+    );
+    lateMaskedAfterOn = true;
+  } catch {}
+  const teardownOk = teardownCleared && !lateMaskedWhileOff && lateMaskedAfterOn;
+  console.log(
+    `${teardownOk ? 'PASS' : 'FAIL'} disabling protection tears down masks + observer, re-enabling restores them:`,
+    { teardownCleared, lateMaskedWhileOff, lateMaskedAfterOn },
+  );
+  if (!teardownOk) process.exitCode = 1;
 
   await tab.goto('https://www.google.com/search?q=play+minesweeper');
   let minesweeperBlocked = false;

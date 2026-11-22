@@ -52,3 +52,21 @@
     linear-gradient(to right, rgba(244, 239, 228, 0.035) 1px, transparent 1px),
     linear-gradient(to bottom, rgba(244, 239, 228, 0.035) 1px, transparent 1px);
 }
+
+/* WCAG 2.2.2 / vestibular: no infinite marquee and no smooth scrolling for
+   visitors who ask the OS for reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .animate-marquee {
+    animation: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

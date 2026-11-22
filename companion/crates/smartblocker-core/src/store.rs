@@ -153,6 +153,42 @@ impl Default for CompanionConfig {
 /// file (or flushing honest tokens) without limit.
 pub const MAX_PAIRING_TOKENS: usize = 32;
 
+/// Bound on user-nominated incompatible browser stems. Each entry is scanned
+/// against every foreground process, so an unbounded list is a per-tick cost.
+pub const MAX_EXTRA_INCOMPATIBLE_BROWSERS: usize = 64;
+
+fn sanitize_stem_list(raw: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for entry in raw {
+        let stem = entry.trim().to_lowercase();
+        if stem.is_empty() || out.iter().any(|e| e == &stem) {
+            continue;
+        }
+        out.push(stem);
+        if out.len() >= MAX_EXTRA_INCOMPATIBLE_BROWSERS {
+            break;
+        }
+    }
+    out
+}
+
+fn sanitize_tokens(raw: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for entry in raw {
+        let token = entry.trim().to_string();
+        if token.is_empty() || out.iter().any(|e| e == &token) {
+            continue;
+        }
+        out.push(token);
+        // Keep the NEWEST entries when a hand-edited file exceeds the cap —
+        // the same eviction direction as adoption.
+        if out.len() > MAX_PAIRING_TOKENS {
+            out.remove(0);
+        }
+    }
+    out
+}
+
 impl CompanionConfig {
     /// Normalize both app lists and clamp the extension-loss grace in place.
     /// Malformed/newer-version targets are dropped rather than guessed at;
@@ -163,17 +199,26 @@ impl CompanionConfig {
         let targets_before = self.app_targets.clone();
         let version_before = self.app_targets_version;
         let grace_before = self.extension_loss_grace_seconds;
+        let extra_before = self.extra_incompatible_browsers.clone();
+        let tokens_before = self.pairing_tokens.clone();
 
         self.app_blocklist = sanitize_legacy_entries(std::mem::take(&mut self.app_blocklist));
         self.app_targets = sanitize_targets(std::mem::take(&mut self.app_targets));
         self.app_targets_version = version_for(&self.app_targets);
         self.extension_loss_grace_seconds =
             clamp_extension_loss_grace_seconds(self.extension_loss_grace_seconds);
+        // Both are read on hot paths (every 3s tick / every hello). A
+        // hand-edited config must not turn those into O(huge) scans.
+        self.extra_incompatible_browsers =
+            sanitize_stem_list(std::mem::take(&mut self.extra_incompatible_browsers));
+        self.pairing_tokens = sanitize_tokens(std::mem::take(&mut self.pairing_tokens));
 
         legacy_before != self.app_blocklist
             || targets_before != self.app_targets
             || version_before != self.app_targets_version
             || grace_before != self.extension_loss_grace_seconds
+            || extra_before != self.extra_incompatible_browsers
+            || tokens_before != self.pairing_tokens
     }
 
     pub fn sanitized(mut self) -> Self {
@@ -190,6 +235,10 @@ impl CompanionConfig {
 }
 
 const LOCK_STATE_FILE: &str = "lock-state.json";
+/// Mirrors the authoritative lock file on every save. Deleting/truncating the
+/// PRIMARY while the daemon is dead used to load as "unlocked" (fail-open);
+/// the mirror at least forces an attacker to remove both copies.
+const LOCK_STATE_BACKUP_FILE: &str = "lock-state.backup.json";
 const CONFIG_FILE: &str = "config.json";
 const BLOCKING_STATE_FILE: &str = "blocking-state.json";
 const PARTNER_STATE_FILE: &str = "partner-state.json";
@@ -235,11 +284,20 @@ impl Store {
     }
 
     pub fn load_lock_state(&self) -> LockState {
-        self.load_or_default(LOCK_STATE_FILE)
+        // Fall back to the mirror when the primary is missing or corrupt (a
+        // crash mid-rename, disk error, or a same-uid deletion during daemon
+        // downtime). Both copies are written from the same serialized state.
+        self.read_json::<LockState>(LOCK_STATE_FILE)
+            .or_else(|| self.read_json::<LockState>(LOCK_STATE_BACKUP_FILE))
+            .unwrap_or_default()
     }
 
     pub fn save_lock_state(&self, state: &LockState) -> io::Result<()> {
-        self.save(LOCK_STATE_FILE, state)
+        self.save(LOCK_STATE_FILE, state)?;
+        // Mirror failures must not fail the authoritative write; the primary
+        // is what every live reader uses.
+        let _ = self.save(LOCK_STATE_BACKUP_FILE, state);
+        Ok(())
     }
 
     /// Loads and sanitizes. Sanitization is in-memory (no write on every
@@ -428,6 +486,27 @@ mod tests {
         };
         store.save_lock_state(&state).unwrap();
         assert_eq!(store.load_lock_state(), state);
+    }
+
+    #[test]
+    fn a_deleted_or_corrupt_primary_lock_file_falls_back_to_the_mirror() {
+        let (dir, store) = temp_store();
+        let locked = LockState {
+            frozen_until: Some(1_720_000_000_000),
+            ..LockState::default()
+        };
+        store.save_lock_state(&locked).unwrap();
+        // Kill-the-daemon-and-delete-the-file attack: the mirror still holds
+        // the last authoritative state, so a respawn does not fail OPEN.
+        std::fs::remove_file(dir.path().join(LOCK_STATE_FILE)).unwrap();
+        assert_eq!(store.load_lock_state(), locked);
+        // Truncation (crash mid-write) behaves the same way.
+        std::fs::write(dir.path().join(LOCK_STATE_FILE), b"{ nope").unwrap();
+        assert_eq!(store.load_lock_state(), locked);
+        // Only BOTH copies gone reads as first-run/unlocked.
+        std::fs::remove_file(dir.path().join(LOCK_STATE_FILE)).unwrap();
+        std::fs::remove_file(dir.path().join(LOCK_STATE_BACKUP_FILE)).unwrap();
+        assert_eq!(store.load_lock_state(), LockState::default());
     }
 
     #[test]

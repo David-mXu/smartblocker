@@ -17,7 +17,7 @@
   /* Foregrounds */
   --foreground: oklch(0.953 0.0156 86.4); /*      #f4efe4 — warm ivory */
   --muted-foreground: oklch(0.688 0.026 85.8); /* #a29a89 — secondary text */
-  --faint: oklch(0.57 0.0235 88.8); /*            #7d7768 — tertiary/meta text */
+  --faint: oklch(0.635 0.0195 89); /*            #908a79 — tertiary/meta text; >=4.73:1 on every surface (AA). #7d7768 was 3.74–4.38:1. */
   --card-foreground: var(--foreground);
   --popover-foreground: var(--foreground);
   --secondary-foreground: var(--foreground);
