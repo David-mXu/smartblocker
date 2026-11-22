@@ -581,7 +581,9 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   bounded per-conn outbound queues (never write under the merge lock),
   a 64-conn cap with unauthenticated idle reaping, and an
   authenticated PING/PONG liveness frame the watchdog probes with (a
-  socket squatter reads as dead); `uninstall` refuses on
+  silent socket squatter reads as dead, and since 2026-11-22 the PONG's pid
+  must also be a real `smartblocker-daemon` image — an arbitrary process
+  answering the probe no longer suppresses respawn); `uninstall` refuses on
   `settings_locked`; `is_pro` fails CLOSED on a missing key
   (`SBPRO_DEV_OPEN=1` dev escape hatch, pending user ratification) with
   a 7-day expiry grace and mid-lock `license_key` heal. `usage.rs` keeps a

@@ -673,6 +673,9 @@ round and one product addition on branch `improve/best-version` (commits
   **Protection-health row** on `#dashboard` that surfaces revoked site access,
   unfinished setup, missing model files, and companion drift instead of
   looking active when it isn't.
+- Companion: the watchdog now verifies a PONG's pid belongs to a real
+  `smartblocker-daemon` image, so an arbitrary socket squatter cannot suppress
+  respawns and silently end hard enforcement.
 - Measurement/CI: the evaluator now mirrors the YouTube browsing-surface policy
   (36 committed cases were mis-scored), fails on added-failing/removed cases,
   and the nightly lane runs every pure harness + `verify-dataset` + `npm run

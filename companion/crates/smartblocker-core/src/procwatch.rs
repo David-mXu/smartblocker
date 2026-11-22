@@ -139,6 +139,31 @@ pub fn pid_alive(pid: u32) -> bool {
     sys.process(pid).is_some()
 }
 
+/// Best-effort executable path for one pid. Used by the watchdog to verify
+/// that a protocol PONG really came from a companion daemon binary rather than
+/// an arbitrary process squatting the socket name. `None` when the process is
+/// gone or its image path is unreadable.
+pub fn pid_exe(pid: u32) -> Option<std::path::PathBuf> {
+    let pid = sysinfo::Pid::from_u32(pid);
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing().with_exe(UpdateKind::OnlyIfNotSet),
+    );
+    sys.process(pid)
+        .and_then(|p| p.exe().map(|path| path.to_path_buf()))
+}
+
+/// True when `candidate` names the same executable file as `expected`
+/// (case-insensitive, for Windows). Pure so the watchdog's decision is tested.
+pub fn exe_file_names_match(candidate: &std::path::Path, expected: &std::path::Path) -> bool {
+    match (candidate.file_name(), expected.file_name()) {
+        (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+        _ => false,
+    }
+}
+
 /// Scriptable source for tests (enforcer scenarios, M5 daemon tests, e2e
 /// dry-runs). Snapshots are consumed in order; the last one repeats.
 pub struct FakeSource {
@@ -213,6 +238,19 @@ mod tests {
         let truncated = &"chromium-browser"[..15];
         assert_eq!(truncated, "chromium-browse");
         assert_ne!(truncated, "chromium-browser");
+    }
+
+    #[test]
+    fn pid_exe_reports_this_test_process_and_matches_its_binary() {
+        let exe = pid_exe(std::process::id()).expect("own exe path");
+        let current = std::env::current_exe().expect("current exe");
+        assert!(exe_file_names_match(&exe, &current));
+        assert!(!exe_file_names_match(
+            std::path::Path::new("/usr/bin/definitely-not-the-daemon"),
+            &current
+        ));
+        // A dead/unreadable pid is None, never a panic.
+        assert!(pid_exe(u32::MAX - 7).is_none());
     }
 
     #[test]
