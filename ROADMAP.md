@@ -648,6 +648,38 @@ without giving up our architectural ones.
 
 ---
 
+## Post-parity hardening (2026-11-21)
+
+A seven-agent audit swarm plus two post-commit review passes landed a hardening
+round and one product addition on branch `improve/best-version` (commits
+`ce6b5a4`…`4f35c55`):
+
+- Correctness/security: force-mode DNR fragment bug (fail-open + reload loop),
+  fail-closed recovery across the extension's own block page (Chrome + Firefox),
+  block-screen inline-style tamper guard with dialog semantics, isolated-world
+  sanitizer authority (forged state/id attributes no longer bypass embeds or
+  divert verdicts; stripped mask attributes are re-asserted), linear title
+  matching + bounded titles, subitem classification budget, sweep-time verdict
+  invalidation, model-revision-gated centroid reuse, sanitizer teardown on
+  master-off.
+- Data/companion: surrogate-safe labels, backup commit re-reads the lock, future
+  stamp clamps, schedule id/day dedupe + caps, cache invalidation epochs,
+  unauthenticated category-schedule pinning, app-stamp clamps, bounded config
+  lists, mirrored `lock-state.json`, delay deadline clock compensation.
+- Product: a **10-second pause** override-friction tier beside the typed wall
+  (`surrenderMode: 'off' | 'pause' | 'phrase'`).
+- Measurement/CI: the evaluator now mirrors the YouTube browsing-surface policy
+  (36 committed cases were mis-scored), fails on added-failing/removed cases,
+  and the nightly lane runs every pure harness + `verify-dataset` + `npm run
+  eval` + all e2e suites.
+- Tests: new harnesses for overrides, feedback/learning fold, focus-session
+  deferred commit, titles, plus pause-tier and attribute-tamper e2e cases.
+
+See `docs/learning-notes/2026-11-21-audit-swarm-hardening.md` and
+`docs/learning-notes/2026-11-21-pause-tier-and-test-gaps.md`.
+
+---
+
 ## Engineering ground rules (carried across phases)
 
 These keep the extension from breaking; full detail in `CLAUDE.md`.
