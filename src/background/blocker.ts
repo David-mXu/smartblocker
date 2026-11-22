@@ -399,6 +399,7 @@ async function runPageSanitizer(tabId: number): Promise<void> {
           blocklist: settings.blocklist,
           settingsLocked: lock.settingsLocked,
           maskSearchElements: settings.maskSearchElements,
+          maskFeeds: settings.maskFeeds,
           policyEpoch: categoryPolicyEpoch,
           enabled: settings.enabled || lock.forceBlocking,
         },
@@ -2022,6 +2023,7 @@ const SETTINGS_SWEEP_KEYS: (keyof Settings)[] = [
   'useTabContext',
   'blockAdult',
   'maskSearchElements',
+  'maskFeeds',
 ];
 
 let settingsSweepTimer: ReturnType<typeof setTimeout> | undefined;

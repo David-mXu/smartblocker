@@ -129,30 +129,35 @@ await test('commit before the deadline is a no-op', async () => {
   assert.equal(frozenUntil(), null);
 });
 
-await test('commit after the deadline writes the fixed end time, then is idempotent', async () => {
+await test('commit after the deadline writes the fixed end time; concurrent commits converge', async () => {
   reset();
   const durationMs = 30 * 60_000;
   const now = Date.now();
   await startFocusSession(durationMs, now);
+  const commitAt = now + FOCUS_UNDO_MS + 1;
+  const expectedEnd = now + durationMs;
   // Advance the WALL clock too: the commit derives the remaining duration
   // from the supplied `now`, then startFrozenTurkey anchors it to Date.now().
-  const commitAt = now + FOCUS_UNDO_MS + 1;
   Date.now = () => commitAt;
-  let committed;
+  let results;
   try {
-    committed = await commitFocusSessionIfDue(commitAt);
+    // Two surfaces notice the due session at the same instant (alarm + popup
+    // reopen). Both read the pending record before either removes it, so this
+    // actually exercises the extend-only converger rather than the missing-
+    // pending guard.
+    results = await Promise.all([commitFocusSessionIfDue(commitAt), commitFocusSessionIfDue(commitAt)]);
   } finally {
     Date.now = REAL_NOW;
   }
-  assert.equal(committed, true);
+  assert.ok(results.some(Boolean), 'at least one committer must report the commit');
   assert.equal(await getPendingFocusSession(), null);
   const end = frozenUntil();
   assert.ok(
-    Math.abs(end - (now + durationMs)) < 3_000,
-    `frozen end should stay at click+duration (got delta ${end - (now + durationMs)}ms)`,
+    Math.abs(end - expectedEnd) < 3_000,
+    `frozen end should stay at click+duration (got delta ${end - expectedEnd}ms)`,
   );
-  // A second commit (alarm + popup race) must not move the end.
-  assert.equal(await commitFocusSessionIfDue(now + FOCUS_UNDO_MS + 2), false);
+  // A later re-commit has nothing pending and must not move the end.
+  assert.equal(await commitFocusSessionIfDue(commitAt + 2), false);
   assert.equal(frozenUntil(), end);
 });
 

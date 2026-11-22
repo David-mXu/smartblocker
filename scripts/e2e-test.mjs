@@ -838,6 +838,75 @@ try {
     await chrome.storage.local.set({ settings: { ...settings, maskSearchElements: true } });
   });
 
+  // 8d. Opt-in in-feed masking: the YouTube HOME page stays allowed, but with
+  // maskFeeds on, individual feed cards are classified and distracting ones are
+  // folded away. Opt-in (default off), so run this on a dedicated fixture.
+  const youTubeFeedHtml = `<!doctype html><html><head><meta charset="utf-8"><title>YouTube</title></head><body>
+    <ytd-rich-item-renderer id="feed-game">
+      <a id="video-title" href="/watch?v=feedgame001" title="I spent 100 days in Hardcore Minecraft">I spent 100 days in Hardcore Minecraft</a>
+      <ytd-channel-name><div id="text"><a>Gaming Archive</a></div></ytd-channel-name>
+    </ytd-rich-item-renderer>
+    <ytd-rich-item-renderer id="feed-react">
+      <a id="video-title" href="/watch?v=feedreact01" title="React Router Tutorial">React Router Tutorial</a>
+      <ytd-channel-name><div id="text"><a>React Training</a></div></ytd-channel-name>
+    </ytd-rich-item-renderer>
+    <ytd-reel-item-renderer id="feed-short">
+      <a href="/shorts/feedshort1"><h3>Funny cat memes compilation</h3></a>
+    </ytd-reel-item-renderer>
+  </body></html>`;
+  await context.route('https://www.youtube.com/', (route) =>
+    route.fulfill({ contentType: 'text/html; charset=utf-8', body: youTubeFeedHtml }),
+  );
+  await sw.evaluate(async () => {
+    const { settings = {} } = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({ settings: { ...settings, maskFeeds: true } });
+  });
+  await tab.goto('about:blank');
+  await tab.goto('https://www.youtube.com/');
+  let feedMaskState = null;
+  try {
+    await tab.waitForFunction(
+      () => {
+        const game = document.getElementById('feed-game');
+        const react = document.getElementById('feed-react');
+        return (
+          game?.getAttribute('data-smartblocker-masked') === 'serp-card' &&
+          react?.getAttribute('data-smartblocker-state') === 'allowed'
+        );
+      },
+      undefined,
+      { timeout: 45_000 },
+    );
+    feedMaskState = await tab.evaluate(() => ({
+      game: document.getElementById('feed-game')?.getAttribute('data-smartblocker-masked') ?? null,
+      react: document.getElementById('feed-react')?.getAttribute('data-smartblocker-masked') ?? null,
+      pageOverlays: document.querySelectorAll('#smartblocker-overlay').length,
+    }));
+  } catch {}
+  const feedMaskOk =
+    !!feedMaskState &&
+    feedMaskState.game === 'serp-card' &&
+    feedMaskState.react === null &&
+    feedMaskState.pageOverlays === 0;
+  console.log(
+    `${feedMaskOk ? 'PASS' : 'FAIL'} maskFeeds folds distracting YouTube home/feed cards while keeping the page and productive cards visible:`,
+    feedMaskState,
+  );
+  if (!feedMaskOk) process.exitCode = 1;
+
+  // Turning the opt-in off reveals previously masked feed cards (same
+  // user-initiated reveal semantics as the search-masking toggle).
+  await sw.evaluate(async () => {
+    const { settings = {} } = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({ settings: { ...settings, maskFeeds: false } });
+  });
+  await tab.waitForTimeout(1_500);
+  const feedRevealed = await tab.evaluate(
+    () => document.getElementById('feed-game')?.getAttribute('data-smartblocker-masked') !== 'serp-card',
+  );
+  console.log(`${feedRevealed ? 'PASS' : 'FAIL'} turning maskFeeds off reveals feed cards`);
+  if (!feedRevealed) process.exitCode = 1;
+
   // 9. Embedded YouTube Videos inside Whitelisted Google AI Studio / Chatbots:
   // Even though aistudio.google.com is whitelisted at the page level, a distracting
   // embedded YouTube video (Airrack "Secretly Working At 7-11 Until I Get Fired",

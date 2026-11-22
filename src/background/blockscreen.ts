@@ -621,9 +621,12 @@ export function showBlockScreen(
       btnBase + 'background:transparent;color:#a29a89;border:1px solid transparent;font-weight:400;';
     btnCancel.textContent = 'Cancel';
 
-    const armedAt = Date.now();
+    // Monotonic arming: a wall-clock correction must not shorten or extend the
+    // cool-down (same posture as the lock system). performance.now() is a
+    // duration source, which is exactly what this tier needs.
+    const armedAtMono = performance.now();
     const tick = () => {
-      const remaining = Math.max(0, armedAt + pauseMs - Date.now());
+      const remaining = Math.max(0, pauseMs - (performance.now() - armedAtMono));
       if (remaining > 0) {
         countdown.textContent =
           'You can open it in ' + Math.ceil(remaining / 1000) + ' seconds.';
@@ -631,20 +634,18 @@ export function showBlockScreen(
       }
       stopSurrenderTimer();
       countdown.textContent = 'You can open the page now.';
+      // Announce the state change once; do NOT steal focus — a keyboard user
+      // mid-Tab must not have the next Enter land on the release button.
+      countdown.setAttribute('aria-live', 'polite');
       btnOpen.disabled = false;
       btnOpen.style.opacity = '1';
-      try {
-        btnOpen.focus({ preventScroll: true });
-      } catch {
-        // ignore
-      }
     };
     surrenderTimer = setInterval(tick, 250);
     tick();
 
     btnOpen.addEventListener('click', (e) => {
       if (!e.isTrusted || dismissed || locked) return;
-      if (Date.now() < armedAt + pauseMs) return;
+      if (performance.now() - armedAtMono < pauseMs) return;
       sendOverride();
     });
     btnCancel.addEventListener('click', (e) => {

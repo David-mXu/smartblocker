@@ -355,14 +355,18 @@ await test('the pause override-friction tier survives sanitize and a strict roun
     schema: BACKUP_SCHEMA_ID,
     version: 1,
     exportedAt: EXPORTED_AT,
-    default: { settings: { ...defaultManagedSettings(), surrenderMode: 'pause' } },
+    default: {
+      settings: { ...defaultManagedSettings(), surrenderMode: 'pause', maskFeeds: true },
+    },
     profiles: [],
   };
   const { document } = sanitizeBackup(raw, NOW);
   assert.equal(document.default.settings.surrenderMode, 'pause');
+  assert.equal(document.default.settings.maskFeeds, true);
   const again = parseBackup(serializeBackup(document), NOW);
   assert.equal(again.ok, true);
   assert.equal(again.document.default.settings.surrenderMode, 'pause');
+  assert.equal(again.document.default.settings.maskFeeds, true);
   // Unknown values still sanitize to the safe one-click default at read time.
   const bogus = sanitizeBackup(
     { ...raw, default: { settings: { ...defaultManagedSettings(), surrenderMode: 'maybe' } } },

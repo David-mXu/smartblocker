@@ -3,6 +3,7 @@
 //
 //   node scripts/surrender-test.mjs
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   canSubmit,
   isPhraseMatch,
@@ -119,5 +120,14 @@ test('override friction normalizes unknown values to off, keeps both tiers', () 
   assert.equal(normalizeOverrideFriction(undefined), 'off');
 });
 
+test('THE INJECTED PAUSE CONSTANT MATCHES THE SHARED ONE (source tripwire)', () => {
+  // blockscreen.ts is serialized into the page and cannot import surrender.ts,
+  // so the constant is mirrored; a silent drift would make the wall and the
+  // tested contract disagree.
+  const source = readFileSync(new URL('../src/background/blockscreen.ts', import.meta.url), 'utf8');
+  assert.match(source, /const pauseMs = 10_000;/);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exitCode = 1;
+

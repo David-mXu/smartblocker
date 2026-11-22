@@ -64,6 +64,31 @@ the page and records the correction.
 - `e2e-test` and `e2e-profiles` re-run for regressions on the shared block
   screen and the settings page.
 
+## Post-commit review fixes
+
+A follow-up review of the pause tier found:
+
+- The e2e "early synthetic activation" clicked a still-`disabled` button, which
+  dispatches nothing — it proved neither the `isTrusted` guard nor the deadline.
+  The test now enables the control from page JS before synthesizing the click,
+  and separately makes a TRUSTED Playwright click before the deadline (both
+  inert), then waits out the cool-down and clicks for real.
+- The deadline used `Date.now()`; a clock correction could shorten or skip the
+  cool-down. Arming and gating now use `performance.now()` (a duration source).
+- On expiry the wall moved focus onto the release button, so a keyboard user
+  mid-Tab could release the page with the next Enter. Focus is no longer moved;
+  the countdown announces completion once via `aria-live=polite`.
+- `surrenderMode` sanitize now calls the shared `normalizeOverrideFriction`
+  instead of a hand-written branch, and a source tripwire pins the injected
+  10,000 ms constant to `PAUSE_OVERRIDE_MS` (blockscreen cannot import shared
+  code).
+- The design-notes label and the stacked settings JSDoc were corrected, and the
+  select's redundant `aria-label` was removed so the visible label is its
+  accessible name.
+- The focus-session idempotence test was made real: it now fires two commits
+  concurrently (both read the pending record before either removes it) and
+  asserts the extend-only lock converges on the same end.
+
 ## Deliberately not done
 
 - No "pause" for the popup's "Should've been blocked" report (it is not a

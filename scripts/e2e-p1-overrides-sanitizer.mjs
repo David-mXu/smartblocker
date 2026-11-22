@@ -305,35 +305,45 @@ try {
     pauseWall && pauseOpenDisabled === true,
     JSON.stringify({ pauseWall, pauseOpenDisabled }),
   );
-  // Early synthetic activation must be inert (isTrusted + deadline).
+  // Un-trusted activation must be inert even when the control is enabled:
+  // page JS enables it and synthesizes a click (a disabled input dispatches
+  // nothing, so enabling first is what makes this assertion meaningful).
   await page.evaluate(() => {
-    document.getElementById('smartblocker-overlay')?.shadowRoot
-      ?.querySelector('#smartblocker-pause-open')
-      ?.click();
+    const btn = document.getElementById('smartblocker-overlay')?.shadowRoot
+      ?.querySelector('#smartblocker-pause-open');
+    if (btn instanceof HTMLButtonElement) {
+      btn.disabled = false;
+      btn.click();
+    }
   });
   const stillBlockedEarly = await page.locator('#smartblocker-overlay').count();
+  // A TRUSTED click while the control is enabled but the deadline has NOT
+  // elapsed must also be inert (the deadline re-check, not just isTrusted).
+  await page.locator('#smartblocker-pause-open').click();
+  const stillBlockedTrustedEarly = await page.locator('#smartblocker-overlay').count();
   const overridesDuringPause = await sw.evaluate(async () => {
     const { overrides = [] } = await chrome.storage.local.get('overrides');
     return overrides.length;
   });
   check(
-    'the pause tier neither releases nor records an override early',
-    stillBlockedEarly === 1 && overridesDuringPause === overridesBeforePause,
-    JSON.stringify({ stillBlockedEarly, overridesBeforePause, overridesDuringPause }),
+    'the pause tier neither releases nor records an override early (untrusted + trusted-before-deadline)',
+    stillBlockedEarly === 1 &&
+      stillBlockedTrustedEarly === 1 &&
+      overridesDuringPause === overridesBeforePause,
+    JSON.stringify({
+      stillBlockedEarly,
+      stillBlockedTrustedEarly,
+      overridesBeforePause,
+      overridesDuringPause,
+    }),
   );
-  let pauseEnabled = false;
-  try {
-    await page.waitForFunction(
-      () => {
-        const host = document.getElementById('smartblocker-overlay');
-        const btn = host?.shadowRoot?.querySelector('#smartblocker-pause-open');
-        return btn instanceof HTMLElement && !btn.hasAttribute('disabled');
-      },
-      undefined,
-      { timeout: 15_000 },
-    );
-    pauseEnabled = true;
-  } catch {}
+  // Wait past the 10-second cool-down from the wall's own opening, then use a
+  // real trusted click.
+  await page.waitForTimeout(11_000);
+  const pauseEnabled = await page
+    .locator('#smartblocker-pause-open')
+    .isEnabled()
+    .catch(() => false);
   check('the cool-down ends after ~10 seconds', pauseEnabled);
   if (pauseEnabled) {
     await page.locator('#smartblocker-pause-open').click();
@@ -346,10 +356,17 @@ try {
       );
       released = true;
     } catch {}
-    const overridesAfterPause = await sw.evaluate(async (title) => {
-      const { overrides = [] } = await chrome.storage.local.get('overrides');
-      return overrides.some((record) => String(record.title).includes(title.split(' ')[0]));
-    }, pauseTitle);
+    // The OVERRIDE message is handled asynchronously in the SW; poll briefly
+    // instead of racing the storage write.
+    let overridesAfterPause = false;
+    const overrideDeadline = Date.now() + 5_000;
+    while (Date.now() < overrideDeadline && !overridesAfterPause) {
+      overridesAfterPause = await sw.evaluate(async (title) => {
+        const { overrides = [] } = await chrome.storage.local.get('overrides');
+        return overrides.some((record) => String(record.title).includes(title.split(' ')[0]));
+      }, pauseTitle);
+      if (!overridesAfterPause) await new Promise((r) => setTimeout(r, 250));
+    }
     check(
       'the pause tier releases the page and records the correction',
       released && overridesAfterPause === true,

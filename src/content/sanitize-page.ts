@@ -27,6 +27,9 @@ export interface SanitizePageOptions {
   blocklist: string[];
   settingsLocked: boolean;
   maskSearchElements?: boolean;
+  /** Opt-in: classify and mask individual cards on YouTube HOME / FEEDS /
+   *  channel pages (the page itself stays allowed). OFF by default. */
+  maskFeeds?: boolean;
   /** Background-owned scoped-policy/boundary epoch used to invalidate only
    * classifier-owned states, never deterministic rule masks. */
   policyEpoch?: number;
@@ -932,37 +935,56 @@ export function sanitizePage(opts: SanitizePageOptions): {
       }
     }
 
-    // ── YouTube Search: classify videos individually, never by their query ────
-    // /results is deliberately allowed as a browsing surface at the page level.
-    // That exemption must not turn the results themselves into an unclassified
-    // distraction feed: a "tech" search can contain both a useful repair guide
-    // and pure entertainment, so each real video/Short gets its own verdict.
-    const isYouTubeSearch =
-      (hostLower === 'youtube.com' || hostLower.endsWith('.youtube.com')) &&
-      /^\/results(?:\/|$)/i.test(location.pathname);
+    // ── YouTube cards: classify videos individually, never by the container ──
+    // /results is a browsing surface; with maskSearchElements on, each result
+    // gets its own verdict. With the opt-in maskFeeds setting, the same
+    // classification applies to CARDS on home/feeds/channel pages while the
+    // page itself stays allowed.
+    const isYouTubeHost =
+      hostLower === 'youtube.com' || hostLower.endsWith('.youtube.com');
+    const isYouTubeResults =
+      isYouTubeHost && /^\/results(?:\/|$)/i.test(location.pathname);
+    const isYouTubeFeedSurface =
+      isYouTubeHost &&
+      /^(?:\/$|\/(?:feed\/|@|channel\/|c\/|user\/|playlist\b))/i.test(location.pathname) &&
+      !/^\/(?:watch|shorts\/|live\/|embed\/|v\/)/i.test(location.pathname);
+    const maskYouTubeCards =
+      isYouTubeResults
+        ? activeOpts.maskSearchElements !== false
+        : isYouTubeFeedSurface && activeOpts.maskFeeds === true;
 
-    if (isYouTubeSearch) {
-      if (activeOpts.maskSearchElements === false) {
+    if (isYouTubeResults || isYouTubeFeedSurface) {
+      if (!maskYouTubeCards) {
+        // Turning the setting off is a user-initiated reveal: record it in the
+        // isolated-world set so it survives re-enabling + rescans.
         const maskedYouTubeCards = document.querySelectorAll(
           '[data-smartblocker-masked="serp-card"]',
         );
         for (let i = 0; i < maskedYouTubeCards.length; i++) {
           const card = maskedYouTubeCards[i];
-          // Setting-off is a user-initiated reveal: record it in the
-          // isolated-world set so the reveal survives re-enabling + rescans.
           revealedEls.add(card);
           card.setAttribute('data-smartblocker-masked', 'revealed');
           card.querySelector(':scope > .smartblocker-mask-bar')?.remove();
         }
       } else {
-        const videoCards = document.querySelectorAll(
-          'ytd-video-renderer, ytd-grid-video-renderer, ytd-reel-item-renderer, ytd-shorts-lockup-view-model',
-        );
+        const CARD_SELECTOR =
+          'ytd-video-renderer, ytd-grid-video-renderer, ytd-reel-item-renderer, ' +
+          'ytd-shorts-lockup-view-model, ytd-rich-item-renderer, ytd-compact-video-renderer';
+        const videoCards = queryAllDeep(CARD_SELECTOR, deepRoots);
         for (let i = 0; i < videoCards.length; i++) {
           const card = videoCards[i];
           if (
             isMaskedOrGenuinelyRevealed(card) ||
             isHandled(card)
+          ) {
+            continue;
+          }
+          // Rich-item wrappers can nest other renderer types; classify only the
+          // outermost card so one video is never queued twice.
+          if (
+            card.parentElement?.closest(
+              'ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-reel-item-renderer, ytd-shorts-lockup-view-model',
+            )
           ) {
             continue;
           }
@@ -1005,7 +1027,7 @@ export function sanitizePage(opts: SanitizePageOptions): {
               url: cardUrl,
               title: cardTitle,
               channel: channelName ? `${channelName} (youtube.com)` : 'youtube.com',
-              context: `YouTube search result.${snippet ? ` ${snippet}` : ''}`,
+              context: `${isYouTubeResults ? 'YouTube search result.' : 'YouTube feed card.'}${snippet ? ` ${snippet}` : ''}`,
               kind: 'serp-card',
             });
           }

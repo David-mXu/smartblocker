@@ -667,7 +667,9 @@ round and one product addition on branch `improve/best-version` (commits
   unauthenticated category-schedule pinning, app-stamp clamps, bounded config
   lists, mirrored `lock-state.json`, delay deadline clock compensation.
 - Product: a **10-second pause** override-friction tier beside the typed wall
-  (`surrenderMode: 'off' | 'pause' | 'phrase'`).
+  (`surrenderMode: 'off' | 'pause' | 'phrase'`), and opt-in **in-feed card
+  masking** on YouTube home/feeds (`maskFeeds`, default off) that classifies
+  individual cards while leaving the browsing surface available.
 - Measurement/CI: the evaluator now mirrors the YouTube browsing-surface policy
   (36 committed cases were mis-scored), fails on added-failing/removed cases,
   and the nightly lane runs every pure harness + `verify-dataset` + `npm run
@@ -675,8 +677,9 @@ round and one product addition on branch `improve/best-version` (commits
 - Tests: new harnesses for overrides, feedback/learning fold, focus-session
   deferred commit, titles, plus pause-tier and attribute-tamper e2e cases.
 
-See `docs/learning-notes/2026-11-21-audit-swarm-hardening.md` and
-`docs/learning-notes/2026-11-21-pause-tier-and-test-gaps.md`.
+See `docs/learning-notes/2026-11-21-audit-swarm-hardening.md`,
+`docs/learning-notes/2026-11-21-pause-tier-and-test-gaps.md`, and
+`docs/learning-notes/2026-11-21-in-feed-masking.md`.
 
 ---
 

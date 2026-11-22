@@ -208,10 +208,12 @@ Tint recipe for callouts: `bg-<hue>/10 border-<hue>/30 text-<hue>-soft`.
   authority-labelled allowance/opening grants, and the classifier-only relief
   statement; 24-hour focus-hours and category-window lanes with current-time
   marker and textual equivalents) · Blocking `#blocking` (master switch with
-  opt-in "Typed confirmation for overrides" and "Turn blocking back on" right
+  opt-in "Friction before an override" (one click / 10-second pause /
+  type a sentence) and "Turn blocking back on" right
   under it — Never / when the
   browser restarts / when focus hours begin / at a set time — "Hide distractions
-  in search results",
+  in search results" (and the separate opt-in "Hide distracting cards on
+  YouTube home and feeds"),
   strictness presets
   Relaxed 0.65 / Balanced 0.5 / Strict 0.4 — other values read "Custom",
   categories + "Also block adults-only sites instantly" (RTA label / .xxx)
@@ -413,7 +415,8 @@ longer exists.
   `#dashboard-timeline-category` (each with a `-marker` child),
   `#dashboard-timeline-text` (`li` per occurrence). Read-only; no controls.
 - `#blocking`: `#enabled-toggle`, `#surrender-mode-toggle`, `#resume-mode`,
-  `#resume-at`, `#mask-search-elements-toggle`, `#block-adult-toggle`, `#label-list` (`li`,
+  `#resume-at`, `#mask-search-elements-toggle`, `#mask-feeds-toggle`,
+  `#block-adult-toggle`, `#label-list` (`li`,
   `.delete-label-btn`),
   `#custom-category-input`, `#add-category-btn`, `#scan-btn`,
   `#block-top-btn`, `#scan-status`, `#scan-out`.

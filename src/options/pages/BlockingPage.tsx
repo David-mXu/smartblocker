@@ -209,7 +209,6 @@ export function BlockingPage({ state }: { state: OptionsState }) {
             control={
               <Select
                 id="surrender-mode-toggle"
-                aria-label="Override friction"
                 value={settings.surrenderMode}
                 disabled={locked}
                 onChange={(e) =>
@@ -313,6 +312,25 @@ export function BlockingPage({ state }: { state: OptionsState }) {
                 checked={settings.maskSearchElements}
                 disabled={locked}
                 onChange={(e) => void save({ maskSearchElements: e.target.checked })}
+              />
+            }
+          />
+          <SettingRow
+            label="Hide distracting cards on YouTube home and feeds"
+            description={
+              locked ? (
+                <LockedNote reason={lock.reason} className="mt-0.5" />
+              ) : (
+                'Google Search surfaces and YouTube Search already get this. Turn it on to also fold away individual videos and Shorts in YouTube’s home, subscription and channel feeds. The page itself stays open, and you can still open a video on purpose.'
+              )
+            }
+            htmlFor="mask-feeds-toggle"
+            control={
+              <Switch
+                id="mask-feeds-toggle"
+                checked={settings.maskFeeds}
+                disabled={locked}
+                onChange={(e) => void save({ maskFeeds: e.target.checked })}
               />
             }
           />

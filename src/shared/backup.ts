@@ -378,6 +378,7 @@ function canonicalManagedSettings(settings: BackupManagedSettings): BackupManage
     useTabContext: settings.useTabContext,
     blockAdult: settings.blockAdult,
     maskSearchElements: settings.maskSearchElements,
+    maskFeeds: settings.maskFeeds,
     surrenderMode: settings.surrenderMode,
     blockMessage: settings.blockMessage,
     breakMode: settings.breakMode,
@@ -932,6 +933,7 @@ export function mergePolicies(
     useTabContext: incoming.useTabContext,
     blockAdult: incoming.blockAdult,
     maskSearchElements: incoming.maskSearchElements,
+    maskFeeds: incoming.maskFeeds,
     surrenderMode: incoming.surrenderMode,
     blockMessage: sanitizeBlockMessage(incoming.blockMessage),
     breakMode: normalizeBreakMode(incoming.breakMode),
@@ -1413,6 +1415,9 @@ function policyDiff(before: ProfilePolicy, after: ProfilePolicy, names: {
   }
   if (before.blockAdult !== after.blockAdult) {
     details.push(`Adult-site blocking: ${before.blockAdult ? 'on' : 'off'} → ${after.blockAdult ? 'on' : 'off'}`);
+  }
+  if (before.maskFeeds !== after.maskFeeds) {
+    details.push(`In-feed masking: ${before.maskFeeds ? 'on' : 'off'} → ${after.maskFeeds ? 'on' : 'off'}`);
   }
   if (before.maskSearchElements !== after.maskSearchElements) {
     details.push(

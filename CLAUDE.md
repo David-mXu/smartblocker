@@ -754,6 +754,12 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   "pure" tile around any remaining video/social/gaming/gambling link. When
   Google changes markup, inspect the live DOM (browser-use) before adding
   selectors.
+- **YouTube home/feed cards are masked only when `settings.maskFeeds` is on**
+  (opt-in, default OFF; profile-scoped like `maskSearchElements`). The PAGE
+  stays a browsing surface; the sanitizer classifies individual
+  `ytd-rich-item-renderer` / video / reel / Shorts-lockup cards, masks blocked
+  ones in place, and reveals them when the setting is turned off. The same
+  card path runs on YouTube `/results` under `maskSearchElements`.
 - **Browser blocking is a post-navigation overlay with selective pre-curtain.**
   `blocker.ts` listens for navigation, title changes, and `status === 'complete'`.
   On deterministic blocklist hits, mixed high-risk hosts (YouTube, Reddit, X,
