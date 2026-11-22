@@ -170,7 +170,12 @@ hardening itself, all fixed and covered:
   harnesses: a zombie Chromium from a killed run held the profile
   (`SingletonLock`), and a killed Chromium left a broken service-worker
   registration (the launch helpers now clear a dead lock and, on a failed boot,
-  drop `Default/Service Worker/Database` while keeping CacheStorage).
+  drop `Default/Service Worker/Database` while keeping CacheStorage). After the
+  review fixes the same suites were re-run on a clean profile: e2e-test,
+  e2e-p1-overrides-sanitizer (including the new attribute-strip assertion),
+  e2e-p2-dnr, e2e-serp-stability and the full companion e2e (64/64) are green;
+  an earlier companion run failed only on Native-Messaging connection setup
+  under load and passed on a solo re-run with no code change.
 - companion: 317 core + 4 fixture + 2 nm-host tests, clippy `-D warnings`, fmt.
 
 ## Deliberately open
