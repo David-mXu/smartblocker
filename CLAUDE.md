@@ -173,6 +173,10 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   Focus session commit: defers with no lock write, undo, no-op before the
   deadline, fixed end time at commit, idempotent re-commit, expired sessions,
   and the alarm path.
+- `node scripts/protection-health-test.mjs` — pure tests for the dashboard's
+  protection-health derivation (revoked site access, unfinished setup, missing
+  model files, companion drift, paused vs locked precedence) plus a source
+  tripwire for the health DOM ids.
 - `node scripts/titles-test.mjs` — pure tests for the title pipeline
   (`src/shared/titles.ts` `cleanTitle`): suffix stripping, generic/URL
   rejection, CJK, the 300/512 length bounds, surrogate-safe truncation, and a
@@ -421,8 +425,8 @@ Commit and push when appropriate.
   merge stay monotonic). No diagnostics in the popup.
 - `src/options/` (`OptionsApp.tsx` shell, `useOptionsState.ts`, `format.ts`,
   `pages/*`, `welcome/*`) — sidebar settings, ONE page at a time via hash
-  routes: `#dashboard` (read-only Now / Next / Relief plus today's focus-hours
-  and category timeline), `#blocking` (switch, strictness presets, categories,
+  routes: `#dashboard` (read-only Protection-health row, Now / Next /
+  Relief, plus today's focus-hours and category timeline), `#blocking` (switch, strictness presets, categories,
   history review), `#profiles` (named settings snapshots: Activate /
   Duplicate / Rename / two-step Delete, active profile's desktop apps and
   connection status), `#sites` (`ListEditor` Always allow / Always block), `#focus`,

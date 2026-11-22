@@ -669,7 +669,10 @@ round and one product addition on branch `improve/best-version` (commits
 - Product: a **10-second pause** override-friction tier beside the typed wall
   (`surrenderMode: 'off' | 'pause' | 'phrase'`), and opt-in **in-feed card
   masking** on YouTube home/feeds (`maskFeeds`, default off) that classifies
-  individual cards while leaving the browsing surface available.
+  individual cards while leaving the browsing surface available; and a
+  **Protection-health row** on `#dashboard` that surfaces revoked site access,
+  unfinished setup, missing model files, and companion drift instead of
+  looking active when it isn't.
 - Measurement/CI: the evaluator now mirrors the YouTube browsing-surface policy
   (36 committed cases were mis-scored), fails on added-failing/removed cases,
   and the nightly lane runs every pure harness + `verify-dataset` + `npm run

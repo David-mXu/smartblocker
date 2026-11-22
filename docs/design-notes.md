@@ -407,6 +407,7 @@ longer exists.
 - `#dashboard`: `#dashboard-now`, `#dashboard-blocking`,
   `#dashboard-blocking-detail`, `#dashboard-lock`, `#dashboard-lock-summary`,
   `#dashboard-lock-reasons` (`li` per active reason), `#dashboard-companion`,
+  `#protection-health` (with `-title`, `-detail`, `-fix` children),
   `#dashboard-next`, `#dashboard-next-global`, `#dashboard-next-category`,
   `#dashboard-next-resume`, `#dashboard-next-focus`, `#dashboard-relief`,
   `#dashboard-relief-break`, `#dashboard-relief-allowance`,

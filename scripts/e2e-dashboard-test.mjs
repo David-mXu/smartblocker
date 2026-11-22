@@ -151,6 +151,18 @@ try {
   );
 
   const page = await context.newPage();
+  // Protection health treats "no cached model" as an attention state; this
+  // suite never downloads the real model, so seed a cache entry to represent
+  // a completed download (the probe checks CacheStorage, not inference).
+  await sw.evaluate(async () => {
+    try {
+      const cache = await caches.open('transformers-cache');
+      await cache.put('https://huggingface.co/e2e-health-probe', new Response('probe'));
+    } catch {
+      // Cache API unavailable — health reports 'unknown' and stays quiet.
+    }
+  });
+
   await page.goto(`chrome-extension://${EXTENSION_ID}/options.html#dashboard`);
   const ready = await poll(() => page.locator('#dashboard-now').count().then((count) => count > 0), 20_000, 'dashboard renders');
   check(ready, 'options route #dashboard renders');
@@ -251,6 +263,54 @@ try {
     await poll(() => page.locator('#dashboard-lock-reasons').textContent().then((text) => !(text?.includes('Timer lock') ?? true)), 6_000, 'timer reason expires live'),
     'dashboard drops an expired timer without a reload',
   );
+
+  // ── Protection health ────────────────────────────────────────────────────
+  const healthTitle = () => page.locator('#protection-health-title').textContent().then((t) => t ?? '');
+  check(
+    await poll(
+      async () => {
+        const text = await healthTitle();
+        return text.includes('locked') || text.includes('Protection is on');
+      },
+      10_000,
+      'protection health renders',
+    ),
+    'protection health row renders with a live state',
+  );
+
+  // Clean unlocked state + enabled → "Protection is on"; disabled → paused.
+  await sw.evaluate(async () => {
+    const stored = await chrome.storage.local.get(['lockState', 'settings']);
+    await chrome.storage.local.set({
+      lockState: {
+        ...stored.lockState,
+        timerUntil: null,
+        frozenUntil: null,
+        passwordHash: null,
+        schedules: [],
+        schedulesUpdatedAt: Date.now(),
+        categorySchedules: [],
+        categorySchedulesUpdatedAt: Date.now(),
+      },
+      settings: { ...stored.settings, enabled: true },
+    });
+  });
+  check(
+    await poll(async () => (await healthTitle()).includes('Protection is on'), 10_000, 'health: on'),
+    'health reports protection is on when enabled and unlocked',
+  );
+  await sw.evaluate(async () => {
+    const stored = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({ settings: { ...stored.settings, enabled: false } });
+  });
+  check(
+    await poll(async () => (await healthTitle()).includes('Blocking is off'), 10_000, 'health: paused'),
+    'health reports blocking is off when the master switch is off',
+  );
+  await sw.evaluate(async () => {
+    const stored = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({ settings: { ...stored.settings, enabled: true } });
+  });
 
   const bodyText = (await page.locator('body').textContent()) ?? '';
   check(!bodyText.includes('https://'), 'dashboard exposes no page URL');

@@ -17,6 +17,10 @@ import {
   type DashboardTone,
 } from '../../shared/dashboard';
 import { getLocalAllowanceAuthority } from '../../shared/allowance-store';
+import {
+  deriveProtectionHealth,
+  type ModelCacheState,
+} from '../../shared/protection-health';
 import { normalizeAllowanceAuthorityState } from '../../shared/allowance-state';
 import { Badge } from '../../components/ui/badge';
 import { Callout, SettingRow, SettingsGroup, SettingsSection } from '../../components/ui/settings';
@@ -111,6 +115,8 @@ function TimelineTicks({ model }: { model: DashboardModel }) {
 export function DashboardPage({ state }: { state: OptionsState }) {
   const { settings, lockState, pendingFocus, companion, now, profiles } = state;
   const [allowance, setAllowance] = useState<DashboardAllowanceInput>({ state: null, source: null });
+  const [hasAllUrls, setHasAllUrls] = useState<boolean | null>(null);
+  const [modelCache, setModelCache] = useState<ModelCacheState>('unknown');
   const activeProfile =
     profiles && profiles.activeProfileId !== null
       ? profiles.profiles.find((profile) => profile.id === profiles.activeProfileId) ?? null
@@ -160,6 +166,55 @@ export function DashboardPage({ state }: { state: OptionsState }) {
       api.storage.onChanged.removeListener(onStorageChanged);
     };
   }, []);
+
+  // Protection-health probes: the <all_urls> grant (revocable outside our UI)
+  // and whether this profile has the model files cached. Re-probe when the
+  // master switch/onboarding changes or model download progress moves.
+  useEffect(() => {
+    let cancelled = false;
+    const probe = async () => {
+      let permission: boolean | null = null;
+      try {
+        permission = await api.permissions.contains({ origins: ['<all_urls>'] });
+      } catch {
+        permission = null;
+      }
+      let cache: ModelCacheState = 'unknown';
+      try {
+        if (typeof caches !== 'undefined') {
+          const names = await caches.keys();
+          const name = names.find((entry) => entry.includes('transformers'));
+          if (!name) cache = 'missing';
+          else {
+            const opened = await caches.open(name);
+            cache = (await opened.keys()).length > 0 ? 'present' : 'missing';
+          }
+        }
+      } catch {
+        cache = 'unknown';
+      }
+      if (!cancelled) {
+        setHasAllUrls(permission);
+        setModelCache(cache);
+      }
+    };
+    void probe();
+    return () => {
+      cancelled = true;
+    };
+  }, [settings?.enabled, settings?.onboarded, state.modelProgress, lockState]);
+
+  const health = settings
+    ? deriveProtectionHealth({
+        enabled: settings.enabled,
+        onboarded: settings.onboarded,
+        settingsLocked: state.lock.locked,
+        forceBlocking: state.lock.status.forceBlocking,
+        hasAllUrls,
+        modelCache,
+        companionState: companion?.state ?? null,
+      })
+    : null;
 
   const dayToken = new Date(now).toDateString();
   const baseTimeline = useMemo(
@@ -240,6 +295,49 @@ export function DashboardPage({ state }: { state: OptionsState }) {
               {model.blocking.forced ? 'Locked' : model.blocking.enabled ? 'Protection on' : 'Paused'}
             </Badge>
           </div>
+
+          {health && (
+            <div
+              id="protection-health"
+              className="flex flex-col gap-1 border-t border-border px-4 py-3.5"
+            >
+              <div className="flex items-center gap-2">
+                <ShieldCheck
+                  weight={health.kind === 'on' ? 'fill' : 'regular'}
+                  aria-hidden
+                  className={cn(
+                    'size-4 shrink-0',
+                    health.kind === 'on'
+                      ? 'text-success'
+                      : health.kind === 'locked'
+                        ? 'text-accent'
+                        : 'text-warning',
+                  )}
+                />
+                <p
+                  id="protection-health-title"
+                  className="m-0 text-sm font-medium text-foreground"
+                >
+                  {health.title}
+                </p>
+              </div>
+              <p
+                id="protection-health-detail"
+                className="m-0 text-[13px] text-muted-foreground"
+              >
+                {health.detail}
+              </p>
+              {health.fixHref && (
+                <a
+                  id="protection-health-fix"
+                  href={health.fixHref}
+                  className="w-fit text-xs font-medium text-accent-soft underline underline-offset-2 hover:text-accent"
+                >
+                  {health.fixLabel}
+                </a>
+              )}
+            </div>
+          )}
 
           <div id="dashboard-lock" className="flex flex-col gap-2 px-4 py-3.5">
             <div className="flex items-center gap-2">
