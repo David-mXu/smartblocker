@@ -152,7 +152,9 @@ export interface Settings {
    * adds a 15-second pause and exact neutral-phrase entry in the injected
    * block screen only; it is UX friction, not an authentication boundary.
    */
-  surrenderMode: 'off' | 'phrase';
+  /** Override friction: off = one click, pause = a 10-second cool-down,
+   *  phrase = 15-second pause + retyping the sentence. */
+  surrenderMode: 'off' | 'pause' | 'phrase';
   /**
    * Proactively mask distracting modules (videos, carousels, games,
    * news, shopping) and off-topic result cards on search engines, plus

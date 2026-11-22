@@ -350,6 +350,27 @@ await test('schedule-label truncation never splits an emoji surrogate pair', () 
   assert.ok(fits.label.endsWith('😀'), 'an emoji that fits must survive intact');
 });
 
+await test('the pause override-friction tier survives sanitize and a strict round-trip', () => {
+  const raw = {
+    schema: BACKUP_SCHEMA_ID,
+    version: 1,
+    exportedAt: EXPORTED_AT,
+    default: { settings: { ...defaultManagedSettings(), surrenderMode: 'pause' } },
+    profiles: [],
+  };
+  const { document } = sanitizeBackup(raw, NOW);
+  assert.equal(document.default.settings.surrenderMode, 'pause');
+  const again = parseBackup(serializeBackup(document), NOW);
+  assert.equal(again.ok, true);
+  assert.equal(again.document.default.settings.surrenderMode, 'pause');
+  // Unknown values still sanitize to the safe one-click default at read time.
+  const bogus = sanitizeBackup(
+    { ...raw, default: { settings: { ...defaultManagedSettings(), surrenderMode: 'maybe' } } },
+    NOW,
+  );
+  assert.equal(bogus.document.default.settings.surrenderMode, 'off');
+});
+
 await test('no secrets or runtime state leak into the file', () => {
   const source = makeState({
     settings: {

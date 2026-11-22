@@ -1420,7 +1420,9 @@ function policyDiff(before: ProfilePolicy, after: ProfilePolicy, names: {
     );
   }
   if (before.surrenderMode !== after.surrenderMode) {
-    details.push(`Typed override confirmation: ${before.surrenderMode} → ${after.surrenderMode}`);
+    const label = (mode: string) =>
+      mode === 'phrase' ? 'type a sentence' : mode === 'pause' ? '10-second pause' : 'one click';
+    details.push(`Override friction: ${label(before.surrenderMode)} → ${label(after.surrenderMode)}`);
   }
   if (before.blockMessage !== after.blockMessage) details.push('Block-screen note changed');
   if (

@@ -335,11 +335,14 @@ primary ivory, *This is actually productive — let me through* outline,
 Dismiss text → meta "Checked on-device in 12ms" (faint).
 Locked: amber seal note "Smart Blocker is locked — bypass is disabled" +
 Stay focused only. Fail-closed: amber warning variant, no score, no meter.
-With opt-in `surrenderMode: 'phrase'` (default `'off'`), the unlocked override
-opens an inline typed-confirmation wall: Stay focused remains available, a
-15-second countdown disables the textarea and release button, then the fixed
-neutral sentence must match exactly apart from surrounding whitespace. A wrong
-attempt clears the text and restarts the full delay; Cancel sends no override.
+With opt-in friction (`surrenderMode`, default `'off'`), the unlocked override
+opens an inline wall instead of releasing immediately. `'pause'` is a neutral
+10-second cool-down: a live countdown, then an enabled “Open anyway” button —
+no typing, no guilt copy. `'phrase'` adds the typed wall: Stay focused remains
+available, a 15-second countdown disables the textarea and release button, then
+the fixed neutral sentence must match exactly apart from surrounding
+whitespace. A wrong attempt clears the text and restarts the full delay;
+Cancel sends no override in either tier.
 The wall never renders while locked and is deliberately UX friction, not an
 authentication boundary. Its phrase/time math is mirrored by the pure,
 Node-tested `src/shared/surrender.ts`; the injected function cannot import it.
@@ -516,6 +519,9 @@ longer exists.
 - Unlocked buttons contain "actually productive", "Stay focused", "Dismiss";
   locked: only "Stay focused" + note "Smart Blocker is locked — bypass is disabled".
 - Normal variant shows "% confidence"; fail-closed shows **no** "% confidence".
+- Optional cool-down wall: `#smartblocker-pause-wall`,
+  `#smartblocker-pause-countdown`, `#smartblocker-pause-open` (disabled until
+  the 10 seconds elapse), `#smartblocker-pause-cancel`.
 - Optional typed-confirmation wall: `#smartblocker-surrender-wall`,
   `#smartblocker-surrender-phrase`, `#smartblocker-surrender-countdown`,
   `#smartblocker-surrender-input` (textarea), `#smartblocker-surrender-status`,

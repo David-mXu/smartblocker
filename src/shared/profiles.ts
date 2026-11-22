@@ -443,8 +443,8 @@ export function sanitizeProfilePolicy(
     blockAdult: safeBoolean(source.blockAdult, fallback.blockAdult),
     maskSearchElements: safeBoolean(source.maskSearchElements, fallback.maskSearchElements),
     surrenderMode:
-      source.surrenderMode === 'phrase'
-        ? 'phrase'
+      source.surrenderMode === 'phrase' || source.surrenderMode === 'pause'
+        ? source.surrenderMode
         : source.surrenderMode === 'off'
           ? 'off'
           : fallback.surrenderMode,

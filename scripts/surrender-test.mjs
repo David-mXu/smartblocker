@@ -6,6 +6,9 @@ import assert from 'node:assert/strict';
 import {
   canSubmit,
   isPhraseMatch,
+  normalizeOverrideFriction,
+  PAUSE_OVERRIDE_MS,
+  pauseElapsed,
   SURRENDER_DELAY_MS,
   SURRENDER_PHRASE,
   surrenderDeadline,
@@ -100,6 +103,20 @@ test('a wrong-entry restart requires a fresh full delay with no partial credit',
   const restartedAt = failedAt;
   assert.equal(canSubmit(restartedAt + SURRENDER_DELAY_MS - 1, restartedAt, SURRENDER_PHRASE), false);
   assert.equal(canSubmit(restartedAt + SURRENDER_DELAY_MS, restartedAt, SURRENDER_PHRASE), true);
+});
+
+test('pause tier is 10 seconds and needs no phrase', () => {
+  assert.equal(PAUSE_OVERRIDE_MS, 10_000);
+  assert.equal(pauseElapsed(START + 9_999, START), false);
+  assert.equal(pauseElapsed(START + 10_000, START), true);
+});
+
+test('override friction normalizes unknown values to off, keeps both tiers', () => {
+  assert.equal(normalizeOverrideFriction('pause'), 'pause');
+  assert.equal(normalizeOverrideFriction('phrase'), 'phrase');
+  assert.equal(normalizeOverrideFriction('off'), 'off');
+  assert.equal(normalizeOverrideFriction('maybe'), 'off');
+  assert.equal(normalizeOverrideFriction(undefined), 'off');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

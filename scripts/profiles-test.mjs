@@ -298,6 +298,11 @@ await test('numeric, list and name bounds clamp instead of throwing', () => {
   assert.equal(policy.useTabContext, false, 'wrong-typed booleans fall back');
   assert.equal(policy.blockAdult, false);
   assert.equal(policy.surrenderMode, 'off');
+  assert.equal(
+    sanitizeProfilePolicy({ surrenderMode: 'pause' }).surrenderMode,
+    'pause',
+    'the pause tier survives sanitize like phrase',
+  );
 
   const low = sanitizeProfilePolicy({ blockThreshold: -5 });
   assert.equal(low.blockThreshold, 0.3);

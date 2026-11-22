@@ -94,7 +94,9 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   explicit-release proofs, write-count and clock-jump tripwires.
 - `node scripts/breaks-test.mjs` — break gates and proof transitions, including
   preservation of every non-break lock field.
-- `node scripts/surrender-test.mjs` — typed-surrender phrase/timing helpers.
+- `node scripts/surrender-test.mjs` — override-friction helpers: the 10-second
+  pause tier (`PAUSE_OVERRIDE_MS`, `pauseElapsed`) and typed-surrender
+  phrase/timing math (`settings.surrenderMode: 'off' | 'pause' | 'phrase'`).
 - `node scripts/grace-math-test.mjs` — pure extension-loss grace display
   derivations (`src/shared/grace-math.ts`, same type-stripping constraint).
   Numeric countdowns require daemon-observed grace state; protocol v2 does not
@@ -158,6 +160,19 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   core: title-rule compiler/matcher + channel rules (`src/shared/rules.ts`,
   same type-stripping constraints), the shared classifier block predicate, and
   proof-of-protection configuration/verdict policy.
+- `node scripts/overrides-test.mjs` — mocked-storage tests for the override
+  store: NFKC/Cf normalization, host scoping vs legacy host-less entries,
+  refresh-in-place, concurrent-add serialization, the 1,000 cap, and
+  failed-write cache invalidation.
+- `node scripts/feedback-test.mjs` — mocked-storage tests for the feedback
+  store + on-device learning fold: field caps, 500-record bound, concurrent
+  appends, uploaded/skipped ts identities, failed-write invalidation, and
+  `getPrototypeExamples` (FP → user-approved neutral, FN → corrected label,
+  newest-24 cap, unusable records skipped).
+- `node scripts/focus-session-test.mjs` — harness for the 60-second deferred
+  Focus session commit: defers with no lock write, undo, no-op before the
+  deadline, fixed end time at commit, idempotent re-commit, expired sessions,
+  and the alarm path.
 - `node scripts/titles-test.mjs` — pure tests for the title pipeline
   (`src/shared/titles.ts` `cleanTitle`): suffix stripping, generic/URL
   rejection, CJK, the 300/512 length bounds, surrogate-safe truncation, and a

@@ -197,24 +197,37 @@ export function BlockingPage({ state }: { state: OptionsState }) {
             }
           />
           <SettingRow
-            label="Typed confirmation for overrides"
+            label="Friction before an override"
             description={
               locked ? (
                 <LockedNote reason={lock.reason} className="mt-0.5" />
               ) : (
-                'Requires a 15-second pause and retyping a sentence before a page is released. Not available while a lock is active.'
+                'A cool-down slows the reflexive “let me through” click. “10-second pause” adds a short wait; “Type a sentence” adds a 15-second wait plus retyping. Not available while a lock is active.'
               )
             }
             htmlFor="surrender-mode-toggle"
             control={
-              <Switch
+              <Select
                 id="surrender-mode-toggle"
-                checked={settings.surrenderMode === 'phrase'}
+                aria-label="Override friction"
+                value={settings.surrenderMode}
                 disabled={locked}
                 onChange={(e) =>
-                  void save({ surrenderMode: e.target.checked ? 'phrase' : 'off' })
+                  void save({
+                    surrenderMode:
+                      e.target.value === 'phrase'
+                        ? 'phrase'
+                        : e.target.value === 'pause'
+                          ? 'pause'
+                          : 'off',
+                  })
                 }
-              />
+                className="h-9 w-48"
+              >
+                <option value="off">One click</option>
+                <option value="pause">10-second pause</option>
+                <option value="phrase">Type a sentence</option>
+              </Select>
             }
           />
           <SettingRow

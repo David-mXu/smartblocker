@@ -28,7 +28,7 @@ export function showBlockScreen(
    *  callers / re-ensure paths keep working without it. */
   threshold?: number,
   /** Opt-in friction for non-locked overrides; serialized as a plain value. */
-  surrenderMode?: 'off' | 'phrase',
+  surrenderMode?: 'off' | 'pause' | 'phrase',
   /** Optional user-authored plain-text note (already sanitized by settings).
    *  Rendered through a text node only, never HTML. */
   blockMessage?: string,
@@ -393,6 +393,10 @@ export function showBlockScreen(
       openSurrenderWall();
       return;
     }
+    if (!locked && surrenderMode === 'pause') {
+      openPauseWall();
+      return;
+    }
     sendOverride();
   });
 
@@ -575,6 +579,83 @@ export function showBlockScreen(
     wall.append(prompt, phrase, countdown, input, status, btnSubmit, btnCancel);
     btnRow.replaceChildren(btnStay, wall);
     restart('A mismatch restarts the full 15-second pause.');
+  }
+
+  /** 10-second cool-down tier: no typing, no guilt copy. Mirrors
+   *  PAUSE_OVERRIDE_MS in shared/surrender.ts. */
+  function openPauseWall(): void {
+    if (locked || dismissed) return;
+    stopSurrenderTimer();
+    const pauseMs = 10_000;
+
+    const wall = document.createElement('div');
+    wall.id = 'smartblocker-pause-wall';
+    wall.style.cssText =
+      'display:flex;flex-direction:column;gap:10px;width:100%;text-align:left;box-sizing:border-box;';
+
+    const prompt = document.createElement('div');
+    prompt.style.cssText = 'font-size:13px;font-weight:500;line-height:1.4;color:#f4efe4;';
+    prompt.textContent = 'Take a breath before opening this page.';
+
+    const countdown = document.createElement('div');
+    countdown.id = 'smartblocker-pause-countdown';
+    countdown.setAttribute('role', 'timer');
+    // Ticks 4x/s; the completion message is the actionable announcement.
+    countdown.setAttribute('aria-live', 'off');
+    countdown.style.cssText =
+      'min-height:18px;color:#a29a89;font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums;';
+
+    const btnOpen = document.createElement('button');
+    btnOpen.id = 'smartblocker-pause-open';
+    btnOpen.type = 'button';
+    btnOpen.disabled = true;
+    btnOpen.style.cssText =
+      btnBase +
+      'background:transparent;color:#f4efe4;border:1px solid rgba(244,239,228,0.28);font-weight:500;opacity:0.45;';
+    btnOpen.textContent = 'Open anyway';
+
+    const btnCancel = document.createElement('button');
+    btnCancel.id = 'smartblocker-pause-cancel';
+    btnCancel.type = 'button';
+    btnCancel.style.cssText =
+      btnBase + 'background:transparent;color:#a29a89;border:1px solid transparent;font-weight:400;';
+    btnCancel.textContent = 'Cancel';
+
+    const armedAt = Date.now();
+    const tick = () => {
+      const remaining = Math.max(0, armedAt + pauseMs - Date.now());
+      if (remaining > 0) {
+        countdown.textContent =
+          'You can open it in ' + Math.ceil(remaining / 1000) + ' seconds.';
+        return;
+      }
+      stopSurrenderTimer();
+      countdown.textContent = 'You can open the page now.';
+      btnOpen.disabled = false;
+      btnOpen.style.opacity = '1';
+      try {
+        btnOpen.focus({ preventScroll: true });
+      } catch {
+        // ignore
+      }
+    };
+    surrenderTimer = setInterval(tick, 250);
+    tick();
+
+    btnOpen.addEventListener('click', (e) => {
+      if (!e.isTrusted || dismissed || locked) return;
+      if (Date.now() < armedAt + pauseMs) return;
+      sendOverride();
+    });
+    btnCancel.addEventListener('click', (e) => {
+      if (!e.isTrusted) return;
+      stopSurrenderTimer();
+      btnRow.replaceChildren(btnStay, btnOverride, btnDismiss);
+      btnOverride.focus();
+    });
+
+    wall.append(prompt, countdown, btnOpen, btnCancel);
+    btnRow.replaceChildren(btnStay, wall);
   }
 
   if (locked) {

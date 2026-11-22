@@ -274,6 +274,93 @@ try {
   const zwspOverlay = await page.locator('#smartblocker-overlay').count();
   check('#14 zero-width/homoglyph title variant still matches the override on the same host', zwspOverlay === 0);
 
+  // ── Override friction tiers (2026-11-21 P0): the 10-second pause must hold
+  // the release without typing, never fire early, and record the correction
+  // only after the user clicks the enabled button.
+  await sw.evaluate(async () => {
+    const { settings = {} } = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({ settings: { ...settings, surrenderMode: 'pause' } });
+  });
+  const pauseTitle = `Pause tier fixture ${RUN}`;
+  const pauseUrl =
+    `https://videos.example.net/watch?v=p1pause&kw=${KW}&t=${encodeURIComponent(pauseTitle)}`;
+  await page.goto('about:blank');
+  await page.goto(pauseUrl);
+  await page.waitForSelector('#smartblocker-overlay', { timeout: 20_000 });
+  const overridesBeforePause = await sw.evaluate(async () => {
+    const { overrides = [] } = await chrome.storage.local.get('overrides');
+    return overrides.length;
+  });
+  await page.locator('#smartblocker-overlay button', { hasText: 'actually productive' }).click();
+  const pauseWall = await page
+    .waitForSelector('#smartblocker-pause-wall', { timeout: 2_000 })
+    .then(() => true)
+    .catch(() => false);
+  const pauseOpenDisabled = await page
+    .locator('#smartblocker-pause-open')
+    .isDisabled()
+    .catch(() => null);
+  check(
+    'surrenderMode=pause shows the cool-down wall with the release button disabled',
+    pauseWall && pauseOpenDisabled === true,
+    JSON.stringify({ pauseWall, pauseOpenDisabled }),
+  );
+  // Early synthetic activation must be inert (isTrusted + deadline).
+  await page.evaluate(() => {
+    document.getElementById('smartblocker-overlay')?.shadowRoot
+      ?.querySelector('#smartblocker-pause-open')
+      ?.click();
+  });
+  const stillBlockedEarly = await page.locator('#smartblocker-overlay').count();
+  const overridesDuringPause = await sw.evaluate(async () => {
+    const { overrides = [] } = await chrome.storage.local.get('overrides');
+    return overrides.length;
+  });
+  check(
+    'the pause tier neither releases nor records an override early',
+    stillBlockedEarly === 1 && overridesDuringPause === overridesBeforePause,
+    JSON.stringify({ stillBlockedEarly, overridesBeforePause, overridesDuringPause }),
+  );
+  let pauseEnabled = false;
+  try {
+    await page.waitForFunction(
+      () => {
+        const host = document.getElementById('smartblocker-overlay');
+        const btn = host?.shadowRoot?.querySelector('#smartblocker-pause-open');
+        return btn instanceof HTMLElement && !btn.hasAttribute('disabled');
+      },
+      undefined,
+      { timeout: 15_000 },
+    );
+    pauseEnabled = true;
+  } catch {}
+  check('the cool-down ends after ~10 seconds', pauseEnabled);
+  if (pauseEnabled) {
+    await page.locator('#smartblocker-pause-open').click();
+    let released = false;
+    try {
+      await page.waitForFunction(
+        () => !document.getElementById('smartblocker-overlay'),
+        undefined,
+        { timeout: 5_000 },
+      );
+      released = true;
+    } catch {}
+    const overridesAfterPause = await sw.evaluate(async (title) => {
+      const { overrides = [] } = await chrome.storage.local.get('overrides');
+      return overrides.some((record) => String(record.title).includes(title.split(' ')[0]));
+    }, pauseTitle);
+    check(
+      'the pause tier releases the page and records the correction',
+      released && overridesAfterPause === true,
+      JSON.stringify({ released, overridesAfterPause }),
+    );
+  }
+  await sw.evaluate(async () => {
+    const { settings = {} } = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({ settings: { ...settings, surrenderMode: 'off' } });
+  });
+
   // ── #16: sanitizer mask hardening on the harness page. The kw-carrying
   // iframe is masked synchronously once the (unblocked) page verdict lands
   // and the sanitizer is injected. ───────────────────────────────────────────

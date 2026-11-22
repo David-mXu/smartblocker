@@ -5,6 +5,21 @@
 // and cannot close over module imports.
 
 export const SURRENDER_DELAY_MS = 15_000;
+/** Cool-down tier: 10 seconds, no typing (validated by Android 17's Pause
+ *  Point and the "delay, not moralizing" evidence). */
+export const PAUSE_OVERRIDE_MS = 10_000;
+
+export type OverrideFrictionMode = 'off' | 'pause' | 'phrase';
+
+/** Sanitize a stored/imported mode. Unknown values fall back to 'off'. */
+export function normalizeOverrideFriction(value: unknown): OverrideFrictionMode {
+  return value === 'pause' || value === 'phrase' ? value : 'off';
+}
+
+/** True once the pause tier's cool-down has elapsed. */
+export function pauseElapsed(now: number, armedAt: number): boolean {
+  return now >= surrenderDeadline(armedAt, PAUSE_OVERRIDE_MS);
+}
 export const SURRENDER_PHRASE =
   'I am choosing to open this page for a good reason, and I will return to my task.';
 
