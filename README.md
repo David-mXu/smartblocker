@@ -37,7 +37,10 @@ plan is in [`ROADMAP.md`](ROADMAP.md). What works today:
    that masks distraction shelves and result cards on whitelisted search
    pages and chatbot workspaces (walking the light DOM and **open**
    shadow roots), plus individual video/Short results on YouTube Search,
-   while leaving productive results and the search page itself alone.
+   while leaving productive results and the search page itself alone. An
+   opt-in setting extends that per-card masking to YouTube's home, subscription
+   and channel feeds without blocking the browsing page. Overrides can require
+   a **10-second pause** or a typed sentence before a page is released.
 5. **The classifier learns from you.** Corrections (the override button, and
    the popup's "Should've been blocked" report) are stored on-device and fold
    into the classifier's category prototypes. The options page can export
@@ -62,8 +65,10 @@ plan is in [`ROADMAP.md`](ROADMAP.md). What works today:
    during focus hours and rescue its classifier blocks outside them. Offline
    Ed25519 accountability-partner codes, with a 24-hour public-key activation
    delay, release only their exact arm — without lifting other locks.
-9. **Cold Turkey parity, kept local.** A Now/Next/Relief dashboard states the
-   exact aggregate lock end, next schedule transition and relief scope; quiet
+9. **Cold Turkey parity, kept local.** A Now/Next/Relief dashboard — with a
+   **Protection health** row that flags revoked site access, unfinished setup,
+   missing model files, or a disconnected desktop companion — states the exact
+   aggregate lock end, next schedule transition and relief scope; quiet
    reminders are off by default. Named profiles overlay scoped policy on
    Default (blocking, reminders and display preferences stay global). Usage
    analytics track idle-aware per-site/category protection and override rates,
