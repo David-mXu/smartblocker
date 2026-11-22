@@ -71,6 +71,10 @@ export function sanitizePage(opts: SanitizePageOptions): {
     __sbRevealed?: WeakSet<Element>;
     __sbHandled?: WeakSet<Element>;
     __sbMasked?: WeakSet<Element>;
+    __sbMaskedRegistry?: Map<
+      Element,
+      { kind: 'serp-shelf' | 'serp-card' | 'embed'; reason: string; classifierOwned: boolean }
+    >;
     __sbIdMap?: Map<string, Element>;
   };
   const previousPolicyEpoch = win.__sbSanitizeOpts?.policyEpoch;
@@ -107,13 +111,19 @@ export function sanitizePage(opts: SanitizePageOptions): {
   // captured WeakSet would split authority between old and new closures.
   if (!win.__sbHandled) win.__sbHandled = new WeakSet();
   if (!win.__sbMasked) win.__sbMasked = new WeakSet();
+  // Enumerable companion to __sbMasked: lets a scan RE-ASSERT a mask whose
+  // page-visible attribute was stripped (a WeakSet cannot be iterated, and
+  // membership alone must not shield a stripped element forever). Pruned by
+  // connectivity on every scan; cleared on reset/teardown.
+  if (!win.__sbMaskedRegistry) win.__sbMaskedRegistry = new Map();
   if (!win.__sbIdMap) win.__sbIdMap = new Map();
   const idMap = win.__sbIdMap;
   const markHandled = (el: Element, state?: string): void => {
     win.__sbHandled?.add(el);
     if (state) el.setAttribute('data-smartblocker-state', state);
   };
-  const isHandled = (el: Element): boolean => Boolean(win.__sbHandled?.has(el));
+  const isHandled = (el: Element): boolean =>
+    Boolean(win.__sbHandled?.has(el)) && el.hasAttribute('data-smartblocker-state');
   const maskStateOf = (el: Element): string | null =>
     win.__sbMasked?.has(el) ? el.getAttribute('data-smartblocker-masked') : null;
   const registerItem = (id: string, el: Element): void => {
@@ -128,6 +138,7 @@ export function sanitizePage(opts: SanitizePageOptions): {
    *  clean generation, while replaceable DOM nodes naturally drop out. */
   const resetMaskAuthority = (): void => {
     win.__sbMasked = new WeakSet();
+    win.__sbMaskedRegistry?.clear();
     win.__sbHandled = new WeakSet();
     idMap.clear();
   };
@@ -358,7 +369,13 @@ export function sanitizePage(opts: SanitizePageOptions): {
   function isMaskedOrGenuinelyRevealed(el: Element): boolean {
     for (let node: Element | null = el; node; node = node.parentElement) {
       if (revealedEls.has(node)) return true;
-      if (win.__sbMasked?.has(node)) return true;
+      // Membership alone would let the page STRIP the attribute (un-hiding the
+      // node while this guard still skips it forever). Requiring the hint too
+      // means a stripped mask is re-applied on the next scan, while a forged
+      // hint without membership still cannot shield anything.
+      if (win.__sbMasked?.has(node) && node.hasAttribute('data-smartblocker-masked')) {
+        return true;
+      }
     }
     return false;
   }
@@ -367,6 +384,7 @@ export function sanitizePage(opts: SanitizePageOptions): {
    *  restore the iframe sources it unloaded. Shared by the classifier-only
    *  policy reset and the master-off teardown. */
   function unmaskElement(el: Element): void {
+    win.__sbMaskedRegistry?.delete(el);
     el.querySelector(':scope > .smartblocker-mask-bar')?.remove();
     el.removeAttribute('data-smartblocker-masked');
     el.removeAttribute('data-smartblocker-classifier');
@@ -458,6 +476,7 @@ export function sanitizePage(opts: SanitizePageOptions): {
       f.setAttribute('data-smartblocker-reason', reason);
       if (classifierOwned) f.setAttribute('data-smartblocker-classifier', '1');
       win.__sbMasked?.add(f);
+      win.__sbMaskedRegistry?.set(f, { kind, reason, classifierOwned });
       if (unloadIframes) pauseAndUnloadMedia(f);
     }
     ensureMaskCss(el.getRootNode());
@@ -466,6 +485,7 @@ export function sanitizePage(opts: SanitizePageOptions): {
     el.setAttribute('data-smartblocker-reason', reason);
     if (classifierOwned) el.setAttribute('data-smartblocker-classifier', '1');
     win.__sbMasked?.add(el);
+    win.__sbMaskedRegistry?.set(el, { kind, reason, classifierOwned });
     el.removeAttribute('data-smartblocker-state');
 
     if (unloadIframes) pauseAndUnloadMedia(el);
@@ -659,6 +679,24 @@ export function sanitizePage(opts: SanitizePageOptions): {
     // per-root check is cheap and idempotent.
     for (let i = 0; i < deepRoots.length; i++) {
       ensureMaskCss(deepRoots[i]);
+    }
+
+    // A page that strips data-smartblocker-masked from a masked element would
+    // otherwise reveal it permanently (the scan guards are attribute-aware by
+    // design, so the element is not "already handled"). Re-assert the mask
+    // from isolated-world memory before looking for new items.
+    const registry = win.__sbMaskedRegistry;
+    if (registry) {
+      for (const [el, info] of registry) {
+        if (!el.isConnected) {
+          registry.delete(el);
+          continue;
+        }
+        if (isUserRevealed(el)) continue;
+        if (!el.hasAttribute('data-smartblocker-masked')) {
+          maskElement(el, info.kind, info.reason, true, [], info.classifierOwned);
+        }
+      }
     }
 
     let maskedShelves = 0;
@@ -1523,6 +1561,12 @@ export function sanitizePage(opts: SanitizePageOptions): {
                   followers,
                   true,
                 );
+              } else if (r.label === 'deferred') {
+                // Over budget: the item was NOT classified. Report it as
+                // unhandled (drop the markers) so a later scan retries it;
+                // marking it "allowed" made the skip permanent.
+                target.removeAttribute('data-smartblocker-id');
+                target.removeAttribute('data-smartblocker-state');
               } else {
                 markHandled(target, 'allowed');
               }

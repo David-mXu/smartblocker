@@ -350,6 +350,24 @@ try {
     } catch {}
     check('#16 src attribute mutation on a masked embed is re-blanked on the next scan', reblanked);
 
+    // #16 (4c): stripping the mask ATTRIBUTE must not un-mask forever. The
+    // isolated-world set still records the element, but authority requires the
+    // render hint too, so the next scan re-applies the mask (a page cannot
+    // reveal itself by deleting our attribute).
+    await page.evaluate(() => {
+      document.getElementById('embed-wrap')?.removeAttribute('data-smartblocker-masked');
+    });
+    let restoredMask = false;
+    try {
+      await page.waitForFunction(
+        () => document.getElementById('embed-wrap')?.getAttribute('data-smartblocker-masked') === 'embed',
+        undefined,
+        { timeout: 5_000 },
+      );
+      restoredMask = true;
+    } catch {}
+    check('#16 stripping the mask attribute is re-masked on the next scan', restoredMask);
+
     // #16 (5): deleting the injected mask stylesheet must be undone by the
     // next scan's cheap re-ensure.
     await page.evaluate(() => {

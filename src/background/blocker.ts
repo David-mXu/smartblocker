@@ -750,19 +750,26 @@ function clearTabTimers(tabId: number): void {
 function isOwnBlockedPage(url: string): boolean {
   try {
     const u = new URL(url);
-    return u.protocol === 'chrome-extension:' && u.pathname === '/blocked.html';
+    return (
+      (u.protocol === 'chrome-extension:' || u.protocol === 'moz-extension:') &&
+      u.pathname === '/blocked.html'
+    );
   } catch {
     return false;
   }
 }
 
 function arm(tabId: number, url: string) {
+  // FIRST: our own block page is the redirect target of the evaluation that
+  // installed the rule, so nothing may be invalidated — including
+  // clearTabTimers, which bumps the SERP generation `stillCurrentTitle()`
+  // tests and would make the evaluator release the rule it just committed.
+  if (isOwnBlockedPage(url)) return;
   clearSubFrameStateForTab(tabId);
   clearTabTimers(tabId);
   // New top-level document generation: the per-tab oEmbed resolution budget
   // (resolveYouTubeMeta quota) starts fresh with it.
   oembedFetchesPerTab.delete(tabId);
-  if (isOwnBlockedPage(url)) return;
   // Every frameId-0 commit starts a new document, including chrome://,
   // about:, blob: and our own blocked.html. Bumping here (not only for
   // classifiable URLs) invalidates a still-running verdict for the PREVIOUS
@@ -2143,7 +2150,11 @@ export function initBlocker() {
     inFlightKey.delete(tabId);
     navGeneration.delete(tabId);
     serpTitleGeneration.delete(tabId);
+    titleSequence.delete(tabId);
     oembedFetchesPerTab.delete(tabId);
+    for (const key of forceRedirectReloadAt.keys()) {
+      if (key.startsWith(`${tabId}|`)) forceRedirectReloadAt.delete(key);
+    }
     clearSubFrameStateForTab(tabId);
     void clearTabStatus(tabId);
   });

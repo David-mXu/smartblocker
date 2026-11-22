@@ -131,6 +131,29 @@ e2e assertion where one is practical.
   live, real D1 id) while sharing stays opt-in/off by default.
 - `engines.node >= 22.15` (registerHooks harnesses).
 
+## Post-fix review pass
+
+A follow-up reviewer read the committed diff and found four real defects in the
+hardening itself, all fixed and covered:
+
+- `arm()` cleared timers before recognising the extension's own `blocked.html`,
+  which bumped the SERP generation and could make the evaluator release the
+  redirect rule it had just committed. The recognition is now the first
+  statement of `arm()`, and it matches `moz-extension:` as well as
+  `chrome-extension:` (Firefox would otherwise never recover a fail-closed
+  redirect).
+- Membership-only mask/handled authority let a page permanently un-mask by
+  deleting our `data-smartblocker-*` attribute. Authority now requires
+  membership AND the render hint, and an enumerable isolated-world registry
+  re-asserts any mask whose attribute was stripped (pruned by connectivity on
+  each scan). Forged hints alone still fail. The p1 suite asserts the strip
+  case.
+- Over-budget subitems were reported as `deferred` but the page marked them
+  "allowed", making the skip permanent. `deferred` now clears the item markers
+  so a later scan retries it.
+- `tabs.onRemoved` now also drops the title sequence and the per-tab reload
+  cooldown keys.
+
 ## Verification record
 
 - typecheck clean; Chrome build green; Firefox build green.
