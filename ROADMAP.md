@@ -682,7 +682,8 @@ round and one product addition on branch `improve/best-version` (commits
 
 See `docs/learning-notes/2026-11-21-audit-swarm-hardening.md`,
 `docs/learning-notes/2026-11-21-pause-tier-and-test-gaps.md`, and
-`docs/learning-notes/2026-11-21-in-feed-masking.md`.
+`docs/learning-notes/2026-11-21-in-feed-masking.md`, and
+`docs/learning-notes/2026-11-22-protection-health.md`.
 
 ---
 
