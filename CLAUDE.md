@@ -583,7 +583,11 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   authenticated PING/PONG liveness frame the watchdog probes with (a
   silent socket squatter reads as dead, and since 2026-11-22 the PONG's pid
   must also be a real `smartblocker-daemon` image — an arbitrary process
-  answering the probe no longer suppresses respawn); `uninstall` refuses on
+  answering the probe no longer suppresses respawn); corrupt
+  `partner-state.json` / `allowance-state.json` degrade only that subsystem
+  (partner/allowance commands refused, nothing minted, file left untouched)
+  instead of exiting the daemon, so locks and kills keep running;
+  `uninstall` refuses on
   `settings_locked`; `is_pro` fails CLOSED on a missing key
   (`SBPRO_DEV_OPEN=1` dev escape hatch, pending user ratification) with
   a 7-day expiry grace and mid-lock `license_key` heal. `usage.rs` keeps a

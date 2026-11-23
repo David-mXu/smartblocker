@@ -675,7 +675,9 @@ round and one product addition on branch `improve/best-version` (commits
   looking active when it isn't.
 - Companion: the watchdog now verifies a PONG's pid belongs to a real
   `smartblocker-daemon` image, so an arbitrary socket squatter cannot suppress
-  respawns and silently end hard enforcement.
+  respawns and silently end hard enforcement. Corrupt partner/allowance state
+  now degrades only that subsystem (commands refused, nothing minted, corrupt
+  file untouched) instead of taking enforcement down with it.
 - Measurement/CI: the evaluator now mirrors the YouTube browsing-surface policy
   (36 committed cases were mis-scored), fails on added-failing/removed cases,
   and the nightly lane runs every pure harness + `verify-dataset` + `npm run

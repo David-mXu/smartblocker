@@ -136,6 +136,10 @@ struct Shared {
     /// Public-only partner trust state. Command decisions acquire lock_state
     /// before this mutex so arm/current-operation checks are one atomic view.
     partner: Mutex<PartnerState>,
+    /// Why partner trust state could not be loaded (corrupt file). The
+    /// subsystem is disabled but enforcement keeps running; the corrupt file
+    /// is never overwritten or replaced with a fresh trust root.
+    partner_unavailable: Option<String>,
     /// Test-only pause after A's begin has persisted but before its status is
     /// captured, allowing B to prove exact result identity under concurrency.
     #[cfg(test)]
@@ -143,6 +147,10 @@ struct Shared {
     /// Absence distinguishes an uninitialized daemon from an initialized rev-0
     /// ledger. Lock configuration decisions acquire lock_state first too.
     allowance: Mutex<Option<AllowanceAuthorityState>>,
+    /// Why the allowance ledger could not be loaded (corrupt file). Commands
+    /// and bootstrap are refused (never mint a fresh daily pool), but locking
+    /// and enforcement continue.
+    allowance_unavailable: Option<String>,
     /// `None` means no browser or CLI has initialized ordinary blocking yet.
     /// Lock ordering is always lock_state -> blocking for coherent decisions.
     blocking: Mutex<Option<BlockingState>>,
@@ -203,8 +211,16 @@ impl Shared {
         // command acknowledgement is one coherent view of all three slices.
         let lock = self.lock_state.lock().unwrap();
         let blocking = *self.blocking.lock().unwrap();
-        let partner = self.partner.lock().unwrap().clone();
-        let allowance = self.allowance.lock().unwrap().clone();
+        let partner = if self.partner_unavailable.is_some() {
+            None
+        } else {
+            Some(self.partner.lock().unwrap().clone())
+        };
+        let allowance = if self.allowance_unavailable.is_some() {
+            None
+        } else {
+            self.allowance.lock().unwrap().clone()
+        };
         let lock_state = lock.clone();
         CompanionStatus {
             companion_version: self.version.to_string(),
@@ -221,7 +237,7 @@ impl Shared {
             // Anonymous greetings and degraded relay statuses carry no
             // recipient-specific enforcement observation.
             extension_loss: None,
-            partner: Some(partner),
+            partner,
             allowance,
             app_blocklist: crate::apps::normalize_app_blocklist(&config.app_blocklist),
             app_blocklist_updated_at: config.app_blocklist_updated_at.max(0),
@@ -1189,6 +1205,18 @@ impl Shared {
             );
             return;
         }
+        if let Some(reason) = &self.allowance_unavailable {
+            self.reply_to(
+                conn_id,
+                &CompanionMessage::Error {
+                    v: PROTOCOL_VERSION,
+                    message: format!(
+                        "Allowance state is unavailable ({reason}); relief is refused and enforcement continues."
+                    ),
+                },
+            );
+            return;
+        }
         let Some(incoming) = allowance::normalize_allowance_authority_state(raw) else {
             self.log_event("allowance-bootstrap-refused", "malformed recovery snapshot");
             return;
@@ -1237,6 +1265,18 @@ impl Shared {
                 &CompanionMessage::Error {
                     v: PROTOCOL_VERSION,
                     message: "allowance commands require an authenticated browser".into(),
+                },
+            );
+            return;
+        }
+        if let Some(reason) = &self.allowance_unavailable {
+            self.reply_to(
+                conn_id,
+                &CompanionMessage::Error {
+                    v: PROTOCOL_VERSION,
+                    message: format!(
+                        "Allowance state is unavailable ({reason}); relief is refused and enforcement continues."
+                    ),
                 },
             );
             return;
@@ -1376,6 +1416,9 @@ impl Shared {
     /// second. This is what turns a completed elapsed 24h wait into durable
     /// proof even when the user issues no command at that exact instant.
     fn observe_partner_at(&self, now: i64, now_mono: u64) {
+        if self.partner_unavailable.is_some() {
+            return;
+        }
         let changed = {
             let mut current = self.partner.lock().unwrap();
             match partner::observe_at(&current, now, now_mono) {
@@ -1419,6 +1462,18 @@ impl Shared {
     }
 
     fn partner_add_key_at(&self, conn_id: u64, public_key: &str, now: i64, now_mono: u64) {
+        if let Some(reason) = &self.partner_unavailable {
+            self.reply_to(
+                conn_id,
+                &CompanionMessage::Error {
+                    v: PROTOCOL_VERSION,
+                    message: format!(
+                        "Accountability-partner state is unavailable ({reason}); other locks and enforcement continue."
+                    ),
+                },
+            );
+            return;
+        }
         let result: Result<(bool, String), String> = {
             // Lock ordering is intentional even though adding a key is allowed
             // during any lock: it cannot race an arm/redeem decision.
@@ -1473,6 +1528,18 @@ impl Shared {
     }
 
     fn partner_arm_at(&self, conn_id: u64, now: i64, now_mono: u64) {
+        if let Some(reason) = &self.partner_unavailable {
+            self.reply_to(
+                conn_id,
+                &CompanionMessage::Error {
+                    v: PROTOCOL_VERSION,
+                    message: format!(
+                        "Accountability-partner state is unavailable ({reason}); other locks and enforcement continue."
+                    ),
+                },
+            );
+            return;
+        }
         let now_stamp = match u64::try_from(now) {
             Ok(now_stamp) => now_stamp,
             Err(_) => {
@@ -1592,6 +1659,18 @@ impl Shared {
     }
 
     fn partner_begin_at(&self, conn_id: u64, now: i64, now_mono: u64) {
+        if let Some(reason) = &self.partner_unavailable {
+            self.reply_to(
+                conn_id,
+                &CompanionMessage::Error {
+                    v: PROTOCOL_VERSION,
+                    message: format!(
+                        "Accountability-partner state is unavailable ({reason}); other locks and enforcement continue."
+                    ),
+                },
+            );
+            return;
+        }
         let result = (|| -> Result<PendingPartnerOperation, String> {
             let lock = self.lock_state.lock().unwrap();
             let mut current = self.partner.lock().unwrap();
@@ -1674,6 +1753,18 @@ impl Shared {
     }
 
     fn partner_redeem_at(&self, conn_id: u64, token: &str, now: i64, now_mono: u64) {
+        if let Some(reason) = &self.partner_unavailable {
+            self.reply_to(
+                conn_id,
+                &CompanionMessage::Error {
+                    v: PROTOCOL_VERSION,
+                    message: format!(
+                        "Accountability-partner state is unavailable ({reason}); other locks and enforcement continue."
+                    ),
+                },
+            );
+            return;
+        }
         let result = (|| -> Result<(LockState, String), String> {
             let mut lock = self.lock_state.lock().unwrap();
             let mut current = self.partner.lock().unwrap();
@@ -2161,6 +2252,42 @@ fn heal_lock_file(shared: &Shared, now_wall_ms: i64) {
     }
 }
 
+/// Load the allowance ledger, degrading ONLY that subsystem when the file is
+/// present but unreadable. A missing file still means "uninitialized" (a fresh
+/// install may mint its first pool); an unreadable one must never be replaced
+/// by a fresh daily pool, but it must not stop locks or enforcement either.
+fn load_allowance_or_degrade(store: &Store) -> (Option<AllowanceAuthorityState>, Option<String>) {
+    let loaded = store.load_allowance_state();
+    // A metadata error is treated as "exists" (fail closed: refuse to mint).
+    let exists = store.allowance_state_file_exists().unwrap_or(true);
+    match loaded {
+        Some(state) => (Some(state), None),
+        None if exists => (
+            None,
+            Some(
+                "allowance-state.json is corrupt; refusing to mint a fresh daily pool".to_string(),
+            ),
+        ),
+        None => (None, None),
+    }
+}
+
+/// Inert placeholder when partner state is corrupt. Never persisted and never
+/// used for a decision: every partner command path checks
+/// `partner_unavailable` first. The sentinel installation id is all zeros so
+/// it cannot collide with a real random id.
+fn unavailable_partner_state() -> PartnerState {
+    PartnerState {
+        version: 1,
+        installation_id: "0".repeat(32),
+        public_keys: vec![],
+        pending_operations: vec![],
+        spent_codes: vec![],
+        last_observed_at_ms: 0,
+        last_observed_mono_ms: None,
+    }
+}
+
 /// Load and migrate public partner trust state, or create a fresh installation
 /// only when no file exists. Every startup clears unsigned pending operations
 /// and persists a current-runtime monotonic rehydration BEFORE commands bind.
@@ -2221,18 +2348,25 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
-    let initial_partner = load_or_initialize_partner_state(&opts.store, started_wall_ms, 0)?;
+    // Corrupt AUXILIARY state must never take hard enforcement down with it.
+    // Partner trust and the allowance ledger fail closed *within their
+    // subsystem* (commands refused, nothing minted, the corrupt file left
+    // untouched) while locks, kills and the watchdog keep running.
+    let (initial_partner, partner_unavailable) =
+        match load_or_initialize_partner_state(&opts.store, started_wall_ms, 0) {
+            Ok(state) => (state, None),
+            Err(error) => {
+                eprintln!(
+                    "[daemon] partner state unavailable ({error}); continuing with enforcement only"
+                );
+                (unavailable_partner_state(), Some(error.to_string()))
+            }
+        };
     let listener = ipc::listen(&opts.socket_name)?;
     let initial = opts.store.load_lock_state();
     let initial_blocking = opts.store.load_blocking_state();
-    let initial_allowance = opts.store.load_allowance_state();
     let initial_config = opts.store.load_config();
-    if initial_allowance.is_none() && opts.store.allowance_state_file_exists()? {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "allowance-state.json is corrupt; refusing to mint a fresh daily pool",
-        ));
-    }
+    let (initial_allowance, allowance_unavailable) = load_allowance_or_degrade(&opts.store);
     // Best-effort managed-browser policy hardening (off until policy_enforce
     // + a real update_url are configured; no-op on non-Windows).
     let _ = crate::policy::apply_configured_policies(&initial_config);
@@ -2250,9 +2384,11 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
         #[cfg(test)]
         lock_state_save_gate: Mutex::new(None),
         partner: Mutex::new(initial_partner),
+        partner_unavailable: partner_unavailable.clone(),
         #[cfg(test)]
         partner_result_gate: Mutex::new(None),
         allowance: Mutex::new(initial_allowance),
+        allowance_unavailable: allowance_unavailable.clone(),
         store: opts.store,
         blocking: Mutex::new(initial_blocking),
         conns: Mutex::new(HashMap::new()),
@@ -2267,6 +2403,14 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
         dry_run_kills: opts.dry_run_kills,
     });
     shared.log_event("daemon-start", &format!("socket {}", opts.socket_name));
+    // Degraded subsystems are visible in the audit log (and therefore in the
+    // UI's recent-events view) rather than looking like plain "not armed".
+    if let Some(reason) = &shared.partner_unavailable {
+        shared.log_event("partner-state-unavailable", reason);
+    }
+    if let Some(reason) = &shared.allowance_unavailable {
+        shared.log_event("allowance-state-unavailable", reason);
+    }
 
     // Enforcement loop: cheap status + license-posture derivation while
     // idle, process snapshots + enforcer ticks whenever ANY lock is armed.
@@ -3127,6 +3271,13 @@ mod tests {
     struct Outbox(mpsc::Receiver<Arc<Vec<u8>>>);
 
     fn test_shared() -> (tempfile::TempDir, Arc<Shared>) {
+        test_shared_with(None, None)
+    }
+
+    fn test_shared_with(
+        partner_unavailable: Option<&str>,
+        allowance_unavailable: Option<&str>,
+    ) -> (tempfile::TempDir, Arc<Shared>) {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
         let partner =
@@ -3138,8 +3289,10 @@ mod tests {
             lock_state: Mutex::new(LockState::default()),
             lock_state_save_gate: Mutex::new(None),
             partner: Mutex::new(partner),
+            partner_unavailable: partner_unavailable.map(str::to_string),
             partner_result_gate: Mutex::new(None),
             allowance: Mutex::new(None),
+            allowance_unavailable: allowance_unavailable.map(str::to_string),
             blocking: Mutex::new(None),
             conns: Mutex::new(HashMap::new()),
             enforcer_state: Mutex::new(EnforcerState::default()),
@@ -3633,6 +3786,86 @@ mod tests {
             frames[0]["lockState"]["frozenUntil"],
             json!(now.frozen_until)
         );
+    }
+
+    #[test]
+    fn startup_allowance_load_degrades_only_on_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        // Fresh install: uninitialized, not degraded.
+        assert_eq!(load_allowance_or_degrade(&store), (None, None));
+        // Corrupt file: degraded with a reason, still no state.
+        std::fs::write(dir.path().join("allowance-state.json"), b"{ nope").unwrap();
+        let (state, reason) = load_allowance_or_degrade(&store);
+        assert!(state.is_none());
+        assert!(reason.unwrap().contains("corrupt"));
+    }
+
+    #[test]
+    fn corrupt_partner_state_disables_partner_commands_but_keeps_enforcement() {
+        let (_dir, shared) = test_shared_with(Some("partner-state.json is corrupt"), None);
+        let cap = add_conn(&shared, 7, true);
+
+        shared.partner_add_key_at(7, &"ab".repeat(32), shared.wall_ms(), 0);
+        let frames = frames_in(&cap);
+        assert_eq!(frames.last().unwrap()["type"], "error");
+        assert!(
+            frames.last().unwrap().to_string().contains("unavailable"),
+            "refusal must name the unavailable subsystem"
+        );
+        // The placeholder never gets keys, and status hides partner state.
+        assert!(shared.partner.lock().unwrap().public_keys.is_empty());
+        assert!(shared.status().partner.is_none());
+
+        // Enforcement is untouched: an authenticated frozen lock still merges
+        // and is reported.
+        shared.merge_in(
+            &LockState {
+                frozen_until: Some(shared.wall_ms() + 60_000),
+                ..LockState::default()
+            },
+            7,
+            true,
+        );
+        assert!(shared.lock_state.lock().unwrap().frozen_until.is_some());
+    }
+
+    #[test]
+    fn corrupt_allowance_state_refuses_bootstrap_and_commands_but_keeps_lock_writes() {
+        let (_dir, shared) = test_shared_with(None, Some("allowance-state.json is corrupt"));
+        let cap = add_conn(&shared, 9, true);
+
+        shared.allowance_bootstrap(
+            9,
+            &serde_json::json!({ "version": 1, "revision": 1, "categories": {}, "receipts": [] }),
+        );
+        let boot = frames_in(&cap);
+        assert_eq!(boot.last().unwrap()["type"], "error");
+        assert!(boot.last().unwrap().to_string().contains("unavailable"));
+
+        shared.allowance_command_intent(
+            9,
+            &serde_json::json!({ "kind": "configure", "operationId": "op-1", "category": "video games", "config": {} }),
+            0,
+        );
+        let cmd = frames_in(&cap);
+        assert_eq!(cmd.last().unwrap()["type"], "error");
+        assert!(
+            shared.allowance.lock().unwrap().is_none(),
+            "never mint a fresh pool"
+        );
+        assert!(shared.status().allowance.is_none());
+
+        // Locks remain writable.
+        shared.merge_in(
+            &LockState {
+                timer_until: Some(shared.wall_ms() + 60_000),
+                ..LockState::default()
+            },
+            9,
+            true,
+        );
+        assert!(shared.lock_state.lock().unwrap().timer_until.is_some());
     }
 
     #[test]
