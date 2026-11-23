@@ -76,6 +76,8 @@ export interface OptionsState {
   modelProgress: ModelProgress;
   /** Ticks every second — use for countdowns. */
   now: number;
+  /** Initial load failure (storage/background unreachable). Empty = fine. */
+  loadError: string;
 }
 
 export function useOptionsState(): OptionsState {
@@ -85,6 +87,7 @@ export function useOptionsState(): OptionsState {
   const [lockState, setLockState] = useState<LockState>(EMPTY_LOCK_STATE);
   const [passwordArmed, setPasswordArmed] = useState(false);
   const [pendingFocus, setPendingFocus] = useState<PendingFocusSession | null>(null);
+  const [loadError, setLoadError] = useState('');
   const [companion, setCompanion] = useState<CompanionSnapshot | null>(null);
   // True until loaded so we never flash a false incognito warning.
   const [incognitoAllowed, setIncognitoAllowed] = useState(true);
@@ -167,9 +170,12 @@ export function useOptionsState(): OptionsState {
       }
     };
 
-    void refreshProfiles();
-    void refreshLock();
-    void refreshPendingFocus();
+    // A rejected initial load used to leave the page aria-busy forever.
+    void refreshProfiles().catch((e) => {
+      setLoadError(e instanceof Error ? e.message : String(e));
+    });
+    void refreshLock().catch(() => {});
+    void refreshPendingFocus().catch(() => {});
     void refreshCompanion();
 
     const tick = setInterval(() => {
@@ -254,5 +260,6 @@ export function useOptionsState(): OptionsState {
     incognitoAllowed,
     modelProgress,
     now,
+    loadError,
   };
 }

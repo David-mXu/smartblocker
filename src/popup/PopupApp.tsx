@@ -38,6 +38,7 @@ export function PopupApp({ initial }: { initial: PopupData | null }) {
   const [data, setData] = useState<PopupData | null>(initial);
   const [now, setNow] = useState(() => Date.now());
   const [statusText, setStatusText] = useState('');
+  const [loadError, setLoadError] = useState('');
 
   // Focus goal draft (persisted value lives in data.settings.focusGoal).
   const [focusGoal, setFocusGoal] = useState(initial?.settings.focusGoal ?? '');
@@ -67,13 +68,22 @@ export function PopupApp({ initial }: { initial: PopupData | null }) {
   }, [patch]);
 
   // First load (only when popup.ts couldn't preload in time).
-  useEffect(() => {
-    if (initial) return;
-    void loadPopupData().then((d) => {
+  const loadInitial = useCallback(async () => {
+    try {
+      const d = await loadPopupData();
       setData(d);
       setFocusGoal(d.settings.focusGoal);
-    });
-  }, [initial]);
+      setLoadError('');
+    } catch (e) {
+      // Without this, a rejected preload left "Checking this page…" forever.
+      setLoadError(errorText(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (initial) return;
+    void loadInitial();
+  }, [initial, loadInitial]);
 
   // Live updates: settings, locks, pending session, and this tab's verdict.
   useEffect(() => {
@@ -320,6 +330,19 @@ export function PopupApp({ initial }: { initial: PopupData | null }) {
         <LockSimple weight="fill" className="mt-0.5 size-3.5 shrink-0 text-accent" aria-hidden />
         <span className="tabular-nums">{lockText}</span>
       </div>
+
+      {loadError && !data && (
+        <div
+          id="popup-load-error"
+          role="alert"
+          className="flex items-center justify-between gap-3 border-b border-destructive/30 bg-destructive/10 px-4 py-2.5 text-[13px] text-foreground"
+        >
+          <span>Couldn’t load SmartBlocker. {loadError}</span>
+          <Button size="sm" variant="secondary" onClick={() => void loadInitial()}>
+            Retry
+          </Button>
+        </div>
+      )}
 
       <ExtensionGraceNotice
         id="extension-grace"

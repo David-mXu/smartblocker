@@ -169,6 +169,14 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   the built extension, runs one real classification, and fails non-zero unless
   the model CacheStorage is populated (so a failed early run can never save a
   model-less profile under the warm-cache key).
+- `node scripts/feedback-uploader-test.mjs` — mocked-chrome/fetch tests for
+  the opt-in feedback uploader: toggle gating, batch shape (no local
+  bookkeeping), stable install id, failed-POST retry, wire-cap skipping, and
+  the 100-record batch cap.
+- `node scripts/history-ingester-test.mjs` — mocked chrome.history + module-
+  mocked classifier tests for the on-demand history scan: classifiable/
+  whitelisted/duplicate filtering, blocklist short-circuit, HISTORY_CAP, error
+  transitions, and stale-scan healing without disturbing a live scan.
 - `node scripts/rules-test.mjs` — pure unit tests for the deterministic rule
   core: title-rule compiler/matcher + channel rules (`src/shared/rules.ts`,
   same type-stripping constraints), the shared classifier block predicate, and

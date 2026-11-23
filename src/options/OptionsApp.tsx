@@ -20,6 +20,7 @@ import {
 import { api } from '../shared/api';
 import { activeProfile } from '../shared/profiles';
 import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
 import { cn } from '../lib/utils';
 import { useOptionsState, type OptionsState } from './useOptionsState';
 import { WelcomeWizard } from './welcome/WelcomeWizard';
@@ -77,7 +78,14 @@ const LEGACY_HASHES: Record<string, string> = {
 };
 
 function routeFromHash(): string {
-  const raw = decodeURIComponent(location.hash.replace(/^#\/?/, '')).toLowerCase();
+  // decodeURIComponent throws on malformed escapes (e.g. "#%"), which would
+  // blank the whole settings page. Fall back to the default route instead.
+  let raw: string;
+  try {
+    raw = decodeURIComponent(location.hash.replace(/^#\/?/, '')).toLowerCase();
+  } catch {
+    raw = location.hash.replace(/^#\/?/, '').toLowerCase();
+  }
   if (raw === 'welcome') return 'welcome';
   const id = LEGACY_HASHES[raw] ?? raw;
   return PAGES.some((p) => p.id === id) ? id : 'blocking';
@@ -295,7 +303,23 @@ export function OptionsApp() {
             </nav>
 
             <div className="flex min-w-0 max-w-[680px] flex-1 flex-col gap-12">
-              {settings ? <PageComponent state={state} /> : <div className="min-h-[50vh]" aria-busy="true" />}
+              {settings ? (
+                <PageComponent state={state} />
+              ) : state.loadError ? (
+                <div
+                  id="options-load-error"
+                  role="alert"
+                  className="mx-auto mt-10 flex max-w-md flex-col gap-3 rounded-xl border border-destructive/30 bg-destructive/10 p-5 text-sm text-foreground"
+                >
+                  <p className="m-0 font-medium">Couldn’t load SmartBlocker settings.</p>
+                  <p className="m-0 text-muted-foreground">{state.loadError}</p>
+                  <Button size="sm" variant="secondary" className="w-fit" onClick={() => location.reload()}>
+                    Retry
+                  </Button>
+                </div>
+              ) : (
+                <div className="min-h-[50vh]" aria-busy="true" />
+              )}
 
               <footer className="flex flex-col gap-1 border-t border-border pt-6 text-xs text-faint sm:flex-row sm:items-center sm:justify-between">
                 <span>
