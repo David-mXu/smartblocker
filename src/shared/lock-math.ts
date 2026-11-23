@@ -911,6 +911,17 @@ function sanitizeRuleLabel<T extends ScheduleRule>(r: T): T | null {
  *  they are display-only, so a long/control-character name never loses the
  *  enforcement window it describes (truncate-and-keep, mirroring
  *  sanitize_lock_state on the Rust side). */
+/** Strictly-upward stamp for ordered lock operations (password, delay,
+ *  random-text, schedules, breaks). A wall-clock correction must never make
+ *  the NEXT write lose to an earlier one recorded while the clock was ahead:
+ *  a password arm stamped in the future would otherwise be unreleasable until
+ *  that instant. Mirrors the partner arm's `max(now, prev + 1)` rule. */
+export function nextOrderedStamp(previous: number | null | undefined, now: number): number {
+  const prev =
+    typeof previous === 'number' && Number.isFinite(previous) && previous > 0 ? previous : 0;
+  return Math.max(now, prev + 1);
+}
+
 /** Dedupe rule IDs (first wins — deterministic for an equal-stamp merge) and
  *  duplicate days. Runs BEFORE validation so a hand-edited/imported duplicate
  *  cannot silently disappear during a later merge. */

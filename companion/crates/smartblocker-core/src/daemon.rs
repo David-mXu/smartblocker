@@ -580,6 +580,41 @@ impl Shared {
                 // fires. Pin both, like the legacy pair above.
                 sanitized.category_schedules = current.category_schedules.clone();
                 sanitized.category_schedules_updated_at = current.category_schedules_updated_at;
+            } else {
+                // Strictly-upward release stamps: the extension writes ordered
+                // operations as max(now, previous + 1). After a wall clock is
+                // corrected backwards, that legitimate release stamp is still
+                // "future" relative to the corrected now, and sanitize clamps
+                // every future stamp down to now — where it would LOSE to an
+                // arm stamped while the clock was ahead (an unreleasable
+                // password/delay/random-text lock until that date). An
+                // AUTHENTICATED peer may therefore advance each ordered stamp
+                // by exactly one step; anything further is clamped, so a
+                // forged far-future stamp still cannot hold an operation
+                // hostage. (Unauthenticated peers were pinned above.)
+                let now_now = self.wall_ms().max(0) as u64;
+                let step = |raw: u64, current: u64| -> u64 {
+                    if raw > now_now {
+                        current.saturating_add(1).max(now_now)
+                    } else {
+                        raw
+                    }
+                };
+                sanitized.password_ts = step(remote.password_ts, current.password_ts);
+                sanitized.break_updated_at =
+                    step(remote.break_updated_at, current.break_updated_at);
+                sanitized.delay_updated_at =
+                    step(remote.delay_updated_at, current.delay_updated_at);
+                sanitized.random_text_updated_at = step(
+                    remote.random_text_updated_at,
+                    current.random_text_updated_at,
+                );
+                sanitized.schedules_updated_at =
+                    step(remote.schedules_updated_at, current.schedules_updated_at);
+                sanitized.category_schedules_updated_at = step(
+                    remote.category_schedules_updated_at,
+                    current.category_schedules_updated_at,
+                );
             }
             let merged = merge_lock_states(&current, &sanitized, self.wall_ms());
             if merged == *current {
@@ -3825,6 +3860,56 @@ mod tests {
         let (state, reason) = load_allowance_or_degrade(&store);
         assert!(state.is_none());
         assert!(reason.unwrap().contains("corrupt"));
+    }
+
+    #[test]
+    fn authenticated_release_wins_over_a_future_stamped_arm() {
+        // The clock was ahead when the password was armed, then corrected
+        // backwards. The extension's release is written as previous + 1, which
+        // is still "future" relative to the corrected wall clock; it must win
+        // the merge or the lock is unreleasable until that date.
+        let (_dir, shared) = test_shared();
+        add_conn(&shared, 7, true);
+        let future = (shared.wall_ms() + 3_600_000) as u64;
+        *shared.lock_state.lock().unwrap() = LockState {
+            password_hash: Some("ab".repeat(32)),
+            password_ts: future,
+            ..LockState::default()
+        };
+        shared.merge_in(
+            &LockState {
+                password_hash: None,
+                password_ts: future + 1,
+                ..LockState::default()
+            },
+            7,
+            true,
+        );
+        assert_eq!(shared.lock_state.lock().unwrap().password_hash, None);
+        assert!(shared.lock_state.lock().unwrap().password_ts > future);
+    }
+
+    #[test]
+    fn authenticated_far_future_stamp_is_clamped_near_now() {
+        // A forged far-future stamp may advance by ONE step, never billions of
+        // milliseconds, so it cannot hold an operation hostage.
+        let (_dir, shared) = test_shared();
+        add_conn(&shared, 7, true);
+        let now = shared.wall_ms().max(0) as u64;
+        shared.merge_in(
+            &LockState {
+                password_hash: Some("cd".repeat(32)),
+                password_ts: u64::MAX / 2,
+                ..LockState::default()
+            },
+            7,
+            true,
+        );
+        let stored = shared.lock_state.lock().unwrap().password_ts;
+        assert!(
+            stored <= now + 2,
+            "forged future stamp persisted as {stored} (now {now})"
+        );
     }
 
     #[test]

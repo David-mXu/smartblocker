@@ -680,6 +680,9 @@ round and one product addition on branch `improve/best-version` (commits
   file untouched) instead of taking enforcement down with it. The drift
   anchor now uses a boot-relative monotonic clock, so a sub-tolerance forward
   ratchet chained with daemon restarts can no longer reset its baseline.
+  Ordered lock writes now use strictly-upward stamps (with an authenticated
+  one-step ingress rule), so a clock corrected backwards after an ahead-stamped
+  arm cannot leave a password/delay/random-text lock unreleasable.
 - Measurement/CI: the evaluator now mirrors the YouTube browsing-surface policy
   (36 committed cases were mis-scored), fails on added-failing/removed cases,
   and the nightly lane runs every pure harness + `verify-dataset` + `npm run

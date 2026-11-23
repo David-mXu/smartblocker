@@ -13,6 +13,7 @@ import {
   makeBreakOperation,
   mergeLockStates,
   nextBoundary,
+  nextOrderedStamp,
   nextScheduleLockAt,
   nextWindowStart,
   sanitizeLockState,
@@ -340,6 +341,22 @@ test('break operation: immediate mode has a finite active interval', () => {
 test('break operation: duration and total horizon cannot exceed 24h', () => {
   assert.equal(makeBreakOperation(NOW, 0, 48 * 3_600_000).breakEndsAt, NOW + 24 * 3_600_000);
   assert.throws(() => makeBreakOperation(NOW, 24 * 3_600_000, 60_000));
+});
+
+// --- strictly-upward ordered stamps (2026-11-22) ---
+test('nextOrderedStamp is strictly upward, even against a future previous stamp', () => {
+  // Normal case: wall time advances.
+  assert.equal(nextOrderedStamp(1_000, 2_000), 2_000);
+  // Same millisecond: still advances by one so an LWW merge sees a new write.
+  assert.equal(nextOrderedStamp(2_000, 2_000), 2_001);
+  // Clock corrected backwards after a future-stamped arm: the next write must
+  // beat the arm instead of losing to it forever.
+  assert.equal(nextOrderedStamp(10_000_000, 5_000), 10_000_001);
+  // Missing/invalid previous values fall back to now.
+  assert.equal(nextOrderedStamp(undefined, 7_000), 7_000);
+  assert.equal(nextOrderedStamp(null, 7_000), 7_000);
+  assert.equal(nextOrderedStamp(Number.NaN, 7_000), 7_000);
+  assert.equal(nextOrderedStamp(-5, 7_000), 7_000);
 });
 
 // --- schedule structure normalization (2026-11-21 audit) ---

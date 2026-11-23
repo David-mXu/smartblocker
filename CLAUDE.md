@@ -822,7 +822,13 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   you touch it, change `lock-math.ts` AND `merge.rs` together and extend the
   shared fixtures, or the two stores drift and never converge. Password
   arm/unlock is ordered by a `passwordTs` tombstone stamp (greater stamp
-  wins; tie → armed; both armed → lex-smaller hash) and schedules by
+  wins; tie → armed; both armed → lex-smaller hash). Every ordered write
+  (password, delay, random-text, breaks, schedules) uses `nextOrderedStamp`
+  (`max(now, previous + 1)`, lock-math.ts) so a clock corrected BACKWARDS
+  after an ahead-stamped arm cannot leave a lock unreleasable; the daemon
+  accepts an authenticated downside release stamp that is one step beyond its
+  own (anything further is clamped, so a forged far-future stamp still can't
+  hold an operation hostage). Schedules by
   `schedulesUpdatedAt` — both stamps clamp to `now` on both sides, and when
   exactly one side is settings-locked the locked side's schedules win.
 - **Companion connections are only "a browser" after an AUTHENTICATED
