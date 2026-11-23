@@ -465,8 +465,10 @@ longer exists.
   "Pomodoro break (5 min)", "End allowance", "Close opening". Focus-cycle
   section: `#focus-mode`, `#focus-work-minutes`, `#focus-break-minutes`,
   `#focus-cycle-count`, `#focus-cycle-start`, `#focus-cycle-cancel`,
-  `#focus-cycle-msg`. Configuration inputs disable while locked; grant
-  usage never shortens a lock.
+  `#focus-cycle-msg`. Configuration inputs disable while locked; the
+  `#allowance-category` select stays usable as a VIEW control so the user can
+  inspect each category's live relief state (its configuration inputs still
+  disable). Grant usage never shortens a lock.
 - `#schedule`: `#schedule-list` (`.schedule-row`, `.day-label`,
   `.schedule-remove`, `.schedule-duplicate` with
   `#schedule-duplicate-<rule id>`), `#schedule-add`, `#schedule-save`,

@@ -39,10 +39,6 @@ permissions:
 # /tmp/opencode (allowance, allowance-daemon, backup) re-download the
 # model each run by design — their profile paths are not cacheable.
 
-env:
-  # Keep in sync with src/shared/config.ts EMBED_MODEL_REVISION.
-  EMBED_MODEL_REVISION: ea104dacec62c0de699686887e3f920caeb4f3e3
-
 jobs:
   e2e:
     name: Unit battery + Playwright e2e chain
@@ -57,6 +53,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24 # >= 22.6 required for --experimental type stripping
+          cache: npm
 
       # Needed early: e2e-allowance-daemon-test (3rd in the chain) builds
       # companion binaries via cargo itself, same as the last suite.
@@ -68,12 +65,34 @@ jobs:
       - name: Install node dependencies
         run: npm ci
 
+      # Cache keys must come from the SOURCE pin, never a hand-kept copy: a
+      # model bump then invalidates every warm profile automatically.
+      - name: Read pinned model revision
+        id: model
+        run: |
+          rev=$(sed -n "s/.*EMBED_MODEL_REVISION = '\([0-9a-f]\{40\}\)'.*/\1/p" src/shared/config.ts | head -1)
+          if [ -z "$rev" ]; then
+            echo "could not read EMBED_MODEL_REVISION from src/shared/config.ts" >&2
+            exit 1
+          fi
+          echo "revision=$rev" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('package-lock.json') }}
+          restore-keys: playwright-
+
       - name: Restore warm model profiles
         uses: actions/cache@v4
         with:
-          # Per-suite persistent profiles; CacheStorage/ holds the ~35MB
-          # model (see CLAUDE.md model-facts note on cold rebuilds).
-          # .dev-profile-protection is recreated per run — not cached.
+          # Per-suite persistent profiles. The classifier suites' CacheStorage
+          # holds the ~35MB model (see CLAUDE.md model-facts); the four
+          # non-classifier profiles are cached only for their persistent
+          # startup state (notifications/usage recreate fresh ones per run
+          # anyway, which is harmless). .dev-profile-protection is recreated
+          # per run and is not cached.
           path: |
             .e2e-profile
             .e2e-profile-p1
@@ -82,7 +101,7 @@ jobs:
             .e2e-profile-security
             .e2e-notifications-profile
             .e2e-usage-profile
-          key: embedded-model-${{ env.EMBED_MODEL_REVISION }}-v1
+          key: embedded-model-${{ steps.model.outputs.revision }}-v1
           # Bump the -v1 suffix to force one cold re-download if a cached
           # profile is ever suspected of masking a regression.
 
@@ -152,7 +171,9 @@ jobs:
           run_suite () {
             name="$1"; shift
             echo "::group::$name"
-            "$@" > "logs/$name.log" 2>&1
+            # Per-suite cap: one hung Playwright wait must not consume the
+            # whole job budget and starve every suite after it.
+            timeout 2400 "$@" > "logs/$name.log" 2>&1
             code=$?
             echo "$code" > "exitcodes/$name.exit"
             if [ "$code" -ne 0 ]; then
