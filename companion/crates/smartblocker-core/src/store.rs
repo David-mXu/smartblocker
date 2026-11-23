@@ -148,6 +148,15 @@ impl Default for CompanionConfig {
     }
 }
 
+/// Whether a requested extension-loss grace may replace `current`. While ANY
+/// lock is active the grace may only SHRINK: widening it is the same class of
+/// mid-lock weakening as deleting an app from the block list, and a 300s value
+/// buys a five-minute extensionless browsing window. The daemon also heals a
+/// widened value back to the value pinned at lock start (see heal_config).
+pub fn grace_change_allowed(current: u64, requested: u64, locked: bool) -> bool {
+    !locked || requested <= current
+}
+
 /// Cap on remembered pairing tokens — one per browser profile is the honest
 /// workload; the bound keeps an unlocked-window attacker from growing the
 /// file (or flushing honest tokens) without limit.
@@ -609,6 +618,15 @@ mod tests {
             ..CompanionConfig::default()
         };
         assert_eq!(clamped.extension_loss_grace_ms(), 45_000);
+    }
+
+    #[test]
+    fn grace_may_only_shrink_while_locked() {
+        assert!(grace_change_allowed(60, 30, true));
+        assert!(grace_change_allowed(60, 60, true));
+        assert!(!grace_change_allowed(60, 120, true));
+        assert!(!grace_change_allowed(60, 300, true));
+        assert!(grace_change_allowed(60, 300, false));
     }
 
     #[test]

@@ -42,6 +42,15 @@ accumulated evidence, and expire an hour-long lock in minutes.
   timed out even though the rescue had happened. It now marks by the last
   sample timestamp instead.
 
+## Post-audit refinement (2026-11-23)
+
+Comparing only `now_mono < mono0` cannot distinguish a reboot whose fresh
+uptime is already larger than the old baseline. The anchor now also stores the
+implied boot instant (`boot_wall0 = wall - mono`) and re-anchors when it moves
+by more than two minutes — covering the community/VM reboot-after-downtime case
+without mistaking a small wall correction for a reboot. Legacy anchors (no
+field, or `boot_based: false`) still re-anchor once.
+
 ## Residual
 
 On platforms other than Linux/Windows the clock falls back to process-relative;

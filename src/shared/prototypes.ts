@@ -118,6 +118,11 @@ export function meanNormalize(vecs: number[][]): number[] {
 
 /** Dot product of two equal-length normalized vectors (= cosine similarity). */
 export function dotProduct(a: number[], b: number[]): number {
+  // Defensive: a dimension mismatch (e.g. a stale seed-vector asset from a
+  // different embedding model) must never produce NaN — NaN comparisons are
+  // false, which would silently fail OPEN. Mismatched vectors score as
+  // unrelated instead.
+  if (a.length !== b.length) return 0;
   let dot = 0;
   for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
   return dot;

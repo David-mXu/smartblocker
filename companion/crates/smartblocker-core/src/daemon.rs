@@ -594,7 +594,13 @@ impl Shared {
                 // hostage. (Unauthenticated peers were pinned above.)
                 let now_now = self.wall_ms().max(0) as u64;
                 let step = |raw: u64, current: u64| -> u64 {
-                    if raw > now_now {
+                    // Either side being future is the clock-correction shape:
+                    // a future CURRENT means we hold an arm from an ahead-era
+                    // clock (a legitimate low-stamped release, e.g. from a
+                    // wiped profile, must still win); a future RAW is the
+                    // extension's previous+1 tombstone. Both collapse to one
+                    // step beyond our own stamp; only that one step is granted.
+                    if raw > now_now || current > now_now {
                         current.saturating_add(1).max(now_now)
                     } else {
                         raw
@@ -2001,18 +2007,29 @@ fn sync_extension_loss_statuses(
 struct ClockAnchor {
     /// Wall clock (epoch ms) at (re-)base time.
     wall0: i64,
-    /// Monotonic elapsed ms at (re-)base time. Relative to the daemon's own
-    /// start — a daemon restart moves mono BACKWARDS against the anchor,
-    /// which is exactly the re-anchor signature `clock_anchor_step` checks.
+    /// Boot-relative monotonic ms at (re-)base time (see clock.rs). It keeps
+    /// rising across daemon restarts, so the anchor survives a watchdog
+    /// respawn; only an OS reboot (or a changed implied boot instant) resets
+    /// the comparison via `clock_anchor_step`.
     mono0: i64,
     /// True when mono0 came from the boot-relative clock. Legacy anchors were
     /// process-relative and must re-anchor once after upgrading (their mono0
     /// is not comparable with the new base).
     #[serde(default)]
     boot_based: bool,
+    /// Estimated boot wall-clock instant (`wall - mono`) at anchor time. A
+    /// reboot whose fresh uptime happens to exceed the old mono0 would
+    /// otherwise read as forward drift and extend deadlines by the downtime;
+    /// a materially different boot instant re-anchors instead. 0 = legacy
+    /// anchor (re-anchor once).
+    #[serde(default)]
+    boot_wall0: i64,
 }
 
 const CLOCK_ANCHOR_FILE: &str = "clock-anchor.json";
+/// How much the implied boot instant (`wall - boot-relative mono`) may move
+/// before we conclude this is a NEW boot rather than drift on the same one.
+const BOOT_INSTANT_TOLERANCE_MS: i64 = 120_000;
 
 fn anchor_path(store: &Store) -> PathBuf {
     store.dir().join(CLOCK_ANCHOR_FILE)
@@ -2078,8 +2095,15 @@ fn clock_anchor_step(
 ) -> ClockAnchorStep {
     match anchor {
         None => ClockAnchorStep::Create,
-        Some(a) if !a.boot_based => ClockAnchorStep::Reanchor,
+        Some(a) if !a.boot_based || a.boot_wall0 == 0 => ClockAnchorStep::Reanchor,
         Some(a) if now_mono_ms < a.mono0 => ClockAnchorStep::Reanchor,
+        // A remote/VM reboot can leave the NEW uptime larger than the old
+        // mono0. Compare the implied boot instant instead of trusting order.
+        Some(a)
+            if ((now_wall_ms - now_mono_ms) - a.boot_wall0).abs() > BOOT_INSTANT_TOLERANCE_MS =>
+        {
+            ClockAnchorStep::Reanchor
+        }
         Some(a) => {
             let unexplained = (now_wall_ms - a.wall0) - (now_mono_ms - a.mono0);
             if unexplained > CLOCK_JUMP_TOLERANCE_MS {
@@ -2173,6 +2197,10 @@ fn compensate_clock_tamper(
 struct PinnedApps {
     legacy: Vec<String>,
     targets: Vec<crate::app_targets::AppTarget>,
+    /// Extension-loss grace in force when this lock began. None while unlocked
+    /// (the loop resets the whole pin) and on the first locked tick until it is
+    /// captured. A mid-lock increase is healed back to this value.
+    grace_seconds: Option<u64>,
 }
 
 /// Mid-lock `config.json` self-healing. While locked, the data dir is the
@@ -2184,9 +2212,10 @@ struct PinnedApps {
 /// Typed targets compare by canonical key, so re-ordering or case/separator
 /// respellings of the same identity are not mistaken for a removal. A target
 /// swapped for a DIFFERENT identity is restored exactly like a dropped one.
-fn heal_config(shared: &Shared, pinned: &mut PinnedApps) -> CompanionConfig {
+fn heal_config(shared: &Shared, pinned: &mut PinnedApps, locked: bool) -> CompanionConfig {
     let mut config = shared.store.load_config();
     let mut restored: Vec<String> = Vec::new();
+    let mut grace_restored = false;
     for entry in pinned.legacy.iter() {
         if !config
             .app_blocklist
@@ -2208,12 +2237,25 @@ fn heal_config(shared: &Shared, pinned: &mut PinnedApps) -> CompanionConfig {
             restored_targets.push(target.key());
         }
     }
-    if !restored.is_empty() || !restored_targets.is_empty() {
+    if locked {
+        match pinned.grace_seconds {
+            None => pinned.grace_seconds = Some(config.extension_loss_grace_seconds),
+            Some(allowed) if config.extension_loss_grace_seconds > allowed => {
+                config.extension_loss_grace_seconds = allowed;
+                grace_restored = true;
+            }
+            _ => {}
+        }
+    }
+    if !restored.is_empty() || !restored_targets.is_empty() || grace_restored {
         if let Err(e) = shared.store.save_config(&config) {
             eprintln!("[daemon] failed to restore tampered config: {e}");
         }
         let mut detail = restored;
         detail.extend(restored_targets);
+        if grace_restored {
+            detail.push("extensionLossGrace".to_string());
+        }
         shared.log_event("config-tamper-restored", &detail.join(", "));
     }
     for entry in &config.app_blocklist {
@@ -2550,6 +2592,7 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
                             wall0: now_wall,
                             mono0: now_mono as i64,
                             boot_based: true,
+                            boot_wall0: now_wall - now_mono as i64,
                         };
                         clock_anchor = Some(fresh);
                         save_clock_anchor(&shared.store, &fresh);
@@ -2574,7 +2617,7 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
                 // Self-healing runs whenever locked (armed or enforcing):
                 // the data dir must not be a mid-lock tamper surface.
                 heal_lock_file(&shared, now_wall);
-                let mut config = heal_config(&shared, &mut pinned_apps);
+                let mut config = heal_config(&shared, &mut pinned_apps, locked);
                 heal_license_key(&shared, &mut license_pin, &mut config);
                 // Armed-phase enforcement (red-team #25): the enforcer runs
                 // for EVERY armed phase (timer, password, frozen, schedule
@@ -3505,6 +3548,50 @@ mod tests {
     }
 
     #[test]
+    fn mid_lock_grace_increase_is_healed_back_and_shrinking_is_allowed() {
+        let (_dir, shared) = test_shared();
+        let mut config = shared.store.load_config();
+        config.extension_loss_grace_seconds = 60;
+        shared.store.save_config(&config).unwrap();
+
+        // First locked tick pins the value in force.
+        let mut pinned = PinnedApps::default();
+        assert_eq!(
+            heal_config(&shared, &mut pinned, true).extension_loss_grace_seconds,
+            60
+        );
+
+        // A mid-lock widening is healed back...
+        let mut config = shared.store.load_config();
+        config.extension_loss_grace_seconds = 300;
+        shared.store.save_config(&config).unwrap();
+        assert_eq!(
+            heal_config(&shared, &mut pinned, true).extension_loss_grace_seconds,
+            60
+        );
+        assert_eq!(shared.store.load_config().extension_loss_grace_seconds, 60);
+
+        // ...while shrinking is a legal strictening.
+        let mut config = shared.store.load_config();
+        config.extension_loss_grace_seconds = 30;
+        shared.store.save_config(&config).unwrap();
+        assert_eq!(
+            heal_config(&shared, &mut pinned, true).extension_loss_grace_seconds,
+            30
+        );
+
+        // Unlocked pins are cleared by the loop; a raise is then allowed.
+        let mut fresh = PinnedApps::default();
+        let mut config = shared.store.load_config();
+        config.extension_loss_grace_seconds = 120;
+        shared.store.save_config(&config).unwrap();
+        assert_eq!(
+            heal_config(&shared, &mut fresh, false).extension_loss_grace_seconds,
+            120
+        );
+    }
+
+    #[test]
     fn wiped_peer_state_is_relocked_via_direct_reply() {
         let (_dir, shared) = test_shared();
         let strong = LockState {
@@ -3695,6 +3782,7 @@ mod tests {
             wall0: base_wall,
             mono0: 0,
             boot_based: true,
+            boot_wall0: base_wall,
         };
         // Tick 1: 55_000 wall − 5_000 mono = 50_000 unexplained → quiet.
         assert_eq!(
@@ -3718,6 +3806,7 @@ mod tests {
             wall0: base_wall,
             mono0: 0,
             boot_based: true,
+            boot_wall0: base_wall,
         };
         let step = clock_anchor_step(Some(&anchor), base_wall + 110_000, 10_000);
         let ClockAnchorStep::Compensate(unexplained) = step else {
@@ -3740,9 +3829,33 @@ mod tests {
             wall0: base_wall,
             mono0: 5_000,
             boot_based: false,
+            boot_wall0: 0,
         };
         assert_eq!(
             clock_anchor_step(Some(&legacy), base_wall + 20_000_000, 20_005_000),
+            ClockAnchorStep::Reanchor
+        );
+    }
+
+    #[test]
+    fn boot_instant_detects_a_reboot_with_larger_uptime_and_ignores_small_drift() {
+        let base_wall = 1_800_000_000_000_i64;
+        let anchor = ClockAnchor {
+            wall0: base_wall,
+            mono0: 5_000,
+            boot_based: true,
+            boot_wall0: base_wall - 5_000,
+        };
+        // Same boot, small wall correction (< tolerance): still compared.
+        assert_eq!(
+            clock_anchor_step(Some(&anchor), base_wall + 30_000, 35_000),
+            ClockAnchorStep::Quiet
+        );
+        // Reboot after an hour of downtime with only 30s of fresh uptime: the
+        // uptime ordering alone (30_000 > 5_000) would look like forward
+        // drift; the implied boot instant (base + 1h) exposes the reboot.
+        assert_eq!(
+            clock_anchor_step(Some(&anchor), base_wall + 3_600_000 + 30_000, 30_000),
             ClockAnchorStep::Reanchor
         );
     }
@@ -3759,6 +3872,7 @@ mod tests {
             wall0: base_wall,
             mono0: 500_000,
             boot_based: true,
+            boot_wall0: base_wall - 500_000,
         };
         // Mono BACKWARDS vs the anchor = the OS rebooted (boot-relative
         // uptime restarted) → silent re-anchor, never a false compensation.
@@ -3775,10 +3889,12 @@ mod tests {
             clock_anchor_step(Some(&anchor), base_wall + 560_001, anchor.mono0 + 500_000),
             ClockAnchorStep::Compensate(60_001)
         );
-        // Backward drift is never compensated (fail-safe direction).
+        // A large backward wall jump changes the implied boot instant, so it
+        // re-anchors silently (never compensates — the fail-safe direction)
+        // rather than pretending the same-boot anchor still describes it.
         assert_eq!(
             clock_anchor_step(Some(&anchor), base_wall - 7_200_000, anchor.mono0 + 1_000),
-            ClockAnchorStep::Quiet
+            ClockAnchorStep::Reanchor
         );
     }
 
@@ -3791,6 +3907,7 @@ mod tests {
             wall0: 1_800_000_000_000,
             mono0: 42_000,
             boot_based: true,
+            boot_wall0: 1_800_000_000_000 - 42_000,
         };
         save_clock_anchor(&store, &anchor);
         // A reopened store (= daemon restart on the same data dir) sees the
@@ -3880,6 +3997,33 @@ mod tests {
             &LockState {
                 password_hash: None,
                 password_ts: future + 1,
+                ..LockState::default()
+            },
+            7,
+            true,
+        );
+        assert_eq!(shared.lock_state.lock().unwrap().password_hash, None);
+        assert!(shared.lock_state.lock().unwrap().password_ts > future);
+    }
+
+    #[test]
+    fn authenticated_low_stamp_release_still_beats_a_future_stamped_arm() {
+        // A wiped/reinstalled profile sends a LOW release stamp while the
+        // daemon still holds a future-stamped arm from an ahead-clock era.
+        // The one-step rescue must fire on the CURRENT side too, or the
+        // unlock appears to succeed and then re-locks.
+        let (_dir, shared) = test_shared();
+        add_conn(&shared, 7, true);
+        let future = (shared.wall_ms() + 3_600_000) as u64;
+        *shared.lock_state.lock().unwrap() = LockState {
+            password_hash: Some("ef".repeat(32)),
+            password_ts: future,
+            ..LockState::default()
+        };
+        shared.merge_in(
+            &LockState {
+                password_hash: None,
+                password_ts: (shared.wall_ms() - 5_000).max(1) as u64,
                 ..LockState::default()
             },
             7,
@@ -4257,7 +4401,7 @@ mod tests {
 
         // First locked tick: nothing to restore, learning happens.
         let mut pinned = PinnedApps::default();
-        let healed = heal_config(&shared, &mut pinned);
+        let healed = heal_config(&shared, &mut pinned, false);
         assert_eq!(healed.app_blocklist, vec!["steam".to_string()]);
         assert_eq!(pinned.legacy, vec!["steam".to_string()]);
 
@@ -4266,7 +4410,7 @@ mod tests {
             .store
             .save_config(&CompanionConfig::default())
             .unwrap();
-        let healed = heal_config(&shared, &mut pinned);
+        let healed = heal_config(&shared, &mut pinned, false);
         assert_eq!(healed.app_blocklist, vec!["steam".to_string()]);
         assert_eq!(
             shared.store.load_config().app_blocklist,
@@ -4279,7 +4423,7 @@ mod tests {
             ..CompanionConfig::default()
         };
         shared.store.save_config(&added).unwrap();
-        heal_config(&shared, &mut pinned);
+        heal_config(&shared, &mut pinned, false);
         assert_eq!(
             pinned.legacy,
             vec!["steam".to_string(), "epicgames".to_string()]
@@ -4291,7 +4435,7 @@ mod tests {
             ..CompanionConfig::default()
         };
         shared.store.save_config(&swapped).unwrap();
-        let healed = heal_config(&shared, &mut pinned);
+        let healed = heal_config(&shared, &mut pinned, false);
         assert_eq!(
             healed.app_blocklist,
             vec!["epicgames".to_string(), "steam".to_string()]
@@ -4405,7 +4549,7 @@ mod tests {
 
         // First locked tick learns the target and persists the version.
         let mut pinned = PinnedApps::default();
-        let healed = heal_config(&shared, &mut pinned);
+        let healed = heal_config(&shared, &mut pinned, false);
         assert_eq!(healed.app_targets, vec![path.clone()]);
         assert_eq!(healed.app_targets_version, 1);
         assert_eq!(pinned.targets, vec![path.clone()]);
@@ -4415,7 +4559,7 @@ mod tests {
             .store
             .save_config(&CompanionConfig::default())
             .unwrap();
-        let healed = heal_config(&shared, &mut pinned);
+        let healed = heal_config(&shared, &mut pinned, false);
         assert_eq!(healed.app_targets, vec![path.clone()]);
         assert_eq!(shared.store.load_config().app_targets, vec![path.clone()]);
 
@@ -4425,7 +4569,7 @@ mod tests {
             ..CompanionConfig::default()
         };
         shared.store.save_config(&added).unwrap();
-        heal_config(&shared, &mut pinned);
+        heal_config(&shared, &mut pinned, false);
         assert_eq!(pinned.targets, vec![path.clone(), package.clone()]);
 
         // ...and swapping it away restores the previously pinned identity.
@@ -4435,7 +4579,7 @@ mod tests {
             ..CompanionConfig::default()
         };
         shared.store.save_config(&swapped).unwrap();
-        let healed = heal_config(&shared, &mut pinned);
+        let healed = heal_config(&shared, &mut pinned, false);
         assert_eq!(healed.app_targets, vec![package, path]);
         assert_eq!(healed.app_blocklist, vec!["steam".to_string()]);
     }
@@ -4626,7 +4770,7 @@ mod tests {
 
         let mut pin = None;
         // First locked tick pins the key, nothing to restore.
-        let mut config = heal_config(&shared, &mut PinnedApps::default());
+        let mut config = heal_config(&shared, &mut PinnedApps::default(), false);
         heal_license_key(&shared, &mut pin, &mut config);
         assert_eq!(pin, Some(Some(key.clone())));
 
@@ -4635,7 +4779,7 @@ mod tests {
             .store
             .save_config(&CompanionConfig::default())
             .unwrap();
-        let mut config = heal_config(&shared, &mut PinnedApps::default());
+        let mut config = heal_config(&shared, &mut PinnedApps::default(), false);
         heal_license_key(&shared, &mut pin, &mut config);
         assert_eq!(config.license_key.as_deref(), Some(key.as_str()));
         assert_eq!(
@@ -4658,7 +4802,7 @@ mod tests {
                 ..CompanionConfig::default()
             })
             .unwrap();
-        let mut config = heal_config(&shared, &mut PinnedApps::default());
+        let mut config = heal_config(&shared, &mut PinnedApps::default(), false);
         heal_license_key(&shared, &mut pin, &mut config);
         assert_eq!(config.license_key.as_deref(), Some(key.as_str()));
     }
@@ -4669,7 +4813,7 @@ mod tests {
         // strictening and learned (mirrors blocklist additions).
         let (_dir, shared) = test_shared();
         let mut pin = None;
-        let mut config = heal_config(&shared, &mut PinnedApps::default());
+        let mut config = heal_config(&shared, &mut PinnedApps::default(), false);
         heal_license_key(&shared, &mut pin, &mut config);
         assert_eq!(pin, Some(None));
 
@@ -4681,7 +4825,7 @@ mod tests {
                 ..CompanionConfig::default()
             })
             .unwrap();
-        let mut config = heal_config(&shared, &mut PinnedApps::default());
+        let mut config = heal_config(&shared, &mut PinnedApps::default(), false);
         heal_license_key(&shared, &mut pin, &mut config);
         assert_eq!(pin, Some(Some(key.clone())));
         assert_eq!(config.license_key.as_deref(), Some(key.as_str()));

@@ -58,6 +58,21 @@ original function after B's overlay appears.
   deterministic window; warm-model script passed against the warm profile.
 - YAML validated for the workflow changes.
 
+## Post-audit fixes
+
+A final review of the merged tree found and fixed:
+
+- `dotProduct` returned NaN for mismatched vector widths (a wrong-dimension
+  asset would score NaN, which compares false and would fail OPEN). It now
+  returns 0 for incompatible vectors, and a test pins that.
+- `scripts/lib/eval-harness.mjs` loaded the shipped model from HF `main`
+  instead of the pinned revision — the nightly eval could score unpinned
+  weights against a pinned baseline. Both backends now pass the revision for
+  their shipped model (candidates stay unpinned).
+- The nightly lane caches the Node/transformers.js model directories (keyed on
+  the same source-derived revision) and caps each suite at 20 minutes so a
+  hang cannot consume the 300-minute job budget.
+
 ## Residual
 
 The asset must be regenerated when seeds or the pinned model revision change;

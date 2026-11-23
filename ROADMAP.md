@@ -688,7 +688,9 @@ round and one product addition on branch `improve/best-version` (commits
   rebuild; a staleness tripwire (`centroid-asset-test`) forces regeneration
   when seeds or the pinned model change. The nightly lane gained a hard
   warm-model gate plus a cold-profile drop so a failed early run can never
-  poison the warm-cache key.
+  poison the warm-cache key. Extension-loss grace is pinned at lock start;
+  only shortening is accepted while a lock is active and a mid-lock widening
+  is healed back to the pinned value.
 - Measurement/CI: the evaluator now mirrors the YouTube browsing-surface policy
   (36 committed cases were mis-scored), fails on added-failing/removed cases,
   and the nightly lane runs every pure harness + `verify-dataset` + `npm run

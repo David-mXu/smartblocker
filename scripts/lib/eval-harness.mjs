@@ -18,6 +18,9 @@ import {
   BLOCK_THRESHOLD,
   DEFAULT_WHITELIST,
   EMBED_MODEL_ID,
+  EMBED_MODEL_REVISION,
+  MODEL_ID,
+  MODEL_REVISION,
   HYPOTHESIS_TEMPLATE,
   LABELS,
   SOFTMAX_TEMPERATURE,
@@ -192,7 +195,14 @@ export function decideBlock(c, verdict, settings = EVAL_SETTINGS, threshold = se
 // ── Classifier backends ─────────────────────────────────────────────────────
 
 async function embedder(modelId) {
-  const extractor = await pipeline('feature-extraction', modelId, { dtype: 'q8' });
+  // Pin the SHIPPED model to the same revision the extension loads; otherwise
+  // the nightly eval would score whatever HF `main` serves today against a
+  // baseline produced by the pinned commit. Candidate models in the bake-off
+  // are deliberately unpinned unless they are the shipped one.
+  const extractor = await pipeline('feature-extraction', modelId, {
+    dtype: 'q8',
+    ...(modelId === EMBED_MODEL_ID ? { revision: EMBED_MODEL_REVISION } : {}),
+  });
   return async (text) => {
     const out = await extractor(text, { pooling: 'mean', normalize: true });
     return Array.from(out.data);
@@ -264,7 +274,10 @@ export async function buildNliClassifier({
   template = HYPOTHESIS_TEMPLATE,
   labels = EVAL_SETTINGS.labels,
 } = {}) {
-  const clf = await pipeline('zero-shot-classification', modelId, { dtype: 'q8' });
+  const clf = await pipeline('zero-shot-classification', modelId, {
+    dtype: 'q8',
+    ...(modelId === MODEL_ID ? { revision: MODEL_REVISION } : {}),
+  });
   return async (text) => {
     const out = await clf(text, labels, { hypothesis_template: template, multi_label: false });
     return { label: out.labels[0], score: out.scores[0] };

@@ -59,7 +59,7 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
 - `npm run build:chrome` / `npm run build:firefox` — single target
 - `npm run typecheck` — `tsc --noEmit`
 - `npm run eval` (`scripts/eval.mjs`) — **THE regression gate.** Runs the
-  SHIPPED config over `scripts/eval-dataset.json` (**15,874 cases** across
+  SHIPPED config (including the pinned model revision) over `scripts/eval-dataset.json` (**15,874 cases** across
   slices `v1`–`v8`), scores the real block/allow decision (whitelist →
   blocklist → title rules → threshold, not just classifier top-1), and diffs every case
   against the committed `scripts/eval-baseline.json`. Prints what FIXED and
@@ -606,7 +606,10 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   (partner/allowance commands refused, nothing minted, file left untouched)
   instead of exiting the daemon, so locks and kills keep running;
   `uninstall` refuses on
-  `settings_locked`; `is_pro` fails CLOSED on a missing key
+  `settings_locked`; extension-loss grace is pinned at lock start and a
+  mid-lock widening (hand-edited `config.json`) is healed back — only
+  shortening is allowed while armed, so a 300s grace cannot buy a five-minute
+  extensionless browsing window; `is_pro` fails CLOSED on a missing key
   (`SBPRO_DEV_OPEN=1` dev escape hatch, pending user ratification) with
   a 7-day expiry grace and mid-lock `license_key` heal. `usage.rs` keeps a
   separate local foreground-app tracker: 5s samples, a 30s input-idle gate,

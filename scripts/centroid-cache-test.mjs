@@ -28,6 +28,7 @@ import {
   SEED_VECTOR_ASSET_FORMAT,
   seedVectorsFromAsset,
 } from '../src/shared/prototype-cache.ts';
+import { dotProduct } from '../src/shared/prototypes.ts';
 
 let passed = 0;
 let failed = 0;
@@ -238,6 +239,12 @@ test('incremental chain (append → insert → replace) always equals a cold bui
   // and the intermediate append really was incremental (cheap), not a full rebuild
   assert.equal(step2.embedded, 1);
   assert.equal(step3.embedded, withNewSeed.length); // mid-insert forced full re-embed
+});
+
+await test('dotProduct never returns NaN for mismatched dimensions', () => {
+  assert.equal(dotProduct([1, 2, 3], [1, 2]), 0);
+  assert.equal(dotProduct([], [1]), 0);
+  assert.equal(dotProduct([1, 0], [1, 0]), 1);
 });
 
 // --- precomputed asset decoding/reuse ---
