@@ -109,6 +109,7 @@ const PRIVACY_CARDS = [
 ] as const;
 
 export function SiteApp() {
+  const [marqueePaused, setMarqueePaused] = useState(false);
   const mainRef = useRef<HTMLElement>(null);
   const scrubRef = useRef<HTMLParagraphElement>(null);
   const pinSectionRef = useRef<HTMLDivElement>(null);
@@ -300,9 +301,12 @@ export function SiteApp() {
         id="architecture"
         className="scroll-mt-24 relative z-10 py-32 md:py-48 border-t border-border/90"
       >
-        {/* INFINITE MARQUEE */}
-        <div className="w-full overflow-hidden border-y border-border bg-background py-6 mb-32">
-          <div className="animate-marquee flex items-center gap-14">
+        {/* INFINITE MARQUEE (WCAG 2.2.2: >5s auto-motion needs a pause control) */}
+        <div className="relative w-full overflow-hidden border-y border-border bg-background py-6 mb-32">
+          <div
+            className="animate-marquee flex items-center gap-14"
+            style={marqueePaused ? { animationPlayState: 'paused' } : undefined}
+          >
             {[0, 1].map((dup) => (
               <div key={dup} className="flex items-center gap-14 shrink-0">
                 <span className="flex items-center gap-3 text-xl md:text-2xl font-semibold tracking-tight text-foreground/80">
@@ -328,6 +332,14 @@ export function SiteApp() {
               </div>
             ))}
           </div>
+          <button
+            type="button"
+            onClick={() => setMarqueePaused((p) => !p)}
+            aria-pressed={marqueePaused}
+            className="absolute bottom-2 right-3 rounded-md border border-border/70 bg-background/80 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground backdrop-blur hover:text-foreground"
+          >
+            {marqueePaused ? 'Resume' : 'Pause'}
+          </button>
         </div>
 
         {/* GSAP SCRUBBING TEXT REVEAL */}

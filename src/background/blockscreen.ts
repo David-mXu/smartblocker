@@ -704,7 +704,9 @@ export function showBlockScreen(
     if (event.shiftKey && (active === first || active === null || active === host)) {
       event.preventDefault();
       last.focus();
-    } else if (!event.shiftKey && active === last) {
+    } else if (!event.shiftKey && (active === last || active === null)) {
+      // `active === null` means focus escaped to the page behind the dialog
+      // (page script or the page's own focus handling); pull it back in.
       event.preventDefault();
       first.focus();
     }

@@ -47,14 +47,23 @@ export function ThisPageCard({
   const selectRef = useRef<HTMLSelectElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const returnFocus = useRef(false);
+  const reportingRef = useRef(false);
 
   useEffect(() => {
     setReportLabel((prev) => (reportLabels.includes(prev) ? prev : (reportLabels[0] ?? '')));
   }, [reportLabels]);
 
-  // A different verdict (tab changed, page re-checked, lock started) ends the report flow.
+  // A different verdict (tab changed, page re-checked, lock started) ends the
+  // report flow. If the flow was open, return focus to its trigger rather than
+  // dropping keyboard focus into <body>.
   const viewKey = view ? `${view.where}|${view.headline}|${view.detail}|${locked}` : '';
-  useEffect(() => setReporting(false), [viewKey]);
+  useEffect(() => {
+    reportingRef.current = reporting;
+  }, [reporting]);
+  useEffect(() => {
+    if (reportingRef.current) returnFocus.current = true;
+    setReporting(false);
+  }, [viewKey]);
 
   useEffect(() => {
     if (reporting) selectRef.current?.focus();
