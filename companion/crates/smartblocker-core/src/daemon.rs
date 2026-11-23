@@ -2201,6 +2201,10 @@ struct PinnedApps {
     /// (the loop resets the whole pin) and on the first locked tick until it is
     /// captured. A mid-lock increase is healed back to this value.
     grace_seconds: Option<u64>,
+    /// User-nominated incompatible browser stems in force at lock start. A
+    /// mid-lock removal from config.json is healed back (locks are
+    /// strictening-only); additions are learned.
+    extra_browsers: Option<Vec<String>>,
 }
 
 /// Mid-lock `config.json` self-healing. While locked, the data dir is the
@@ -2216,6 +2220,7 @@ fn heal_config(shared: &Shared, pinned: &mut PinnedApps, locked: bool) -> Compan
     let mut config = shared.store.load_config();
     let mut restored: Vec<String> = Vec::new();
     let mut grace_restored = false;
+    let mut extra_restored: Vec<String> = Vec::new();
     for entry in pinned.legacy.iter() {
         if !config
             .app_blocklist
@@ -2246,13 +2251,33 @@ fn heal_config(shared: &Shared, pinned: &mut PinnedApps, locked: bool) -> Compan
             }
             _ => {}
         }
+        match &pinned.extra_browsers {
+            None => pinned.extra_browsers = Some(config.extra_incompatible_browsers.clone()),
+            Some(known) => {
+                for stem in known {
+                    if !config
+                        .extra_incompatible_browsers
+                        .iter()
+                        .any(|present| present.eq_ignore_ascii_case(stem))
+                    {
+                        config.extra_incompatible_browsers.push(stem.clone());
+                        extra_restored.push(stem.clone());
+                    }
+                }
+            }
+        }
     }
-    if !restored.is_empty() || !restored_targets.is_empty() || grace_restored {
+    if !restored.is_empty()
+        || !restored_targets.is_empty()
+        || !extra_restored.is_empty()
+        || grace_restored
+    {
         if let Err(e) = shared.store.save_config(&config) {
             eprintln!("[daemon] failed to restore tampered config: {e}");
         }
         let mut detail = restored;
         detail.extend(restored_targets);
+        detail.extend(extra_restored);
         if grace_restored {
             detail.push("extensionLossGrace".to_string());
         }
@@ -2270,6 +2295,13 @@ fn heal_config(shared: &Shared, pinned: &mut PinnedApps, locked: bool) -> Compan
             .any(|known| known.key() == target.key())
         {
             pinned.targets.push(target.clone());
+        }
+    }
+    if let Some(known) = &mut pinned.extra_browsers {
+        for stem in &config.extra_incompatible_browsers {
+            if !known.iter().any(|entry| entry.eq_ignore_ascii_case(stem)) {
+                known.push(stem.clone());
+            }
         }
     }
     // A healed config may have appended targets after load; keep the version
@@ -3545,6 +3577,56 @@ mod tests {
             &test_hex(&signing.to_bytes()),
         )
         .expect("real offline Ed25519 token")
+    }
+
+    #[test]
+    fn mid_lock_extra_browser_removal_is_healed_back() {
+        let (_dir, shared) = test_shared();
+        let mut config = shared.store.load_config();
+        config.extra_incompatible_browsers = vec!["fakebrowser".into(), "otherbrowser".into()];
+        shared.store.save_config(&config).unwrap();
+
+        let mut pinned = PinnedApps::default();
+        // First locked tick pins both entries.
+        assert_eq!(
+            heal_config(&shared, &mut pinned, true)
+                .extra_incompatible_browsers
+                .len(),
+            2
+        );
+
+        // A mid-lock config edit removes one; the tick heals it back.
+        let mut config = shared.store.load_config();
+        config.extra_incompatible_browsers = vec!["fakebrowser".into()];
+        shared.store.save_config(&config).unwrap();
+        let healed = heal_config(&shared, &mut pinned, true);
+        assert!(healed
+            .extra_incompatible_browsers
+            .iter()
+            .any(|e| e == "otherbrowser"));
+        assert!(shared
+            .store
+            .load_config()
+            .extra_incompatible_browsers
+            .iter()
+            .any(|e| e == "otherbrowser"));
+
+        // Adding a NEW stem mid-lock is a legal strictening and is learned.
+        let mut config = shared.store.load_config();
+        config
+            .extra_incompatible_browsers
+            .push("thirdbrowser".into());
+        shared.store.save_config(&config).unwrap();
+        assert!(heal_config(&shared, &mut pinned, true)
+            .extra_incompatible_browsers
+            .iter()
+            .any(|e| e == "thirdbrowser"));
+        assert!(pinned
+            .extra_browsers
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|e| e == "thirdbrowser"));
     }
 
     #[test]

@@ -30,6 +30,13 @@ the block list, which the daemon already heals.
 - Companion e2e (real Chromium + daemon): config-tamper, grace and enforcement
   paths remain green.
 
+## Same-class hardening: extra incompatible browsers
+
+`config.extra_incompatible_browsers` is also pinned at lock start now. Removing
+an entry mid-lock would un-flag a browser kind (the same weakening as dropping
+an app), so removals are healed back; ADDING a stem remains legal strictening
+and is learned, exactly like blocklist additions.
+
 ## Residual
 
 If the daemon restarts mid-lock, the pin is captured from the value on disk at

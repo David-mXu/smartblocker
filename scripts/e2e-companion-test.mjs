@@ -90,6 +90,46 @@ function startDaemon() {
   children.push(child);
   return child;
 }
+// A previous FAILED run can leave a lock in this shared profile. The
+// extension's companion bridge sends hello+lockStateSync the moment the SW
+// starts, so clearing storage inside the main test body is too late: the
+// daemon has already merged the stale Frozen/timer lock and will reverse-sync
+// it back, making every ordinary `block stop` below truthfully refused. Wipe
+// the leak in a short pre-launch (no daemon running) before anything connects.
+async function clearLeakedProfileState() {
+  const ctx = await chromium.launchPersistentContext(PROFILE, {
+    channel: 'chromium',
+    headless: true,
+    timeout: 60_000,
+    args: [`--disable-extensions-except=${EXT_PATH}`, `--load-extension=${EXT_PATH}`],
+  });
+  try {
+    let sw = ctx.serviceWorkers()[0];
+    if (!sw) {
+      const event = ctx.waitForEvent('serviceworker', { timeout: 15_000 }).catch(() => null);
+      const waker = await ctx.newPage();
+      await waker.goto('https://example.com').catch(() => {});
+      sw = ctx.serviceWorkers()[0] ?? (await event);
+      await waker.close();
+    }
+    if (sw) {
+      await sw.evaluate(() =>
+        chrome.storage.local.remove([
+          'overrides',
+          'feedback',
+          'lockState',
+          'pendingFocusSession',
+          'companionSnapshot',
+          'lockClockAnchor',
+        ]),
+      );
+    }
+  } finally {
+    await ctx.close();
+  }
+}
+
+await clearLeakedProfileState();
 let daemon = startDaemon();
 await sleep(300); // let the listener bind before Chromium spawns relays
 

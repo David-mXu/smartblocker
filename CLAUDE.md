@@ -623,7 +623,9 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   `settings_locked`; extension-loss grace is pinned at lock start and a
   mid-lock widening (hand-edited `config.json`) is healed back — only
   shortening is allowed while armed, so a 300s grace cannot buy a five-minute
-  extensionless browsing window; `is_pro` fails CLOSED on a missing key
+  extensionless browsing window; the user-nominated
+  `extra_incompatible_browsers` list is pinned too (a mid-lock removal is
+  restored, additions are learned); `is_pro` fails CLOSED on a missing key
   (`SBPRO_DEV_OPEN=1` dev escape hatch, pending user ratification) with
   a 7-day expiry grace and mid-lock `license_key` heal. `usage.rs` keeps a
   separate local foreground-app tracker: 5s samples, a 30s input-idle gate,
