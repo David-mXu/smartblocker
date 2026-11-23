@@ -168,7 +168,6 @@ struct Shared {
     /// Ordered under enforcer_state with the remainder capture, so a larger
     /// sequence always represents a chronologically newer observation.
     next_extension_loss_sequence: AtomicU64,
-    started: Instant,
     /// Wall clock at daemon start (status snapshot `startedAtMs`).
     started_wall_ms: i64,
     version: &'static str,
@@ -178,7 +177,9 @@ struct Shared {
 
 impl Shared {
     fn mono_ms(&self) -> u64 {
-        self.started.elapsed().as_millis() as u64
+        // Boot-relative, so the persisted drift anchor stays comparable across
+        // daemon restarts (see clock.rs).
+        crate::clock::boot_mono_ms()
     }
 
     fn wall_ms(&self) -> i64 {
@@ -1969,6 +1970,11 @@ struct ClockAnchor {
     /// start — a daemon restart moves mono BACKWARDS against the anchor,
     /// which is exactly the re-anchor signature `clock_anchor_step` checks.
     mono0: i64,
+    /// True when mono0 came from the boot-relative clock. Legacy anchors were
+    /// process-relative and must re-anchor once after upgrading (their mono0
+    /// is not comparable with the new base).
+    #[serde(default)]
+    boot_based: bool,
 }
 
 const CLOCK_ANCHOR_FILE: &str = "clock-anchor.json";
@@ -2037,6 +2043,7 @@ fn clock_anchor_step(
 ) -> ClockAnchorStep {
     match anchor {
         None => ClockAnchorStep::Create,
+        Some(a) if !a.boot_based => ClockAnchorStep::Reanchor,
         Some(a) if now_mono_ms < a.mono0 => ClockAnchorStep::Reanchor,
         Some(a) => {
             let unexplained = (now_wall_ms - a.wall0) - (now_mono_ms - a.mono0);
@@ -2343,7 +2350,6 @@ fn sample_usage(shared: &Shared, probe: &mut dyn ForegroundProbe, now_wall_ms: i
 /// Runs forever (accept loop on the calling thread). Returns only on a bind
 /// error — `AddrInUse` means another daemon instance is already running.
 pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
-    let started = Instant::now();
     let started_wall_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -2396,7 +2402,6 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
         usage: Mutex::new(usage),
         extension_loss_revision: AtomicU64::new(0),
         next_extension_loss_sequence: AtomicU64::new(0),
-        started,
         started_wall_ms,
         version: env!("CARGO_PKG_VERSION"),
         extra_incompatible: opts.extra_incompatible,
@@ -2509,6 +2514,7 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
                         let fresh = ClockAnchor {
                             wall0: now_wall,
                             mono0: now_mono as i64,
+                            boot_based: true,
                         };
                         clock_anchor = Some(fresh);
                         save_clock_anchor(&shared.store, &fresh);
@@ -3022,7 +3028,7 @@ fn replace_conn(
             browser,
             ext_version,
             authed: authed.unwrap_or(old.authed),
-            last_seen_mono_ms: shared.started.elapsed().as_millis() as u64,
+            last_seen_mono_ms: shared.mono_ms(),
             last_extension_loss_sequence: Arc::clone(&old.last_extension_loss_sequence),
         });
         conns.insert(id, entry);
@@ -3299,7 +3305,6 @@ mod tests {
             usage: Mutex::new(usage),
             extension_loss_revision: AtomicU64::new(0),
             next_extension_loss_sequence: AtomicU64::new(0),
-            started: Instant::now(),
             started_wall_ms: 0,
             version: "test",
             extra_incompatible: vec![],
@@ -3654,6 +3659,7 @@ mod tests {
         let anchor = ClockAnchor {
             wall0: base_wall,
             mono0: 0,
+            boot_based: true,
         };
         // Tick 1: 55_000 wall − 5_000 mono = 50_000 unexplained → quiet.
         assert_eq!(
@@ -3676,6 +3682,7 @@ mod tests {
         let mut anchor = ClockAnchor {
             wall0: base_wall,
             mono0: 0,
+            boot_based: true,
         };
         let step = clock_anchor_step(Some(&anchor), base_wall + 110_000, 10_000);
         let ClockAnchorStep::Compensate(unexplained) = step else {
@@ -3685,6 +3692,23 @@ mod tests {
         assert_eq!(
             clock_anchor_step(Some(&anchor), base_wall + 115_000, 15_000),
             ClockAnchorStep::Quiet
+        );
+    }
+
+    #[test]
+    fn legacy_process_relative_anchor_reanchors_once_after_upgrade() {
+        // Pre-2026-11-22 anchors stored a process-relative mono0 that is not
+        // comparable with the boot-relative clock; trusting it would either
+        // disable drift detection (huge negative unexplained) or misfire.
+        let base_wall = 1_800_000_000_000_i64;
+        let legacy = ClockAnchor {
+            wall0: base_wall,
+            mono0: 5_000,
+            boot_based: false,
+        };
+        assert_eq!(
+            clock_anchor_step(Some(&legacy), base_wall + 20_000_000, 20_005_000),
+            ClockAnchorStep::Reanchor
         );
     }
 
@@ -3699,9 +3723,10 @@ mod tests {
         let anchor = ClockAnchor {
             wall0: base_wall,
             mono0: 500_000,
+            boot_based: true,
         };
-        // Mono BACKWARDS vs the anchor = the daemon restarted (its monotonic
-        // uptime zeroed) → silent re-anchor, never a false compensation.
+        // Mono BACKWARDS vs the anchor = the OS rebooted (boot-relative
+        // uptime restarted) → silent re-anchor, never a false compensation.
         assert_eq!(
             clock_anchor_step(Some(&anchor), base_wall + 9_999_000, 5_000),
             ClockAnchorStep::Reanchor
@@ -3730,6 +3755,7 @@ mod tests {
         let anchor = ClockAnchor {
             wall0: 1_800_000_000_000,
             mono0: 42_000,
+            boot_based: true,
         };
         save_clock_anchor(&store, &anchor);
         // A reopened store (= daemon restart on the same data dir) sees the

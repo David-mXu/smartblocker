@@ -12,6 +12,7 @@ pub mod allowance;
 pub mod app_targets;
 pub mod apps;
 pub mod browsers;
+pub mod clock;
 pub mod daemon;
 pub mod enforcer;
 pub mod focus_session;

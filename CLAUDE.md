@@ -569,9 +569,12 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   to the companion itself — any OTHER process wearing a protected stem is a
   decoy and is killed during locks; autostart launches the `watchdog`
   supervisor and daemon/watchdog respawn each other
-  (`SMARTBLOCKER_WATCHDOG_PID`); the daemon anchors to a monotonic clock with
+  (`SMARTBLOCKER_WATCHDOG_PID`); the daemon anchors to a **boot-relative**
+  monotonic clock (Linux `/proc/uptime`, Windows `GetTickCount64`) with
   wall-clock-jump compensation plus a persisted cumulative-drift anchor
-  (`clock-anchor.json`, defeats sub-tolerance forward ratchets);
+  (`clock-anchor.json`, defeats sub-tolerance forward ratchets even when a
+  ratchet is chained with watchdog respawns — a process-relative clock used to
+  reset the baseline on every restart; legacy anchors re-anchor once);
   `merge.rs merge_in` reverse-syncs the
   daemon's persisted state into a wiped extension and mid-lock
   `config.json` edits self-heal; `license.rs` verifies

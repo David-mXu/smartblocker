@@ -476,18 +476,25 @@ try {
   );
 
   await setScopedPolicy({ active: false, blockGames: true, deterministic: false });
-  const sampleCountBeforeRescue = await sw.evaluate(async () => {
+  // Marker by TIMESTAMP, not array index: the latency log is capped
+  // (LATENCY_LOG_MAX), so once it fills, `slice(len)` is always empty and this
+  // assertion times out even when the rescue happened (observed 2026-11-22).
+  const rescueSinceTs = await sw.evaluate(async () => {
     const stored = await chrome.storage.local.get('latencySamples');
-    return (stored.latencySamples ?? []).length;
+    const list = stored.latencySamples ?? [];
+    return list.length ? (list[list.length - 1].ts ?? 0) : 0;
   });
   await scopedTab.goto(scopedUrl);
   check(
     await poll(
       async () => {
         const stored = await sw.evaluate(() => chrome.storage.local.get('latencySamples'));
-        return (stored.latencySamples ?? [])
-          .slice(sampleCountBeforeRescue)
-          .some((sample) => sample.url === scopedUrl && sample.blocked === false);
+        return (stored.latencySamples ?? []).some(
+          (sample) =>
+            sample.url === scopedUrl &&
+            sample.blocked === false &&
+            (sample.ts ?? 0) > rescueSinceTs,
+        );
       },
       MODEL_TIMEOUT_MS,
       'inactive schedule rescues a completed classifier verdict',
