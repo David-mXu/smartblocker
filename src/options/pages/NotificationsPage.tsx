@@ -118,6 +118,7 @@ export function NotificationsPage({ state }: { state: OptionsState }) {
               <div className="flex items-center gap-2">
                 <Switch
                   id="notify-schedule-toggle"
+                  aria-label="Focus hours starting soon"
                   checked={prefs.scheduleStartingSoon.enabled}
                   disabled={locked}
                   onChange={(event) =>
@@ -142,6 +143,7 @@ export function NotificationsPage({ state }: { state: OptionsState }) {
               <div className="flex items-center gap-2">
                 <Switch
                   id="notify-break-toggle"
+                  aria-label="Break ending soon"
                   checked={prefs.breakEndingSoon.enabled}
                   disabled={locked}
                   onChange={(event) =>
@@ -166,6 +168,7 @@ export function NotificationsPage({ state }: { state: OptionsState }) {
               <div className="flex items-center gap-2">
                 <Switch
                   id="notify-allowance-toggle"
+                  aria-label="Allowance nearly used up"
                   checked={prefs.allowanceLow.enabled}
                   disabled={locked}
                   onChange={(event) =>

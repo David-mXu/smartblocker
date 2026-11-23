@@ -29,24 +29,21 @@ permissions:
 #
 # Firefox lanes (e2e-firefox-*.mjs / verify-firefox-dnr.mjs, SB_FIREFOX=...)
 # stay OUT: no Firefox binary is provisioned on these runners.
-# Not in the chain yet (same excluded class, smaller blast radius):
-# e2e-dashboard-test, e2e-profiles, e2e-partner-test, e2e-reward-test,
-# e2e-schedule-prefs. Add deliberately if nightly green-time allows.
+# The newer suites (dashboard, profiles, schedule-prefs, partner, reward) are
+# IN since 2026-11-21 — all five passed a local run first, which is the
+# admission rule for this chain. They use throwaway /tmp profiles, so they
+# re-download the model each night by design.
 #
 # Warm-model cache: keyed ONLY on the pinned EMBED_MODEL_REVISION from
 # src/shared/config.ts. Suites that mkdtemp a throwaway profile under
 # /tmp/opencode (allowance, allowance-daemon, backup) re-download the
 # model each run by design — their profile paths are not cacheable.
 
-env:
-  # Keep in sync with src/shared/config.ts EMBED_MODEL_REVISION.
-  EMBED_MODEL_REVISION: ea104dacec62c0de699686887e3f920caeb4f3e3
-
 jobs:
   e2e:
     name: Unit battery + Playwright e2e chain
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 300
     outputs:
       failed: ${{ steps.chain.outputs.failed }}
       results: ${{ steps.chain.outputs.results }}
@@ -56,6 +53,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24 # >= 22.6 required for --experimental type stripping
+          cache: npm
 
       # Needed early: e2e-allowance-daemon-test (3rd in the chain) builds
       # companion binaries via cargo itself, same as the last suite.
@@ -67,21 +65,38 @@ jobs:
       - name: Install node dependencies
         run: npm ci
 
+      # Cache keys must come from the SOURCE pin, never a hand-kept copy: a
+      # model bump then invalidates every warm profile automatically.
+      - name: Read pinned model revision
+        id: model
+        run: |
+          rev=$(sed -n "s/.*EMBED_MODEL_REVISION = '\([0-9a-f]\{40\}\)'.*/\1/p" src/shared/config.ts | head -1)
+          if [ -z "$rev" ]; then
+            echo "could not read EMBED_MODEL_REVISION from src/shared/config.ts" >&2
+            exit 1
+          fi
+          echo "revision=$rev" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('package-lock.json') }}
+          restore-keys: playwright-
+
       - name: Restore warm model profiles
         uses: actions/cache@v4
         with:
-          # Per-suite persistent profiles; CacheStorage/ holds the ~35MB
-          # model (see CLAUDE.md model-facts note on cold rebuilds).
-          # .dev-profile-protection is recreated per run — not cached.
+          # Only classifier suites are cached: their CacheStorage holds the
+          # ~35MB model (see CLAUDE.md model-facts). Non-classifier profiles
+          # (schedule-ux/security/notifications/usage) never hold a model and
+          # are not worth serializing. .dev-profile-protection is recreated
+          # per run.
           path: |
             .e2e-profile
             .e2e-profile-p1
             .e2e-profile-p2
-            .e2e-profile-schedule-ux
-            .e2e-profile-security
-            .e2e-notifications-profile
-            .e2e-usage-profile
-          key: embedded-model-${{ env.EMBED_MODEL_REVISION }}-v1
+          key: embedded-model-${{ steps.model.outputs.revision }}-v1
           # Bump the -v1 suffix to force one cold re-download if a cached
           # profile is ever suspected of masking a regression.
 
@@ -94,26 +109,53 @@ jobs:
       - name: Build extension (chrome / edge target)
         run: npm run build:chrome
 
+      # HARD GATE before anything else can fail: if this step fails the job
+      # fails, and actions/cache's post-if:success() skips the save — so a run
+      # that could not download/load the model can never poison the warm-cache
+      # key with a model-less profile.
+      - name: Warm model cache (hard gate)
+        run: node scripts/warm-model-cache.mjs
+
       - name: Unit battery (pure Node)
         run: |
           set +e
           mkdir -p logs exitcodes
           status=0
-          for t in lock-math lock-types breaks surrender grace-math resume \
-                    notifications schedule-overlaps usage-stats backup rules \
-                    wildcards rta preferences app-targets; do
-            echo "::group::$t-test"
-            node "scripts/$t-test.mjs" > "logs/$t-test.log" 2>&1
+          # Every pure harness, discovered from disk. The old hand-kept list
+          # silently excluded 22 suites (partner pin, DNR rules, resume
+          # enforcer, centroid cache, allowance, companion bridge…); a new
+          # *-test.mjs now gates automatically.
+          for t in scripts/*-test.mjs; do
+            case "$(basename "$t")" in
+              e2e-*|smoke-test.mjs) continue;; # browser suites run in the chain; smoke-test is legacy NLI report-only
+            esac
+            name="$(basename "$t" .mjs)"
+            echo "::group::$name"
+            node "$t" > "logs/$name.log" 2>&1
             code=$?
-            echo "$code" > "exitcodes/$t-test.exit"
+            echo "$code" > "exitcodes/$name.exit"
             if [ "$code" -ne 0 ]; then
               status=1
-              echo "$t-test FAILED (exit $code) — see logs/$t-test.log"
+              echo "$name FAILED (exit $code) — see logs/$name.log"
             else
-              echo "$t-test passed"
+              echo "$name passed"
             fi
             echo "::endgroup::"
           done
+          echo "::group::verify-dataset"
+          node scripts/verify-dataset.mjs > logs/verify-dataset.log 2>&1
+          vcode=$?
+          echo "$vcode" > exitcodes/verify-dataset.exit
+          [ "$vcode" -ne 0 ] && { status=1; echo "verify-dataset FAILED — see logs/verify-dataset.log"; }
+          echo "::endgroup::"
+          # THE regression gate: 15,874 shipped-config cases diffed against the
+          # committed baseline. It was previously never run by any workflow.
+          echo "::group::eval"
+          node scripts/eval.mjs > logs/eval.log 2>&1
+          ecode=$?
+          echo "$ecode" > exitcodes/eval.exit
+          [ "$ecode" -ne 0 ] && { status=1; echo "eval FAILED — see logs/eval.log"; }
+          echo "::endgroup::"
           exit $status
 
       - name: Playwright e2e chain
@@ -131,7 +173,9 @@ jobs:
           run_suite () {
             name="$1"; shift
             echo "::group::$name"
-            "$@" > "logs/$name.log" 2>&1
+            # Per-suite cap: one hung Playwright wait must not consume the
+            # whole job budget and starve every suite after it.
+            timeout 2400 "$@" > "logs/$name.log" 2>&1
             code=$?
             echo "$code" > "exitcodes/$name.exit"
             if [ "$code" -ne 0 ]; then
@@ -158,6 +202,11 @@ jobs:
           run_suite e2e-usage-ui                node scripts/e2e-usage-ui.mjs
           run_suite e2e-security-blockscreen   node scripts/e2e-security-blockscreen.mjs
           run_suite e2e-backup                  node scripts/e2e-backup.mjs
+          run_suite e2e-dashboard-test         node scripts/e2e-dashboard-test.mjs
+          run_suite e2e-profiles               node scripts/e2e-profiles.mjs
+          run_suite e2e-schedule-prefs         node scripts/e2e-schedule-prefs.mjs
+          run_suite e2e-partner-test           node scripts/e2e-partner-test.mjs
+          run_suite e2e-reward-test            node scripts/e2e-reward-test.mjs
           # Last on purpose: a cargo env problem must never mask an
           # extension failure above.
           run_suite e2e-companion-test         node scripts/e2e-companion-test.mjs
@@ -166,6 +215,24 @@ jobs:
           if [ "$failed" -ne 0 ]; then
             echo "$failed suite(s) failed — inspect the nightly-e2e-logs artifact."
           fi
+
+      # Defense in depth for the p1/p2 profiles (the warm step above only
+      # proves .e2e-profile): if a suite failed before its profile ever cached
+      # the model, drop that profile so the post-job cache save cannot store a
+      # model-less one under an "embedded-model-<rev>" key.
+      - name: Drop cold profiles before the cache save
+        if: always()
+        run: |
+          for p in .e2e-profile .e2e-profile-p1 .e2e-profile-p2; do
+            [ -d "$p" ] || continue
+            size=$(du -sm "$p/Default/Service Worker/CacheStorage" 2>/dev/null | cut -f1 || true)
+            if [ "${size:-0}" -lt 5 ]; then
+              echo "dropping cold profile: $p (CacheStorage ${size:-0}MB)"
+              rm -rf "$p"
+            else
+              echo "keeping warm profile: $p (CacheStorage ${size}MB)"
+            fi
+          done
 
       - name: Upload suite logs and exit codes
         if: always()

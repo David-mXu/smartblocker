@@ -275,7 +275,12 @@ export function derivePageView(data: PopupData): PageView {
       where: host,
       tone: 'blocked',
       headline: 'Blocked',
-      detail: `Matches your rule “${rule}”.`,
+      // blocker.ts records a channel hit as `channel @handle`; design-notes §5
+      // specifies "Matches your channel rule @…" rather than quoting the raw
+      // internal label like a URL rule.
+      detail: rule.startsWith('channel @')
+        ? `Matches your channel rule ${rule.slice('channel '.length)}.`
+        : `Matches your rule “${rule}”.`,
       canAllowSite: true,
     };
   }

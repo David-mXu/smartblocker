@@ -6,10 +6,15 @@ import type { FocusCycleResponse } from '../../shared/messages';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { SettingRow, SettingsGroup, SettingsSection } from '../../components/ui/settings';
+import { LockedNote } from './Page';
 
-interface Props { category: string }
+interface Props {
+  category: string;
+  /** A lock freezes configuration; the section must not look editable. */
+  locked?: boolean;
+}
 
-export function FocusCycleSection({ category }: Props) {
+export function FocusCycleSection({ category, locked = false }: Props) {
   const [mode, setMode] = useState<'focus' | 'pomodoro'>('focus');
   const [workMinutes, setWorkMinutes] = useState(25);
   const [breakMinutes, setBreakMinutes] = useState(5);
@@ -56,9 +61,13 @@ export function FocusCycleSection({ category }: Props) {
 
   const number = (value: number, update: (next: number) => void) => ({
     type: 'number' as const, min: 1, max: 1440, step: 1, value,
-    disabled: busy || Boolean(program),
+    disabled: busy || Boolean(program) || locked,
     className: 'w-24',
-    onChange: (event: React.ChangeEvent<HTMLInputElement>) => update(event.target.valueAsNumber),
+    onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
+      // NaN starts an impossible cycle; only commit finite values.
+      const next = event.target.valueAsNumber;
+      if (Number.isFinite(next)) update(next);
+    },
   });
 
   return (
@@ -66,12 +75,18 @@ export function FocusCycleSection({ category }: Props) {
       title="Focus & Pomodoro"
       description="An immediate focus session earns reward only when its timer completes — it does not create a Frozen lock. Pomodoro work earns the same way. Its programmed breaks are fixed and do not spend ordinary allowance or use waiting escalation."
     >
+      {locked && (
+        <LockedNote
+          reason="Configuration is frozen while a lock is active. A running cycle keeps its own clock."
+          className="px-1"
+        />
+      )}
       <SettingsGroup>
         <SettingRow label="Program" description={program
           ? `${program.mode === 'focus' ? 'Focus' : 'Pomodoro'} · cycle ${program.cycle}/${program.totalCycles} · ${program.stage} · ends ${new Date(program.stageEndsAtMs).toLocaleTimeString()}`
           : 'No active focus or Pomodoro cycle.'}>
           <select
-            id="focus-mode" value={mode} disabled={busy || Boolean(program)}
+            id="focus-mode" aria-label="Focus program" value={mode} disabled={busy || Boolean(program) || locked}
             onChange={(event) => setMode(event.target.value as 'focus' | 'pomodoro')}
             className="h-9 rounded-lg border border-input bg-background px-2 text-sm text-foreground"
           >
@@ -94,7 +109,7 @@ export function FocusCycleSection({ category }: Props) {
         </div>
         <div className="flex flex-wrap gap-2 px-4 pb-4">
           <Button
-            id="focus-cycle-start" disabled={!loaded || busy || Boolean(program)}
+            id="focus-cycle-start" disabled={!loaded || busy || Boolean(program) || locked}
             onClick={() => void run('start')}
           >
             <Play className="size-3.5" />{mode === 'focus' ? 'Start focus now' : 'Start Pomodoro'}

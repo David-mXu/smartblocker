@@ -32,7 +32,12 @@ import {
 } from '../../src/shared/prototypes.ts';
 import { cleanTitle, isWhitelisted, matchedBlocklistEntry } from '../../src/shared/titles.ts';
 import { isAdultHost, matchChannel, matchTitleRule } from '../../src/shared/rules.ts';
-import { applyUrlSignals, hostnameOf, urlFallbackTitle } from '../../src/shared/url-signals.ts';
+import {
+  applyUrlSignals,
+  hostnameOf,
+  isYouTubeBrowsingSurface,
+  urlFallbackTitle,
+} from '../../src/shared/url-signals.ts';
 
 export { BLOCKED_LABELS, BLOCK_THRESHOLD, EMBED_MODEL_ID, LABELS, SOFTMAX_TEMPERATURE };
 
@@ -104,6 +109,12 @@ export function classifierInputFor(c) {
 
 export function expectedDecision(c) {
   if (c.expected === 'productive') return 'allow';
+  // YouTube browsing/discovery surfaces are allowed at page level by policy
+  // (their video cards are classified individually), so a must-block label on
+  // one of these URLs is a TOP-1 expectation, not a page-decision one. Scoring
+  // them as block both inflated the gate (the runtime never blocked) and would
+  // now read as a regression after the ladder was corrected — 2026-11-21.
+  if (c.url && isYouTubeBrowsingSurface(c.url)) return 'allow';
   if (!Array.isArray(c.expected)) return null;
   if (c.expected.every((l) => BLOCKED_LABELS.has(l))) return 'block';
   if (!c.expected.some((l) => BLOCKED_LABELS.has(l))) return 'allow';
@@ -146,6 +157,16 @@ export function decideBlock(c, verdict, settings = EVAL_SETTINGS, threshold = se
     if (settings.blockAdult && isAdultHost(hostnameOf(c.url))) {
       return { decision: 'block', reason: 'adult' };
     }
+  }
+  // YouTube browsing/discovery surfaces (homepage, channel pages, feeds,
+  // /results) are allowed at page level by the shipped runtime — the
+  // sanitizer classifies their video cards individually. A deterministic
+  // blocklist/title/adult-host hit already returned above, exactly like the
+  // runtime's `!blocklistHit && !titleRuleHit && !adultHost` guard. Omitting
+  // this rule made the gate score 37 committed must-block cases with a block
+  // the product never performs (2026-11-21 audit).
+  if (c.url && isYouTubeBrowsingSurface(c.url)) {
+    return { decision: 'allow', reason: 'youtube-browsing' };
   }
   // Opt-in adult blocking — signal #1: the page self-declared an adult
   // rating via <meta name="rating">, surfaced by the real extractMeta into
@@ -298,7 +319,15 @@ export function scoreRecords(records, settings = EVAL_SETTINGS, threshold = sett
 
   const labeled = records.filter((r) => Array.isArray(r.expected));
   const productive = records.filter((r) => r.expected === 'productive');
-  const mustBlock = labeled.filter((r) => r.expected.every((l) => BLOCKED_LABELS.has(l)));
+  // Must-block recall scores the pages the POLICY says must be blocked. A
+  // must-block label on a policy-allowed surface (YouTube browsing pages) is a
+  // top-1 expectation only; excluding it here keeps the recall number a
+  // measure of the model+ladder, not of authored intent that the product
+  // deliberately overrides.
+  const mustBlock = labeled.filter(
+    (r) =>
+      r.expected.every((l) => BLOCKED_LABELS.has(l)) && expectedDecision(r.case) === 'block',
+  );
   const neverBlock = labeled.filter((r) => !r.expected.some((l) => BLOCKED_LABELS.has(l)));
 
   const top1 = labeled.filter((r) => r.expected.includes(r.label)).length;

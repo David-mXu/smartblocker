@@ -147,18 +147,26 @@ export interface Settings {
   /** Number of random symbols required for a random-text break (10–1000). */
   breakTextLength: number;
   /**
-   * Opt-in typed confirmation for non-locked block-screen overrides. OFF by
-   * default: existing installs keep one-click per-page corrections. 'phrase'
-   * adds a 15-second pause and exact neutral-phrase entry in the injected
-   * block screen only; it is UX friction, not an authentication boundary.
+   * Opt-in friction for non-locked block-screen overrides. OFF by default:
+   * existing installs keep one-click per-page corrections. 'pause' is a
+   * 10-second cool-down with no typing; 'phrase' adds a 15-second pause plus
+   * retyping a neutral sentence. It is UX friction, not an authentication
+   * boundary, and never applies while a lock is active.
    */
-  surrenderMode: 'off' | 'phrase';
+  surrenderMode: 'off' | 'pause' | 'phrase';
   /**
    * Proactively mask distracting modules (videos, carousels, games,
    * news, shopping) and off-topic result cards on search engines, plus
    * individually classified videos on YouTube Search. Default true.
    */
   maskSearchElements: boolean;
+  /**
+   * Opt-in in-feed masking for YouTube home/feeds/channel pages. The PAGE
+   * stays allowed (browsing surface) and the user can still open a video; each
+   * feed card is classified and blocked cards are masked in place. OFF by
+   * default — it changes the browsing experience, so it is opt-in.
+   */
+  maskFeeds: boolean;
   /**
    * Opt-in, quiet browser reminders (versioned and sanitized on every read and
    * write — see shared/notifications.ts). EVERY group is OFF by default so an
@@ -210,12 +218,19 @@ export { migrateProfileLabels as migrateLabels };
 export { migrateProfileWhitelist as migrateWhitelist };
 
 let cache: Settings | null = null;
+/** Bumped on every invalidation. A read that started before a write must not
+ *  install its pre-write result as the cache afterwards ("cache resurrection":
+ *  the SW then serves stale policy until the next write). */
+let cacheEpoch = 0;
 
 // Invalidate the in-memory cache when any context (options page, popup) writes
 // new settings OR activates/edits a named profile, so a long-lived service
 // worker / offscreen doc sees the new effective policy.
 api.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && (changes[STORAGE_KEY] || changes[PROFILES_STORAGE_KEY])) cache = null;
+  if (area === 'local' && (changes[STORAGE_KEY] || changes[PROFILES_STORAGE_KEY])) {
+    cache = null;
+    cacheEpoch++;
+  }
 });
 
 /** Display preferences are presentation only. Sanitizing on READ (and again on
@@ -255,14 +270,18 @@ export async function getDefaultSettings(): Promise<Settings> {
  *  profile's scoped policy replacing Default only for those fields. */
 export async function getSettings(): Promise<Settings> {
   if (cache) return cache;
+  const epoch = cacheEpoch;
   const base = await getDefaultSettings();
   const profiles = await getProfilesState();
   const active =
     profiles.activeProfileId === null
       ? null
       : profiles.profiles.find((profile) => profile.id === profiles.activeProfileId) ?? null;
-  cache = active ? applyProfilePolicy(base, active.policy) : base;
-  return cache;
+  const next = active ? applyProfilePolicy(base, active.policy) : base;
+  // Only cache when nothing invalidated us mid-read; the caller still gets
+  // this read's answer either way.
+  if (epoch === cacheEpoch) cache = next;
+  return next;
 }
 
 function pickPolicyPatch(patch: Partial<Settings>): Partial<ProfilePolicy> {

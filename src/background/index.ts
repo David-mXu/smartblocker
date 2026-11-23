@@ -395,7 +395,9 @@ api.runtime.onMessage.addListener(
     if (msg?.type === 'CLOSE_TAB') {
       // Block screen's "Stay focused" — close the distracting tab outright.
       const tabId = sender.tab?.id;
-      if (tabId !== undefined) void api.tabs.remove(tabId);
+      // The tab may already be gone; never let that become an unhandled
+      // rejection in the service worker.
+      if (tabId !== undefined) void api.tabs.remove(tabId).catch(() => {});
     }
     return false;
   },

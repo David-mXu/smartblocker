@@ -22,8 +22,11 @@ import assert from 'node:assert/strict';
 import {
   buildSpecVectors,
   CENTROID_CACHE_FORMAT,
+  decodeSeedVector,
   hashSeedText,
   planSeedReuse,
+  SEED_VECTOR_ASSET_FORMAT,
+  seedVectorsFromAsset,
 } from '../src/shared/prototype-cache.ts';
 
 let passed = 0;
@@ -235,6 +238,97 @@ test('incremental chain (append → insert → replace) always equals a cold bui
   // and the intermediate append really was incremental (cheap), not a full rebuild
   assert.equal(step2.embedded, 1);
   assert.equal(step3.embedded, withNewSeed.length); // mid-insert forced full re-embed
+});
+
+// --- precomputed asset decoding/reuse ---
+function encodeVec(vec) {
+  const f = new Float32Array(vec);
+  return Buffer.from(f.buffer, f.byteOffset, f.byteLength).toString('base64');
+}
+
+await test('decodeSeedVector round-trips a Float32 vector and checks the width', () => {
+  const vec = [0.25, -0.5, 0.75, 1];
+  assert.deepEqual(decodeSeedVector(encodeVec(vec), 4), vec);
+  assert.throws(() => decodeSeedVector(encodeVec(vec), 3), /dims/);
+});
+
+await test('seedVectorsFromAsset reuses matching entries and gates on the model', () => {
+  const specs = [
+    { name: 'alpha', texts: ['one', 'two'] },
+    { name: 'beta', texts: ['three'] },
+  ];
+  const asset = {
+    format: SEED_VECTOR_ASSET_FORMAT,
+    modelId: 'model-x',
+    modelRevision: 'rev-1',
+    dim: 2,
+    byName: {
+      alpha: {
+        hashes: specs[0].texts.map(hashSeedText),
+        vectors: [encodeVec([1, 0]), encodeVec([0, 1])],
+      },
+      beta: {
+        hashes: specs[1].texts.map(hashSeedText),
+        vectors: [encodeVec([0.5, 0.5])],
+      },
+    },
+  };
+  const ok = seedVectorsFromAsset(specs, asset, { id: 'model-x', revision: 'rev-1' });
+  assert.equal(ok.size, 2);
+  assert.deepEqual(ok.get('alpha').seedVecs, [[1, 0], [0, 1]]);
+  assert.deepEqual(ok.get('alpha').hashes, asset.byName.alpha.hashes);
+
+  // Wrong model/revision/format → no reuse at all (never mix vector spaces).
+  assert.equal(seedVectorsFromAsset(specs, asset, { id: 'model-x', revision: 'rev-2' }).size, 0);
+  assert.equal(seedVectorsFromAsset(specs, asset, { id: 'model-y', revision: 'rev-1' }).size, 0);
+  assert.equal(
+    seedVectorsFromAsset(specs, { ...asset, format: 999 }, { id: 'model-x', revision: 'rev-1' }).size,
+    0,
+  );
+
+  // A malformed entry is skipped; the rest still work.
+  const broken = {
+    ...asset,
+    byName: {
+      ...asset.byName,
+      alpha: { hashes: asset.byName.alpha.hashes, vectors: ['not-base64!!'] },
+    },
+  };
+  const partial = seedVectorsFromAsset(specs, broken, { id: 'model-x', revision: 'rev-1' });
+  assert.equal(partial.size, 1);
+  assert.equal(partial.has('beta'), true);
+});
+
+await test('asset vectors flow through the hash-verified reuse plan', async () => {
+  const texts = ['a', 'b', 'c'];
+  const seeded = {
+    name: 'alpha',
+    texts,
+  };
+  const asset = {
+    format: SEED_VECTOR_ASSET_FORMAT,
+    modelId: 'm',
+    modelRevision: 'r',
+    dim: 2,
+    byName: {
+      alpha: {
+        hashes: texts.map(hashSeedText),
+        vectors: texts.map((_, i) => encodeVec([i, 1])),
+      },
+    },
+  };
+  const prev = seedVectorsFromAsset([seeded], asset, { id: 'm', revision: 'r' }).get('alpha');
+  let embedded = 0;
+  const built = await buildSpecVectors(
+    [...texts, 'd'],
+    prev,
+    async (batch) => {
+      embedded += batch.length;
+      return batch.map(() => [9, 9]);
+    },
+  );
+  assert.equal(embedded, 1, 'only the appended seed is embedded');
+  assert.deepEqual(built.vecs.slice(0, 3), [[0, 1], [1, 1], [2, 1]]);
 });
 
 console.log(

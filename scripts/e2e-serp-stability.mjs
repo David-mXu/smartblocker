@@ -6,7 +6,7 @@
 // Service Worker ScriptCache is cleared so a rebuilt background.js cannot go
 // stale. CacheStorage, including an already-downloaded model, is never removed.
 import { chromium } from 'playwright';
-import { readFileSync, rmSync } from 'node:fs';
+import { readFileSync, readlinkSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 
@@ -43,11 +43,37 @@ const extensionId = [...createHash('sha256').update(Buffer.from(manifest.key, 'b
   .map((nibble) => String.fromCharCode(97 + Number.parseInt(nibble, 16)))
   .join('');
 
+
+// A killed run leaves Chromium's ProcessSingleton symlink behind and the next
+// launch dies instantly. Clear it only when the recorded pid is gone.
+function clearStaleSingleton(dir) {
+  const lock = resolve(dir, 'SingletonLock');
+  try {
+    const target = readlinkSync(lock);
+    const pid = Number(target.slice(target.lastIndexOf('-') + 1));
+    if (!Number.isInteger(pid) || pid <= 0) return;
+    try {
+      process.kill(pid, 0);
+      return;
+    } catch {
+      // dead owner
+    }
+    rmSync(lock, { force: true });
+    rmSync(resolve(dir, 'SingletonCookie'), { force: true });
+    rmSync(resolve(dir, 'SingletonSocket'), { force: true });
+    console.log('… cleared a stale profile SingletonLock');
+  } catch {
+    // no lock
+  }
+}
+
 async function launchWithServiceWorker() {
   for (let attempt = 1; attempt <= 3; attempt++) {
+    clearStaleSingleton(PROFILE);
     const context = await chromium.launchPersistentContext(PROFILE, {
       channel: 'chromium',
       headless: true,
+      timeout: 60_000,
       args: [`--disable-extensions-except=${EXT_PATH}`, `--load-extension=${EXT_PATH}`],
     });
     let sw = context.serviceWorkers().find((worker) => worker.url().startsWith(`chrome-extension://${extensionId}/`));
@@ -75,6 +101,13 @@ async function launchWithServiceWorker() {
     if (sw) return { context, sw };
     console.log(`… extension did not load (attempt ${attempt}), relaunching`);
     await context.close();
+    // A killed Chromium can leave a broken SW registration that blocks every
+    // later launch; drop the registration DB but keep CacheStorage (model).
+    rmSync(resolve(PROFILE, 'Default/Service Worker/Database'), { recursive: true, force: true });
+    rmSync(resolve(PROFILE, 'Default/Service Worker/ScriptCache'), { recursive: true, force: true });
+    // A killed Chromium can leave a broken SW registration; drop the
+    // registration DB too (CacheStorage = the model stays).
+    rmSync(resolve(PROFILE, 'Default/Service Worker/Database'), { recursive: true, force: true });
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 1000));
   }
   throw new Error('service worker did not boot after 3 launches');
@@ -311,10 +344,22 @@ try {
     await sw.evaluate(() => chrome.storage.local.remove('overrides'));
     await openingGoogleDocument(tab);
     await transientThenFinal(tab, ALLOWED_QUERY);
-    await tab.waitForTimeout(8000);
+    // Poll for the settled verdict instead of a fixed 8s: under machine load a
+    // warm classification can still take well beyond that, and a fixed sleep
+    // made this assertion fail for timing, not behavior.
+    let reactSample;
+    {
+      const deadline = Date.now() + 60_000;
+      while (Date.now() < deadline) {
+        const { latencySamples = [] } = await sw.evaluate(() =>
+          chrome.storage.local.get('latencySamples'),
+        );
+        reactSample = [...latencySamples].reverse().find((sample) => sample.title === ALLOWED_QUERY);
+        if (reactSample) break;
+        await tab.waitForTimeout(500);
+      }
+    }
     const modelTransition = await mounts(tab);
-    const { latencySamples = [] } = await sw.evaluate(() => chrome.storage.local.get('latencySamples'));
-    const reactSample = [...latencySamples].reverse().find((sample) => sample.title === ALLOWED_QUERY);
     check(
       modelTransition.overlays.length === 0 &&
         (await tab.locator('#smartblocker-overlay').count()) === 0 &&

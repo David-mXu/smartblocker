@@ -27,22 +27,31 @@ export class ProfileOperationError extends Error {
 }
 
 let cache: ProfilesState | null = null;
+/** See settings.ts cacheEpoch: a read in flight across a write must not
+ *  re-install the pre-write state. */
+let cacheEpoch = 0;
 
 api.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes[PROFILES_STORAGE_KEY]) cache = null;
+  if (area === 'local' && changes[PROFILES_STORAGE_KEY]) {
+    cache = null;
+    cacheEpoch++;
+  }
 });
 
 export async function getProfilesState(): Promise<ProfilesState> {
   if (cache) return cache;
+  const epoch = cacheEpoch;
   const stored = await api.storage.local.get(PROFILES_STORAGE_KEY);
-  cache = sanitizeProfilesState(stored[PROFILES_STORAGE_KEY], Date.now());
-  return cache;
+  const next = sanitizeProfilesState(stored[PROFILES_STORAGE_KEY], Date.now());
+  if (epoch === cacheEpoch) cache = next;
+  return next;
 }
 
 /** Settings.ts updates settings + profiles in one storage transaction; prime
  *  this cache so the same context never reads the pre-write value. */
 export function primeProfilesState(next: ProfilesState): void {
   cache = next;
+  cacheEpoch++;
 }
 
 async function writeProfilesState(next: ProfilesState): Promise<ProfilesState> {
@@ -58,6 +67,7 @@ async function writeProfilesState(next: ProfilesState): Promise<ProfilesState> {
     throw e;
   }
   cache = next;
+  cacheEpoch++;
   return next;
 }
 

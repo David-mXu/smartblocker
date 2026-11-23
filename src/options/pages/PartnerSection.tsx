@@ -75,17 +75,21 @@ export function PartnerSection({ state }: { state: OptionsState }) {
       {currentArm && <LockedNote reason="The current partner arm is a settings lock. Redeeming it never lifts any other gate." className="px-1" />}
       <SettingsGroup>
         <SettingRow label="Partner public key" description="Paste the public half of a key generated on your partner's device. Private keys do not belong here.">
-          <Button disabled={busy || (companion !== null && !HEX_PUBLIC_KEY.test(publicKey.trim().toLowerCase()))} onClick={() => void run('add-key')}>
-            <UserPlus className="size-3.5" />Register public key
-          </Button>
+          <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center">
+            <Input
+              id="partner-public-key" aria-label="Partner public key" value={publicKey} disabled={busy} spellCheck={false}
+              onChange={(event) => setPublicKey(event.target.value)}
+              placeholder="64 hexadecimal characters" className="font-mono text-xs"
+            />
+            <Button
+              disabled={!companion || busy || !HEX_PUBLIC_KEY.test(publicKey.trim().toLowerCase())}
+              title={!companion ? 'Pair the desktop companion first.' : undefined}
+              onClick={() => void run('add-key')}
+            >
+              <UserPlus className="size-3.5" />Register public key
+            </Button>
+          </div>
         </SettingRow>
-        <div className="px-4 pb-4">
-          <Input
-            id="partner-public-key" value={publicKey} disabled={busy} spellCheck={false}
-            onChange={(event) => setPublicKey(event.target.value)}
-            placeholder="64 hexadecimal characters" className="font-mono text-xs"
-          />
-        </div>
         <div className="px-4 pb-4 text-xs text-muted-foreground">
           {(partner?.publicKeys.length ?? 0) === 0
             ? 'No public keys yet. You cannot arm until one reaches activation.'
@@ -124,17 +128,21 @@ export function PartnerSection({ state }: { state: OptionsState }) {
           </div>
         )}
         <SettingRow label="Redeem signed code" description="Only the signed arm releases. Timer, Frozen, schedules, passwords, delay/random-text, and the normal blocking toggle stay exactly where they were.">
-          <Button disabled={busy || code.trim().length === 0} onClick={() => void run('redeem')}>
-            <LockSimpleOpen className="size-3.5" />Redeem
-          </Button>
+          <div className="flex w-full flex-col gap-2">
+            <Textarea
+              id="partner-redeem-code" aria-label="Partner release code" value={code} disabled={busy} rows={4} spellCheck={false}
+              onChange={(event) => setCode(event.target.value)}
+              placeholder="SBP1.…" className="font-mono text-xs"
+            />
+            <Button
+              disabled={!companion || busy || code.trim().length === 0}
+              title={!companion ? 'Pair the desktop companion first.' : undefined}
+              onClick={() => void run('redeem')}
+            >
+              <LockSimpleOpen className="size-3.5" />Redeem
+            </Button>
+          </div>
         </SettingRow>
-        <div className="px-4 pb-4">
-          <Textarea
-            id="partner-redeem-code" value={code} disabled={busy} rows={4} spellCheck={false}
-            onChange={(event) => setCode(event.target.value)}
-            placeholder="SBP1.…" className="font-mono text-xs"
-          />
-        </div>
       </SettingsGroup>
       <p id="partner-msg" role="status" className="m-0 px-1 text-xs text-muted-foreground">{message}</p>
       <p className="m-0 px-1 text-xs text-faint">

@@ -130,7 +130,15 @@ export function forceRedirectAvailable(): boolean {
 function canonicalizeUrl(url: string): string | null {
   let canonical: string;
   try {
-    canonical = new URL(url).href;
+    const u = new URL(url);
+    // A fragment never travels in the HTTP request line, so declarativeNetRequest
+    // matches urlFilter against the fragment-free URL. Keeping `#…` in the filter
+    // made the rule DEAD for every fragment-bearing URL (YouTube `#t=`, anchor
+    // links): force mode then failed open — the installed rule suppressed the
+    // injected overlay via 'already-enforced' while the page stayed visible and
+    // each re-evaluation reloaded it, looping without ever blocking. Strip it.
+    u.hash = '';
+    canonical = u.href;
   } catch {
     return null;
   }

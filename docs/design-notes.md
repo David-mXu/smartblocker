@@ -208,10 +208,12 @@ Tint recipe for callouts: `bg-<hue>/10 border-<hue>/30 text-<hue>-soft`.
   authority-labelled allowance/opening grants, and the classifier-only relief
   statement; 24-hour focus-hours and category-window lanes with current-time
   marker and textual equivalents) · Blocking `#blocking` (master switch with
-  opt-in "Typed confirmation for overrides" and "Turn blocking back on" right
+  opt-in "Friction before an override" (one click / 10-second pause /
+  type a sentence) and "Turn blocking back on" right
   under it — Never / when the
   browser restarts / when focus hours begin / at a set time — "Hide distractions
-  in search results",
+  in search results" (and the separate opt-in "Hide distracting cards on
+  YouTube home and feeds"),
   strictness presets
   Relaxed 0.65 / Balanced 0.5 / Strict 0.4 — other values read "Custom",
   categories + "Also block adults-only sites instantly" (RTA label / .xxx)
@@ -335,11 +337,14 @@ primary ivory, *This is actually productive — let me through* outline,
 Dismiss text → meta "Checked on-device in 12ms" (faint).
 Locked: amber seal note "Smart Blocker is locked — bypass is disabled" +
 Stay focused only. Fail-closed: amber warning variant, no score, no meter.
-With opt-in `surrenderMode: 'phrase'` (default `'off'`), the unlocked override
-opens an inline typed-confirmation wall: Stay focused remains available, a
-15-second countdown disables the textarea and release button, then the fixed
-neutral sentence must match exactly apart from surrounding whitespace. A wrong
-attempt clears the text and restarts the full delay; Cancel sends no override.
+With opt-in friction (`surrenderMode`, default `'off'`), the unlocked override
+opens an inline wall instead of releasing immediately. `'pause'` is a neutral
+10-second cool-down: a live countdown, then an enabled “Open anyway” button —
+no typing, no guilt copy. `'phrase'` adds the typed wall: Stay focused remains
+available, a 15-second countdown disables the textarea and release button, then
+the fixed neutral sentence must match exactly apart from surrounding
+whitespace. A wrong attempt clears the text and restarts the full delay;
+Cancel sends no override in either tier.
 The wall never renders while locked and is deliberately UX friction, not an
 authentication boundary. Its phrase/time math is mirrored by the pure,
 Node-tested `src/shared/surrender.ts`; the injected function cannot import it.
@@ -402,6 +407,7 @@ longer exists.
 - `#dashboard`: `#dashboard-now`, `#dashboard-blocking`,
   `#dashboard-blocking-detail`, `#dashboard-lock`, `#dashboard-lock-summary`,
   `#dashboard-lock-reasons` (`li` per active reason), `#dashboard-companion`,
+  `#protection-health` (with `-title`, `-detail`, `-fix` children),
   `#dashboard-next`, `#dashboard-next-global`, `#dashboard-next-category`,
   `#dashboard-next-resume`, `#dashboard-next-focus`, `#dashboard-relief`,
   `#dashboard-relief-break`, `#dashboard-relief-allowance`,
@@ -410,7 +416,8 @@ longer exists.
   `#dashboard-timeline-category` (each with a `-marker` child),
   `#dashboard-timeline-text` (`li` per occurrence). Read-only; no controls.
 - `#blocking`: `#enabled-toggle`, `#surrender-mode-toggle`, `#resume-mode`,
-  `#resume-at`, `#mask-search-elements-toggle`, `#block-adult-toggle`, `#label-list` (`li`,
+  `#resume-at`, `#mask-search-elements-toggle`, `#mask-feeds-toggle`,
+  `#block-adult-toggle`, `#label-list` (`li`,
   `.delete-label-btn`),
   `#custom-category-input`, `#add-category-btn`, `#scan-btn`,
   `#block-top-btn`, `#scan-status`, `#scan-out`.
@@ -458,8 +465,10 @@ longer exists.
   "Pomodoro break (5 min)", "End allowance", "Close opening". Focus-cycle
   section: `#focus-mode`, `#focus-work-minutes`, `#focus-break-minutes`,
   `#focus-cycle-count`, `#focus-cycle-start`, `#focus-cycle-cancel`,
-  `#focus-cycle-msg`. Configuration inputs disable while locked; grant
-  usage never shortens a lock.
+  `#focus-cycle-msg`. Configuration inputs disable while locked; the
+  `#allowance-category` select stays usable as a VIEW control so the user can
+  inspect each category's live relief state (its configuration inputs still
+  disable). Grant usage never shortens a lock.
 - `#schedule`: `#schedule-list` (`.schedule-row`, `.day-label`,
   `.schedule-remove`, `.schedule-duplicate` with
   `#schedule-duplicate-<rule id>`), `#schedule-add`, `#schedule-save`,
@@ -516,6 +525,9 @@ longer exists.
 - Unlocked buttons contain "actually productive", "Stay focused", "Dismiss";
   locked: only "Stay focused" + note "Smart Blocker is locked — bypass is disabled".
 - Normal variant shows "% confidence"; fail-closed shows **no** "% confidence".
+- Optional cool-down wall: `#smartblocker-pause-wall`,
+  `#smartblocker-pause-countdown`, `#smartblocker-pause-open` (disabled until
+  the 10 seconds elapse), `#smartblocker-pause-cancel`.
 - Optional typed-confirmation wall: `#smartblocker-surrender-wall`,
   `#smartblocker-surrender-phrase`, `#smartblocker-surrender-countdown`,
   `#smartblocker-surrender-input` (textarea), `#smartblocker-surrender-status`,

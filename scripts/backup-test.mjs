@@ -305,6 +305,76 @@ await test('sanitize repairs bounds, duplicates and invalid schedule rules', () 
   assert.ok(warnings.length > 0);
 });
 
+await test('schedule-label truncation never splits an emoji surrogate pair', () => {
+  // 79 ASCII chars + an emoji straddles the 80 UTF-16-unit cap. A plain
+  // slice(0,80) emitted a lone high surrogate; serde_json then rejected the
+  // next lockStateSync frame and the companion dropped the connection.
+  const raw = {
+    schema: BACKUP_SCHEMA_ID,
+    version: 1,
+    exportedAt: EXPORTED_AT,
+    default: { settings: defaultManagedSettings() },
+    profiles: [],
+    schedules: {
+      rules: [
+        {
+          id: 's_surrogate',
+          label: 'x'.repeat(79) + '😀',
+          days: [1],
+          startMinutes: 540,
+          endMinutes: 600,
+        },
+        {
+          id: 's_fits',
+          label: 'y'.repeat(78) + '😀',
+          days: [2],
+          startMinutes: 540,
+          endMinutes: 600,
+        },
+      ],
+    },
+  };
+  const { document } = sanitizeBackup(raw, NOW);
+  for (const rule of document.schedules.rules) {
+    assert.ok(rule.label.length <= 80, `label over cap: ${rule.label.length}`);
+    assert.ok(
+      !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(rule.label),
+      'lone high surrogate emitted',
+    );
+    assert.ok(
+      !/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(rule.label),
+      'lone low surrogate emitted',
+    );
+  }
+  const fits = document.schedules.rules.find((r) => r.id === 's_fits');
+  assert.ok(fits.label.endsWith('😀'), 'an emoji that fits must survive intact');
+});
+
+await test('the pause override-friction tier survives sanitize and a strict round-trip', () => {
+  const raw = {
+    schema: BACKUP_SCHEMA_ID,
+    version: 1,
+    exportedAt: EXPORTED_AT,
+    default: {
+      settings: { ...defaultManagedSettings(), surrenderMode: 'pause', maskFeeds: true },
+    },
+    profiles: [],
+  };
+  const { document } = sanitizeBackup(raw, NOW);
+  assert.equal(document.default.settings.surrenderMode, 'pause');
+  assert.equal(document.default.settings.maskFeeds, true);
+  const again = parseBackup(serializeBackup(document), NOW);
+  assert.equal(again.ok, true);
+  assert.equal(again.document.default.settings.surrenderMode, 'pause');
+  assert.equal(again.document.default.settings.maskFeeds, true);
+  // Unknown values still sanitize to the safe one-click default at read time.
+  const bogus = sanitizeBackup(
+    { ...raw, default: { settings: { ...defaultManagedSettings(), surrenderMode: 'maybe' } } },
+    NOW,
+  );
+  assert.equal(bogus.document.default.settings.surrenderMode, 'off');
+});
+
 await test('no secrets or runtime state leak into the file', () => {
   const source = makeState({
     settings: {
@@ -537,7 +607,7 @@ await test('merge matches by normalized name when the stable id differs', () => 
 });
 
 await test('merge never duplicates names/ids and reports the cap', () => {
-  const many = Array.from({ length: 13 }, (_, index) => ({
+  const many = Array.from({ length: 12 }, (_, index) => ({
     id: `p_${index}`,
     name: index === 0 ? 'Work' : `Bulk ${index}`,
     policy: WORK_POLICY,
@@ -545,7 +615,11 @@ await test('merge never duplicates names/ids and reports the cap', () => {
   const bulk = makeDoc(
     makeState({
       profilesState: {
-        activeProfileId: null,
+        // The file's active profile is one the combined-profile cap skips — a
+        // supposedly additive merge must NOT silently flip the live install
+        // to Default (local already has 3 profiles + 9 slots left; p_11 is
+        // beyond the cut).
+        activeProfileId: 'p_11',
         profiles: many,
         defaultAppBlocklist: [],
         defaultAppBlocklistUpdatedAt: 0,
@@ -554,6 +628,11 @@ await test('merge never duplicates names/ids and reports the cap', () => {
   );
   const applied = mergeBackupState(local, bulk, options);
   assert.ok(applied.profiles.profiles.length <= 12);
+  assert.equal(
+    applied.profiles.activeProfileId,
+    'p_work',
+    'a skipped active profile must not deactivate the current one',
+  );
   assert.equal(
     new Set(applied.profiles.profiles.map((profile) => profile.id)).size,
     applied.profiles.profiles.length,

@@ -40,7 +40,7 @@ import {
   sanitizeBlockMessage,
 } from './display-prefs.ts';
 import {
-  MAX_SCHEDULE_LABEL_LENGTH,
+  sanitizeScheduleLabel,
   validateCategoryScheduleRule,
   validateScheduleRule,
   type CategoryScheduleRule,
@@ -378,6 +378,7 @@ function canonicalManagedSettings(settings: BackupManagedSettings): BackupManage
     useTabContext: settings.useTabContext,
     blockAdult: settings.blockAdult,
     maskSearchElements: settings.maskSearchElements,
+    maskFeeds: settings.maskFeeds,
     surrenderMode: settings.surrenderMode,
     blockMessage: settings.blockMessage,
     breakMode: settings.breakMode,
@@ -493,11 +494,11 @@ function sanitizeRule(raw: unknown, warnings: string[], label: string): Schedule
     if (typeof raw.label === 'string') {
       // Display-only; flatten control characters and cap it rather than
       // dropping an otherwise valid enforcement window.
-      const cleaned = raw.label
-        .replace(/[\u0000-\u001f\u007f]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, MAX_SCHEDULE_LABEL_LENGTH);
+      // sanitizeScheduleLabel flattens controls, collapses whitespace and
+      // truncates on CODE POINT boundaries — a plain slice(0,80) can split an
+      // emoji surrogate pair, and serde_json then rejects the whole
+      // lockStateSync frame (companion connection dropped, 2026-11-21).
+      const cleaned = sanitizeScheduleLabel(raw.label);
       if (cleaned) rule.label = cleaned;
     } else {
       warnings.push(`Ignored a malformed name on ${label} rule “${id}”.`);
@@ -932,6 +933,7 @@ export function mergePolicies(
     useTabContext: incoming.useTabContext,
     blockAdult: incoming.blockAdult,
     maskSearchElements: incoming.maskSearchElements,
+    maskFeeds: incoming.maskFeeds,
     surrenderMode: incoming.surrenderMode,
     blockMessage: sanitizeBlockMessage(incoming.blockMessage),
     breakMode: normalizeBreakMode(incoming.breakMode),
@@ -1003,8 +1005,11 @@ function appListStamp(
   localStamp: number,
   now: number,
 ): number {
+  // A persisted FUTURE stamp (corrupted file / imported backup) must not
+  // freeze cross-device app-list sync: every honest edit at `now` would lose.
+  const boundedLocal = Math.min(Math.max(0, localStamp), now);
   return local.length === next.length && local.every((app, index) => app === next[index])
-    ? localStamp
+    ? boundedLocal
     : now;
 }
 
@@ -1106,7 +1111,9 @@ function mergeProfiles(
         warnings,
       ),
       appBlocklist: normalizeAppBlocklist(imported.appBlocklist),
-      appBlocklistUpdatedAt: safeTimestamp(imported.appBlocklistUpdatedAt, 0),
+      // Clamp to import time: an untrusted backup cannot pin a far-future
+      // stamp that outranks every later real edit.
+      appBlocklistUpdatedAt: Math.min(safeTimestamp(imported.appBlocklistUpdatedAt, 0), now),
     };
     profiles.push(nextProfile);
     incomingToMerged.set(imported.id, nextProfile.id);
@@ -1120,10 +1127,14 @@ function mergeProfiles(
   );
   const next: ProfilesState = {
     version: current.version,
+    // If the file's ACTIVE profile could not be merged (name/id collision or
+    // the profile cap skipped it), keep the current active profile. Mapping it
+    // to null silently switched a supposedly additive merge to Default and
+    // changed the effective policy (2026-11-21 audit).
     activeProfileId:
       incoming.activeProfileId === null
         ? null
-        : (incomingToMerged.get(incoming.activeProfileId) ?? null),
+        : (incomingToMerged.get(incoming.activeProfileId) ?? current.activeProfileId),
     profiles,
     defaultAppBlocklist: defaultApps,
     defaultAppBlocklistUpdatedAt: appListStamp(
@@ -1405,13 +1416,18 @@ function policyDiff(before: ProfilePolicy, after: ProfilePolicy, names: {
   if (before.blockAdult !== after.blockAdult) {
     details.push(`Adult-site blocking: ${before.blockAdult ? 'on' : 'off'} → ${after.blockAdult ? 'on' : 'off'}`);
   }
+  if (before.maskFeeds !== after.maskFeeds) {
+    details.push(`In-feed masking: ${before.maskFeeds ? 'on' : 'off'} → ${after.maskFeeds ? 'on' : 'off'}`);
+  }
   if (before.maskSearchElements !== after.maskSearchElements) {
     details.push(
       `Search-result masking: ${before.maskSearchElements ? 'on' : 'off'} → ${after.maskSearchElements ? 'on' : 'off'}`,
     );
   }
   if (before.surrenderMode !== after.surrenderMode) {
-    details.push(`Typed override confirmation: ${before.surrenderMode} → ${after.surrenderMode}`);
+    const label = (mode: string) =>
+      mode === 'phrase' ? 'type a sentence' : mode === 'pause' ? '10-second pause' : 'one click';
+    details.push(`Override friction: ${label(before.surrenderMode)} → ${label(after.surrenderMode)}`);
   }
   if (before.blockMessage !== after.blockMessage) details.push('Block-screen note changed');
   if (

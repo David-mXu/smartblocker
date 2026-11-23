@@ -6,9 +6,11 @@
 // armedUrl guard ("stillCurrentPage") must skip those side effects for stale
 // verdicts, and the popup recordTabStatus must keep reporting B.
 //
-// Deterministic slow-window WITHOUT test hooks: storage.local titleCache +
-// centroidCache are cleared up front so A's first classify pays the full
-// centroid rebuild (~2.5s) — B is navigated to inside that window.
+// Deterministic slow-window WITHOUT product hooks: the test clears the title
+// cache and delays EMBED RPCs inside the SW (the same runtime, not product
+// code), so A's classification is still in flight when B blocks. (Centroid
+// seeding is precomputed now, so the old ~30s rebuild window no longer
+// exists.)
 //
 // Usage: npm run build:chrome && node scripts/e2e-stale-allow-race.mjs
 // Shares .e2e-profile with e2e-test.mjs (warm model cache expected; a cold
@@ -24,12 +26,18 @@ const B_KEYWORD = 'sb-race-block';
 const B_URL = `https://games.arcade.example/play?mark=${B_KEYWORD}`;
 
 rmSync(resolve(PROFILE, 'Default/Service Worker/ScriptCache'), { recursive: true, force: true });
+// A killed Chromium can leave a broken SW registration; drop the
+// registration DB too (CacheStorage = the model stays).
+rmSync(resolve(PROFILE, 'Default/Service Worker/Database'), { recursive: true, force: true });
 
 async function launchWithServiceWorker() {
   for (let attempt = 1; attempt <= 3; attempt++) {
     const ctx = await chromium.launchPersistentContext(PROFILE, {
       channel: 'chromium',
       headless: true,
+      // A hung profile (a zombie browser from an earlier killed run) can make
+      // launch wait forever; fail fast so the retry can repair the profile.
+      timeout: 60_000,
       args: [`--disable-extensions-except=${EXT_PATH}`, `--load-extension=${EXT_PATH}`],
     });
     let worker = ctx.serviceWorkers()[0];
@@ -62,6 +70,26 @@ try {
     await chrome.storage.local.set({ settings: { ...settings, enabled: true, blocklist: [kw] } });
   }, B_KEYWORD);
 
+  // Hold page A's query embedding for 1.5s. Delaying in the SW keeps this a
+  // black-box test of blocker.ts: no product test hooks, and B's
+  // deterministic blocklist path never calls EMBED so it stays instant.
+  await sw.evaluate(() => {
+    const g = globalThis;
+    if (!g.__sbRaceOriginalSend) {
+      g.__sbRaceOriginalSend = chrome.runtime.sendMessage.bind(chrome.runtime);
+    }
+    g.__sbRaceDelayMs = 1500;
+    chrome.runtime.sendMessage = (msg, ...rest) => {
+      const send = () => g.__sbRaceOriginalSend(msg, ...rest);
+      if (msg && msg.type === 'EMBED') {
+        return new Promise((resolve, reject) =>
+          setTimeout(() => send().then(resolve, reject), g.__sbRaceDelayMs),
+        );
+      }
+      return send();
+    };
+  });
+
   await context.route('**://docs.devnotes.example/**', (route) =>
     route.fulfill({
       contentType: 'text/html',
@@ -86,6 +114,27 @@ try {
 
   await tab.waitForSelector('#smartblocker-overlay', { timeout: 20_000 });
   console.log('PASS page B block screen present right after navigation');
+  await sw.evaluate(() => {
+    const g = globalThis;
+    if (g.__sbRaceOriginalSend) chrome.runtime.sendMessage = g.__sbRaceOriginalSend;
+  });
+
+  // Premise check: the race only exists while page A's verdict is STILL in
+  // flight (the centroid rebuild window). On an implausibly fast machine the
+  // old test could pass without ever exercising the race; make that explicit.
+  const aAlreadyResolved = await sw.evaluate(
+    (t) =>
+      chrome.storage.local
+        .get('latencySamples')
+        .then(({ latencySamples = [] }) => latencySamples.some((s) => s.title === t)),
+    A_TITLE,
+  );
+  if (aAlreadyResolved) {
+    console.log('FAIL race premise not met: page A had already resolved before page B blocked');
+    process.exitCode = 1;
+  } else {
+    console.log('PASS page A is still in flight when page B blocks (race window open)');
+  }
 
   // Wait until A's ALLOW verdict actually resolved (logSample fires after the
   // else-branch side effects), then give any would-be teardown time to run.

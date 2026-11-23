@@ -5,7 +5,7 @@
 // Profile (and the cached model) persists in .e2e-profile-p1/ across runs; the
 // first run downloads the bge model (~35MB) while the harness page classifies.
 import { chromium } from 'playwright';
-import { rmSync } from 'node:fs';
+import { readlinkSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const EXT_PATH = resolve('dist/chrome');
@@ -16,14 +16,47 @@ const HARNESS_TIMEOUT_MS = 5 * 60_000; // first run downloads the model (~35MB)
 // serving a stale background.js after a rebuild. Drop only ScriptCache —
 // CacheStorage (the downloaded model) must survive across runs.
 rmSync(resolve(PROFILE, 'Default/Service Worker/ScriptCache'), { recursive: true, force: true });
+// A killed Chromium can leave a broken SW registration; drop the
+// registration DB too (CacheStorage = the model stays).
+rmSync(resolve(PROFILE, 'Default/Service Worker/Database'), { recursive: true, force: true });
 
 // Same retry pattern as e2e-test.mjs: launching immediately after a previous
 // run sometimes yields a context where the extension never loads.
+
+// A killed/mid-crash run leaves Chromium's ProcessSingleton symlink behind and
+// the next launch dies instantly ("Failed to create a ProcessSingleton"). Clear
+// it only when the recorded pid is gone, so a genuinely running instance is
+// never disturbed.
+function clearStaleSingleton(dir) {
+  const lock = resolve(dir, 'SingletonLock');
+  try {
+    const target = readlinkSync(lock);
+    const pid = Number(target.slice(target.lastIndexOf('-') + 1));
+    if (!Number.isInteger(pid) || pid <= 0) return;
+    try {
+      process.kill(pid, 0);
+      return; // still alive — leave it alone
+    } catch {
+      // ESRCH: dead owner
+    }
+    rmSync(lock, { force: true });
+    rmSync(resolve(dir, 'SingletonCookie'), { force: true });
+    rmSync(resolve(dir, 'SingletonSocket'), { force: true });
+    console.log('… cleared a stale profile SingletonLock');
+  } catch {
+    // no lock / unreadable — nothing to do
+  }
+}
+
 async function launchWithServiceWorker() {
   for (let attempt = 1; attempt <= 3; attempt++) {
+    clearStaleSingleton(PROFILE);
     const ctx = await chromium.launchPersistentContext(PROFILE, {
       channel: 'chromium',
       headless: true,
+      // A hung profile (a zombie browser from an earlier killed run) can make
+      // launch wait forever; fail fast so the retry can repair the profile.
+      timeout: 60_000,
       args: [
         `--disable-extensions-except=${EXT_PATH}`,
         `--load-extension=${EXT_PATH}`,
@@ -42,6 +75,15 @@ async function launchWithServiceWorker() {
     if (worker) return { context: ctx, sw: worker };
     console.log(`… extension did not load (attempt ${attempt}), relaunching`);
     await ctx.close();
+    // A killed Chromium can leave a BROKEN service-worker registration in the
+    // profile: every later launch loads no SW at all. Drop the registration
+    // database (ScriptCache alone is not enough) but KEEP CacheStorage — that
+    // is the downloaded model.
+    rmSync(resolve(PROFILE, 'Default/Service Worker/Database'), { recursive: true, force: true });
+    rmSync(resolve(PROFILE, 'Default/Service Worker/ScriptCache'), { recursive: true, force: true });
+    // A killed Chromium can leave a broken SW registration; drop the
+    // registration DB too (CacheStorage = the model stays).
+    rmSync(resolve(PROFILE, 'Default/Service Worker/Database'), { recursive: true, force: true });
     await new Promise((r) => setTimeout(r, 2_000));
   }
   throw new Error('service worker did not boot after 3 launches');
@@ -163,6 +205,21 @@ try {
     route.fulfill({ contentType: 'text/html; charset=utf-8', body: forgedRevealResistHtml });
   });
 
+  // State-forgery fixture: the page pre-tags its embed with our state/id
+  // attributes. Before 2026-11-21 those page-writable attributes were trusted
+  // as "already handled", so the embed was never classified or masked (the
+  // whole embed guard could be bypassed with two attributes). Authority now
+  // lives in isolated-world memory; the forged markers must be ignored.
+  const forgedStateHtml = `<!doctype html><html><head><title>SmartBlocker state forgery fixture documentation</title></head><body>
+    <h1>State forgery fixture</h1>
+    <div id="state-wrap" class="video-container" data-smartblocker-state="forged" data-smartblocker-id="sb-embed-1">
+      <iframe id="state-embed" title="kw embed" src="https://media.example.org/embed?x=${KW}"></iframe>
+    </div>
+  </body></html>`;
+  await context.route('**://sb-state.example.net/**', (route) => {
+    route.fulfill({ contentType: 'text/html; charset=utf-8', body: forgedStateHtml });
+  });
+
   await new Promise((r) => setTimeout(r, 500)); // let storage onChanged fire
 
   const page = await context.newPage();
@@ -216,6 +273,110 @@ try {
   await page.waitForTimeout(4_000);
   const zwspOverlay = await page.locator('#smartblocker-overlay').count();
   check('#14 zero-width/homoglyph title variant still matches the override on the same host', zwspOverlay === 0);
+
+  // ── Override friction tiers (2026-11-21 P0): the 10-second pause must hold
+  // the release without typing, never fire early, and record the correction
+  // only after the user clicks the enabled button.
+  await sw.evaluate(async () => {
+    const { settings = {} } = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({ settings: { ...settings, surrenderMode: 'pause' } });
+  });
+  const pauseTitle = `Pause tier fixture ${RUN}`;
+  const pauseUrl =
+    `https://videos.example.net/watch?v=p1pause&kw=${KW}&t=${encodeURIComponent(pauseTitle)}`;
+  await page.goto('about:blank');
+  await page.goto(pauseUrl);
+  await page.waitForSelector('#smartblocker-overlay', { timeout: 20_000 });
+  const overridesBeforePause = await sw.evaluate(async () => {
+    const { overrides = [] } = await chrome.storage.local.get('overrides');
+    return overrides.length;
+  });
+  await page.locator('#smartblocker-overlay button', { hasText: 'actually productive' }).click();
+  const pauseWall = await page
+    .waitForSelector('#smartblocker-pause-wall', { timeout: 2_000 })
+    .then(() => true)
+    .catch(() => false);
+  const pauseOpenDisabled = await page
+    .locator('#smartblocker-pause-open')
+    .isDisabled()
+    .catch(() => null);
+  check(
+    'surrenderMode=pause shows the cool-down wall with the release button disabled',
+    pauseWall && pauseOpenDisabled === true,
+    JSON.stringify({ pauseWall, pauseOpenDisabled }),
+  );
+  // Un-trusted activation must be inert even when the control is enabled:
+  // page JS enables it and synthesizes a click (a disabled input dispatches
+  // nothing, so enabling first is what makes this assertion meaningful).
+  await page.evaluate(() => {
+    const btn = document.getElementById('smartblocker-overlay')?.shadowRoot
+      ?.querySelector('#smartblocker-pause-open');
+    if (btn instanceof HTMLButtonElement) {
+      btn.disabled = false;
+      btn.click();
+    }
+  });
+  const stillBlockedEarly = await page.locator('#smartblocker-overlay').count();
+  // A TRUSTED click while the control is enabled but the deadline has NOT
+  // elapsed must also be inert (the deadline re-check, not just isTrusted).
+  await page.locator('#smartblocker-pause-open').click();
+  const stillBlockedTrustedEarly = await page.locator('#smartblocker-overlay').count();
+  const overridesDuringPause = await sw.evaluate(async () => {
+    const { overrides = [] } = await chrome.storage.local.get('overrides');
+    return overrides.length;
+  });
+  check(
+    'the pause tier neither releases nor records an override early (untrusted + trusted-before-deadline)',
+    stillBlockedEarly === 1 &&
+      stillBlockedTrustedEarly === 1 &&
+      overridesDuringPause === overridesBeforePause,
+    JSON.stringify({
+      stillBlockedEarly,
+      stillBlockedTrustedEarly,
+      overridesBeforePause,
+      overridesDuringPause,
+    }),
+  );
+  // Wait past the 10-second cool-down from the wall's own opening, then use a
+  // real trusted click.
+  await page.waitForTimeout(11_000);
+  const pauseEnabled = await page
+    .locator('#smartblocker-pause-open')
+    .isEnabled()
+    .catch(() => false);
+  check('the cool-down ends after ~10 seconds', pauseEnabled);
+  if (pauseEnabled) {
+    await page.locator('#smartblocker-pause-open').click();
+    let released = false;
+    try {
+      await page.waitForFunction(
+        () => !document.getElementById('smartblocker-overlay'),
+        undefined,
+        { timeout: 5_000 },
+      );
+      released = true;
+    } catch {}
+    // The OVERRIDE message is handled asynchronously in the SW; poll briefly
+    // instead of racing the storage write.
+    let overridesAfterPause = false;
+    const overrideDeadline = Date.now() + 5_000;
+    while (Date.now() < overrideDeadline && !overridesAfterPause) {
+      overridesAfterPause = await sw.evaluate(async (title) => {
+        const { overrides = [] } = await chrome.storage.local.get('overrides');
+        return overrides.some((record) => String(record.title).includes(title.split(' ')[0]));
+      }, pauseTitle);
+      if (!overridesAfterPause) await new Promise((r) => setTimeout(r, 250));
+    }
+    check(
+      'the pause tier releases the page and records the correction',
+      released && overridesAfterPause === true,
+      JSON.stringify({ released, overridesAfterPause }),
+    );
+  }
+  await sw.evaluate(async () => {
+    const { settings = {} } = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({ settings: { ...settings, surrenderMode: 'off' } });
+  });
 
   // ── #16: sanitizer mask hardening on the harness page. The kw-carrying
   // iframe is masked synchronously once the (unblocked) page verdict lands
@@ -293,6 +454,24 @@ try {
     } catch {}
     check('#16 src attribute mutation on a masked embed is re-blanked on the next scan', reblanked);
 
+    // #16 (4c): stripping the mask ATTRIBUTE must not un-mask forever. The
+    // isolated-world set still records the element, but authority requires the
+    // render hint too, so the next scan re-applies the mask (a page cannot
+    // reveal itself by deleting our attribute).
+    await page.evaluate(() => {
+      document.getElementById('embed-wrap')?.removeAttribute('data-smartblocker-masked');
+    });
+    let restoredMask = false;
+    try {
+      await page.waitForFunction(
+        () => document.getElementById('embed-wrap')?.getAttribute('data-smartblocker-masked') === 'embed',
+        undefined,
+        { timeout: 5_000 },
+      );
+      restoredMask = true;
+    } catch {}
+    check('#16 stripping the mask attribute is re-masked on the next scan', restoredMask);
+
     // #16 (5): deleting the injected mask stylesheet must be undone by the
     // next scan's cheap re-ensure.
     await page.evaluate(() => {
@@ -333,6 +512,24 @@ try {
       JSON.stringify(restored),
     );
   }
+
+
+  // ── state/id forgery: page-written "already handled" markers are ignored ──
+  await page.goto('about:blank');
+  await page.goto('https://sb-state.example.net/');
+  let stateForgeryMasked = false;
+  try {
+    await page.waitForFunction(
+      () => document.getElementById('state-wrap')?.getAttribute('data-smartblocker-masked') === 'embed',
+      undefined,
+      { timeout: HARNESS_TIMEOUT_MS },
+    );
+    stateForgeryMasked = true;
+  } catch {}
+  check(
+    'page-forged data-smartblocker-state/id do not bypass embed classification',
+    stateForgeryMasked,
+  );
 
   // ── #16e: reveal authority must live in the isolated world, not in the
   // page-writable data-smartblocker-masked="revealed" attribute. ──────────────

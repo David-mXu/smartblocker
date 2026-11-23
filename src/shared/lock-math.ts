@@ -64,6 +64,9 @@ export const MAX_SCHEDULE_LEAD_MINUTES = 1_440;
 /** Display-only rule-name cap; mirrors `MAX_SCHEDULE_LABEL_LENGTH` in the
  *  Rust companion. Labels do not affect schedule evaluation. */
 export const MAX_SCHEDULE_LABEL_LENGTH = 80;
+/** Bound on stored schedule rules. Mirrors BACKUP_MAX_SCHEDULES and keeps an
+ *  adversarial/drifted merge from growing every status/boundary scan. */
+export const MAX_SCHEDULE_RULES = 100;
 
 /** Unicode White_Space property as code points — the exact set Rust's
  *  `char::is_whitespace` (split_whitespace) matches. JS `\s` would
@@ -908,6 +911,39 @@ function sanitizeRuleLabel<T extends ScheduleRule>(r: T): T | null {
  *  they are display-only, so a long/control-character name never loses the
  *  enforcement window it describes (truncate-and-keep, mirroring
  *  sanitize_lock_state on the Rust side). */
+/** Strictly-upward stamp for ordered lock operations (password, delay,
+ *  random-text, schedules, breaks). A wall-clock correction must never make
+ *  the NEXT write lose to an earlier one recorded while the clock was ahead:
+ *  a password arm stamped in the future would otherwise be unreleasable until
+ *  that instant. Mirrors the partner arm's `max(now, prev + 1)` rule. */
+export function nextOrderedStamp(previous: number | null | undefined, now: number): number {
+  const prev =
+    typeof previous === 'number' && Number.isFinite(previous) && previous > 0 ? previous : 0;
+  return Math.max(now, prev + 1);
+}
+
+/** Dedupe rule IDs (first wins — deterministic for an equal-stamp merge) and
+ *  duplicate days. Runs BEFORE validation so a hand-edited/imported duplicate
+ *  cannot silently disappear during a later merge. */
+function normalizeRuleDays<T extends ScheduleRule>(rule: T): T {
+  if (!Array.isArray(rule.days)) return rule;
+  const days = [...new Set(rule.days)].sort((a, b) => a - b);
+  return days.length === rule.days.length && days.every((d, i) => d === rule.days[i])
+    ? rule
+    : { ...rule, days };
+}
+
+function dedupeScheduleRules<T extends ScheduleRule>(rules: T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const rule of rules) {
+    if (seen.has(rule.id)) continue;
+    seen.add(rule.id);
+    out.push(rule);
+  }
+  return out;
+}
+
 export function sanitizeLockState(raw: unknown, now: number, maxLockMs: number): LockState {
   const o = (raw ?? {}) as Record<string, unknown>;
   const cap = now + maxLockMs;
@@ -916,27 +952,34 @@ export function sanitizeLockState(raw: unknown, now: number, maxLockMs: number):
   const stamp = (v: unknown): number =>
     typeof v === 'number' && Number.isSafeInteger(v) && v > 0 ? Math.min(v, now) : 0;
   const schedules = Array.isArray(o.schedules)
-    ? (o.schedules as ScheduleRule[])
-        .filter((r) => r !== null && typeof r === 'object' && typeof r.id === 'string')
-        .map((r) => sanitizeRuleLabel(r))
-        .filter((r): r is ScheduleRule => r !== null && validateScheduleRule(r) === null)
+    ? dedupeScheduleRules(
+        (o.schedules as ScheduleRule[])
+          .filter((r) => r !== null && typeof r === 'object' && typeof r.id === 'string')
+          .map((r) => sanitizeRuleLabel(r))
+          .map((r) => (r ? normalizeRuleDays(r) : r))
+          .filter((r): r is ScheduleRule => r !== null && validateScheduleRule(r) === null),
+      ).slice(0, MAX_SCHEDULE_RULES)
     : [];
   let categorySchedules: CategoryScheduleRule[] | undefined;
   if (Array.isArray(o.categorySchedules)) {
-    const candidates = o.categorySchedules
-      .filter((r) => r !== null && typeof r === 'object' && typeof r.id === 'string')
-      .map((r) => sanitizeRuleLabel(r as CategoryScheduleRule))
-      .filter(
-        (r): r is CategoryScheduleRule =>
-          r !== null && validateCategoryScheduleRule(r) === null,
-      );
-    // All-or-neutral: a malformed scoped list (including duplicate IDs) must
-    // not become an explicit empty deletion or retain only convenient rules.
+    const candidates = dedupeScheduleRules(
+      o.categorySchedules
+        .filter((r) => r !== null && typeof r === 'object' && typeof r.id === 'string')
+        .map((r) => sanitizeRuleLabel(r as CategoryScheduleRule))
+        .map((r) => (r ? normalizeRuleDays(r) : r))
+        .filter(
+          (r): r is CategoryScheduleRule =>
+            r !== null && validateCategoryScheduleRule(r) === null,
+        ),
+    );
+    // All-or-neutral: a malformed scoped list (including duplicate IDs — a
+    // cross-language fixture pins this) must not become an explicit empty
+    // deletion or retain only convenient rules.
     if (
       candidates.length === o.categorySchedules.length &&
       new Set(candidates.map((r) => r.id)).size === candidates.length
     ) {
-      categorySchedules = candidates;
+      categorySchedules = candidates.slice(0, MAX_SCHEDULE_RULES);
     }
   }
   const breakCap = now + MAX_BREAK_MS;
@@ -1053,8 +1096,15 @@ export function sanitizeLockState(raw: unknown, now: number, maxLockMs: number):
  *  (sanitizeScheduleLabel / sanitize_schedule_label), so a malformed name
  *  never drops the window that carries the enforcement. */
 export function validateScheduleRule(r: ScheduleRule): string | null {
+  if (typeof r.id !== 'string' || r.id.trim() === '' || r.id.length > 64) {
+    return 'Rule IDs must be 1–64 characters.';
+  }
   if (!Array.isArray(r.days) || r.days.length === 0) return 'Pick at least one day.';
   if (r.days.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) return 'Days must be 0–6.';
+  // Duplicate days are harmless for the window math but make the equal-stamp
+  // union collapse two DIFFERENT rules onto one id later; keep the invariant
+  // strict at the boundary (sanitize dedupes before validating stored rules).
+  if (new Set(r.days).size !== r.days.length) return 'Days must be unique.';
   const validMinute = (m: number) => Number.isInteger(m) && m >= 0 && m <= 1439;
   if (!validMinute(r.startMinutes) || !validMinute(r.endMinutes)) {
     return 'Times must fall within one day.';

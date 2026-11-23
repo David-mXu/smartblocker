@@ -1,6 +1,7 @@
 import { api } from '../shared/api';
 import { LATENCY_LOG_MAX } from '../shared/config';
 import { getSettings, type Settings } from '../shared/settings';
+import { PROFILES_STORAGE_KEY } from '../shared/profiles';
 import { getLockState, getLockStatus } from '../shared/lock';
 import { getLocalAllowanceAuthority } from '../shared/allowance-store';
 import { nextAllowanceBoundary } from '../shared/allowance-state';
@@ -18,7 +19,13 @@ import {
   matchedBlocklistEntry,
 } from '../shared/titles';
 import { isAdultHost, matchChannel, matchTitleRule } from '../shared/rules';
-import { applyUrlSignals, hostnameOf, urlFallbackTitle } from '../shared/url-signals';
+import {
+  applyUrlSignals,
+  hostnameOf,
+  isYouTubeBrowsingSurface,
+  isYouTubeVideoPage,
+  urlFallbackTitle,
+} from '../shared/url-signals';
 import { extractMeta } from '../content/extract-meta';
 import {
   sanitizePage,
@@ -64,6 +71,20 @@ const armedAt = new Map<number, number>(); // tabId -> nav commit epoch ms
 const armedUrl = new Map<number, string>(); // tabId -> latest armed URL
 const lastClassified = new Map<number, string>(); // tabId -> `${url}|${title}`
 const inFlightKey = new Map<number, string>();
+// Latest title-evaluation sequence per tab. Two titles on the SAME url (a very
+// common SPA pattern: YouTube emits the site title, then the real video title)
+// produce different flight tokens, so both classifications can be in flight at
+// once. Without an ordering stamp the slower FIRST verdict applied its side
+// effects last — a slow ALLOW for the old title cleared the newer BLOCK's
+// overlay, and vice versa. Every onTitle call takes the next sequence and only
+// the newest one may clear/inject after its await.
+const titleSequence = new Map<number, number>();
+
+// Force-mode reload loop backstop: `${tabId}|${url}` -> last redirect reload.
+// A rule that does not match would reload forever; after one reload within the
+// cooldown the evaluator falls back to the injected overlay instead.
+const FORCE_REDIRECT_RELOAD_COOLDOWN_MS = 3_000;
+const forceRedirectReloadAt = new Map<string, number>();
 const metaRecheckTimers = new Map<number, ReturnType<typeof setTimeout>>();
 const spaCheckTimers = new Map<number, ReturnType<typeof setTimeout>>();
 // Bumped on every arm() (i.e. every committed/SPA navigation). onTitle
@@ -364,7 +385,11 @@ async function runPageSanitizer(tabId: number): Promise<void> {
   try {
     const settings = await getSettings();
     const lock = await getLockStatus();
-    if (!settings.enabled && !lock.forceBlocking) return;
+    // Always inject — EVEN when blocking is off. The injected script treats
+    // `enabled: false` as a teardown (unmask, restore embeds, disconnect its
+    // observer); skipping the injection left a stale observer masking
+    // lazy-loaded cards on pages that were already open when the user turned
+    // protection off.
     await api.scripting.executeScript({
       target: { tabId },
       func: sanitizePage,
@@ -374,7 +399,9 @@ async function runPageSanitizer(tabId: number): Promise<void> {
           blocklist: settings.blocklist,
           settingsLocked: lock.settingsLocked,
           maskSearchElements: settings.maskSearchElements,
+          maskFeeds: settings.maskFeeds,
           policyEpoch: categoryPolicyEpoch,
+          enabled: settings.enabled || lock.forceBlocking,
         },
       ],
     });
@@ -383,9 +410,73 @@ async function runPageSanitizer(tabId: number): Promise<void> {
   }
 }
 
+// Page-triggered subitem (SERP card / embed) classification budget. The
+// sanitizer legitimately submits a few dozen per scan, but a hostile page can
+// strip its own state markers or churn containers to queue 20 model calls per
+// 140ms debounce, slowing the shared offscreen document for every tab. Bounded
+// per tab and globally over a rolling minute; over-budget items are reported
+// unclassified (fail-open, like a disabled classifier) rather than silently
+// dropped, so the page gains no oracle.
+const SUBITEM_BUDGET_WINDOW_MS = 60_000;
+const SUBITEM_BUDGET_PER_TAB = 240;
+const SUBITEM_BUDGET_GLOBAL = 1_200;
+type BudgetWindow = { start: number; count: number };
+const subItemBudgetByTab = new Map<number, BudgetWindow>();
+let subItemBudgetGlobal: BudgetWindow = { start: 0, count: 0 };
+
+function consumeSubItemBudget(tabId: number | undefined, n: number): number {
+  const now = Date.now();
+  if (now - subItemBudgetGlobal.start >= SUBITEM_BUDGET_WINDOW_MS) {
+    subItemBudgetGlobal = { start: now, count: 0 };
+  }
+  const key = tabId ?? -1;
+  let perTab = subItemBudgetByTab.get(key);
+  if (!perTab || now - perTab.start >= SUBITEM_BUDGET_WINDOW_MS) {
+    perTab = { start: now, count: 0 };
+    subItemBudgetByTab.set(key, perTab);
+  }
+  const allowance = Math.max(
+    0,
+    Math.min(
+      SUBITEM_BUDGET_PER_TAB - perTab.count,
+      SUBITEM_BUDGET_GLOBAL - subItemBudgetGlobal.count,
+    ),
+  );
+  const granted = Math.min(n, allowance);
+  perTab.count += granted;
+  subItemBudgetGlobal.count += granted;
+  // Keep the map from growing with tab churn (bounded by live windows).
+  if (subItemBudgetByTab.size > 100) {
+    for (const [id, win] of subItemBudgetByTab) {
+      if (now - win.start >= SUBITEM_BUDGET_WINDOW_MS) subItemBudgetByTab.delete(id);
+    }
+    if (subItemBudgetByTab.size > 100) {
+      const oldest = subItemBudgetByTab.keys().next().value;
+      if (oldest !== undefined) subItemBudgetByTab.delete(oldest);
+    }
+  }
+  return granted;
+}
+
 export async function evaluateSubItems(
   items: SubItemEvalRequest[],
   senderTabId?: number,
+): Promise<SubItemEvalResult[]> {
+  const granted = consumeSubItemBudget(senderTabId, items.length);
+  const allowed = items.slice(0, granted);
+  const over = items.slice(granted).map((it) => ({
+    id: it.id,
+    blocked: false,
+    label: 'deferred',
+    score: 0,
+  }));
+  const evaluated = allowed.length > 0 ? await evaluateSubItemsInner(allowed, senderTabId) : [];
+  return [...evaluated, ...over];
+}
+
+async function evaluateSubItemsInner(
+  items: SubItemEvalRequest[],
+  senderTabId: number | undefined,
 ): Promise<SubItemEvalResult[]> {
   const policyEpoch = categoryPolicyEpoch;
   const settings = await getSettings();
@@ -394,7 +485,6 @@ export async function evaluateSubItems(
   if (!settings.enabled && !lock.forceBlocking) {
     return items.map((it) => ({ id: it.id, blocked: false, label: 'disabled', score: 0 }));
   }
-
   let focusContext: ClassifyInput['focusContext'];
   if (settings.focusGoal.trim() || settings.useTabContext) {
     const openTabTitles: string[] = [];
@@ -568,37 +658,12 @@ function clearOverlay(tabId: number, frameId?: number): void {
     .catch(() => {});
 }
 
-function isYouTubeVideoPage(url: string): boolean {
-  try {
-    const u = new URL(url);
-    const h = u.hostname.toLowerCase().replace(/^(?:www|m|music)\./, '');
-    if (h !== 'youtube.com' && h !== 'youtube-nocookie.com') return false;
-    return /^\/(?:watch|shorts\/|embed\/|live\/|v\/)/i.test(u.pathname);
-  } catch {
-    return false;
-  }
-}
-
 /**
- * True when `url` is a YouTube browsing/discovery surface (homepage `/`,
- * channel pages `/@...`, `/channel/...`, `/c/...`, `/user/...`, library/sub
- * feeds `/feed/...`, playlists `/playlist`, or `/results` search pages) rather
- * than an actual video playback page (`/watch`, `/shorts/`, `/live/`, `/embed/`).
+ * YouTube browsing-surface policy lives in shared/url-signals.ts as of
+ * 2026-11-21: the offline evaluator builds its decision ladder from the SAME
+ * implementation, otherwise its must-block metrics score a block the runtime
+ * never makes.
  */
-function isYouTubeBrowsingSurface(url: string): boolean {
-  try {
-    const u = new URL(url);
-    const h = u.hostname.toLowerCase().replace(/^(?:www|m|music)\./, '');
-    if (h !== 'youtube.com') return false;
-    if (isYouTubeVideoPage(url)) return false;
-    return (
-      u.pathname === '/' ||
-      /^\/(?:@|channel\/|c\/|user\/|feed\/|results\b|playlist\b)/i.test(u.pathname)
-    );
-  } catch {
-    return false;
-  }
-}
 
 async function maybeCurtain(tabId: number, url: string, gen: number): Promise<void> {
   // A query-level verdict must not hide the entire next search before that
@@ -679,19 +744,46 @@ function clearTabTimers(tabId: number): void {
   }
 }
 
+/** Our own force-mode block page (the DNR redirect target). It is NOT a
+ *  "user navigated away" event: the evaluation that installed the redirect
+ *  must stay current so a fail-closed retry can recover and release its rule
+ *  (e2e-p2-dnr §e asserts retries keep firing under the redirect). */
+function isOwnBlockedPage(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return (
+      (u.protocol === 'chrome-extension:' || u.protocol === 'moz-extension:') &&
+      u.pathname === '/blocked.html'
+    );
+  } catch {
+    return false;
+  }
+}
+
 function arm(tabId: number, url: string) {
+  // FIRST: our own block page is the redirect target of the evaluation that
+  // installed the rule, so nothing may be invalidated — including
+  // clearTabTimers, which bumps the SERP generation `stillCurrentTitle()`
+  // tests and would make the evaluator release the rule it just committed.
+  if (isOwnBlockedPage(url)) return;
   clearSubFrameStateForTab(tabId);
   clearTabTimers(tabId);
   // New top-level document generation: the per-tab oEmbed resolution budget
   // (resolveYouTubeMeta quota) starts fresh with it.
   oembedFetchesPerTab.delete(tabId);
+  // Every frameId-0 commit starts a new document, including chrome://,
+  // about:, blob: and our own blocked.html. Bumping here (not only for
+  // classifiable URLs) invalidates a still-running verdict for the PREVIOUS
+  // http page: without it, its late block/allow could paint or clear state
+  // over the new document. The title sequence is the title-level mirror.
+  const nextGen = (navGeneration.get(tabId) ?? 0) + 1;
+  navGeneration.set(tabId, nextGen);
+  titleSequence.set(tabId, (titleSequence.get(tabId) ?? 0) + 1);
   if (isClassifiableUrl(url)) {
     armedAt.set(tabId, Date.now());
     armedUrl.set(tabId, url);
     lastClassified.delete(tabId);
     inFlightKey.delete(tabId);
-    const nextGen = (navGeneration.get(tabId) ?? 0) + 1;
-    navGeneration.set(tabId, nextGen);
     void maybeCurtain(tabId, url, nextGen);
 
     // SPA fallback: if changeInfo.title fired just BEFORE onHistoryStateUpdated
@@ -710,6 +802,14 @@ function arm(tabId: number, url: string) {
       }
     }, 320);
     spaCheckTimers.set(tabId, timer);
+  } else {
+    // Non-classifiable document (chrome://, about:, blocked.html, file://…):
+    // drop the previous page's armed identity too, so a stale verdict can no
+    // longer satisfy stillCurrentPage's `armedUrl === url` disjunct.
+    armedAt.delete(tabId);
+    armedUrl.delete(tabId);
+    lastClassified.delete(tabId);
+    inFlightKey.delete(tabId);
   }
 }
 
@@ -1223,12 +1323,21 @@ async function onTitle(
   const flightToken = `${url}|${initialTitle ?? ''}`;
   if (inFlightKey.get(tabId) === flightToken) return;
   inFlightKey.set(tabId, flightToken);
+  const myTitleSequence = (titleSequence.get(tabId) ?? 0) + 1;
+  titleSequence.set(tabId, myTitleSequence);
   const myGeneration = navGeneration.get(tabId) ?? 0;
   const isSerp = isSerpUrl(url);
   const mySerpGeneration =
     requestedSerpGeneration ?? (serpTitleGeneration.get(tabId) ?? 0);
   const stillCurrentTitle = () =>
     !isSerp || serpTitleGeneration.get(tabId) === mySerpGeneration;
+  // A newer TITLE evaluation on the same tab supersedes this one's side
+  // effects (never its telemetry / classification work — a stale verdict still
+  // resolves and is logged, it just may not paint or clear DOM). Unlike
+  // stillCurrentTitle this does not abort the whole evaluation: bailing at the
+  // top would throw away the classification of a page the user merely
+  // navigated past while it was still loading.
+  const supersededTitle = () => titleSequence.get(tabId) !== myTitleSequence;
   // Non-SERP navigation staleness — the mirror of the block-side stale check
   // near the end of onTitle and of subFrameGeneration in onSubFrame. arm()
   // frees the in-flight key, so a NEWER evaluation for this tab can already be
@@ -1252,6 +1361,8 @@ async function onTitle(
         clearCurtain(tabId);
         clearOverlay(tabId);
         void clearForceRedirectRule(tabId, url);
+        // Tear down any injected sanitizer (masks + observer) on this page.
+        void runPageSanitizer(tabId);
       }
       return; // master switch off — never classify or block (unless a Frozen
       //         Turkey session or schedule window forces blocking on)
@@ -1365,8 +1476,32 @@ async function onTitle(
           forceRedirectParams as ForceRedirectParams,
         );
         if (installed.status === 'failed') return false;
+        // 'already-enforced' still needs the reload: the rule may be a
+        // reconciled leftover (SW died after installing it, before reloading)
+        // or another evaluator's — the visible document is still the hostile
+        // page. Fragment stripping (force-redirect.ts) removed the known cause
+        // of a rule that never matched; the cooldown is the loop backstop.
         forceRedirectOwnedRuleId =
           installed.status === 'installed' ? installed.ruleId : null;
+        const reloadKey = `${tabId}|${url}`;
+        const now = Date.now();
+        const lastReload = forceRedirectReloadAt.get(reloadKey) ?? 0;
+        if (now - lastReload < FORCE_REDIRECT_RELOAD_COOLDOWN_MS) {
+          // Reloaded this exact URL moments ago and the hostile document is
+          // still here — the rule is not taking effect. Never spin; fall back
+          // to the injected overlay (fail-closed) instead of a silent allow.
+          return false;
+        }
+        if (forceRedirectReloadAt.size >= 200) {
+          for (const [k, t] of forceRedirectReloadAt) {
+            if (now - t > 60_000) forceRedirectReloadAt.delete(k);
+          }
+          if (forceRedirectReloadAt.size >= 200) {
+            const oldest = forceRedirectReloadAt.keys().next().value;
+            if (oldest !== undefined) forceRedirectReloadAt.delete(oldest);
+          }
+        }
+        forceRedirectReloadAt.set(reloadKey, now);
         if (classifierDriven && policyEpoch !== categoryPolicyEpoch) {
           // Old scope ended while DNR was installing. Remove only the exact new
           // rule this evaluator owns; a static/new evaluator's rule is not ours.
@@ -1659,9 +1794,12 @@ async function onTitle(
     // fail-closed results, and daemon enforcement never consult this flag.
     if (classifierDriven && lock.breakActive) blocked = false;
     if (classifierDriven && policyEpoch !== categoryPolicyEpoch) return;
-    // A newer SERP title invalidates both block and allow side effects, even
-    // when Chrome did not emit another document-navigation generation.
+    // A newer SERP title invalidates block/allow side effects, even when
+    // Chrome did not emit another document-navigation generation. A newer
+    // same-tab TITLE evaluation (supersededTitle) still lets this verdict
+    // resolve and be logged — only its DOM/status side effects are dropped.
     if (!stillCurrentTitle()) return;
+    const sideEffectsAllowed = !supersededTitle();
 
     // The user may have navigated again (e.g. pressed back) while classify()
     // was still running — arm() would have bumped the generation. Painting a
@@ -1682,7 +1820,7 @@ async function onTitle(
     // (channel rendered as "channel @<handle>", like the other rule labels).
     const matchedRule =
       blocklistHit ?? titleRuleHit ?? (channelBlockHit ? `channel @${channelBlockHit}` : null);
-    if (navGeneration.get(tabId) === myGeneration || armedUrl.get(tabId) === url) {
+    if (sideEffectsAllowed && (navGeneration.get(tabId) === myGeneration || armedUrl.get(tabId) === url)) {
       void recordTabStatus(tabId, {
         url,
         title: title ?? '',
@@ -1695,7 +1833,7 @@ async function onTitle(
     }
 
     let injectMs = 0;
-    if (blocked) {
+    if (blocked && sideEffectsAllowed) {
       const host = hostnameOf(url);
       if (host && !isSerp) {
         if (recentlyBlockedHosts.size >= 50) {
@@ -1722,8 +1860,14 @@ async function onTitle(
           blockMessage: settings.blockMessage,
         });
       }
-      if (!stillCurrentTitle()) return;
-      if (classifierDriven && policyEpoch !== categoryPolicyEpoch) {
+      // A superseded evaluator (newer title sequence, or a newer policy epoch)
+      // must still release the DNR rule IT owns — otherwise an obsolete
+      // redirect keeps enforcing a verdict nobody holds anymore.
+      const superseded =
+        !stillCurrentTitle() ||
+        supersededTitle() ||
+        (classifierDriven && policyEpoch !== categoryPolicyEpoch);
+      if (superseded) {
         if (forceRedirectCommitted && forceRedirectOwnedRuleId !== null) {
           await clearForceRedirectRule(tabId, url, forceRedirectOwnedRuleId);
           if (navGeneration.get(tabId) === myGeneration && armedUrl.get(tabId) === url) {
@@ -1733,6 +1877,7 @@ async function onTitle(
             // still revalidate its judgment under the current policy below.
           }
         }
+        if (!stillCurrentTitle() || supersededTitle()) return;
         // A rule+reload may have completed after the epoch check. Re-run the
         // fresh policy on that navigation instead of trusting a stale ack.
         await sweepOpenTabs();
@@ -1757,7 +1902,7 @@ async function onTitle(
           } else {
             const overrideToken = await mintOverrideToken();
             if (classifierDriven && policyEpoch !== categoryPolicyEpoch) return;
-            if (!stillCurrentTitle()) return;
+            if (!stillCurrentTitle() || supersededTitle()) return;
             await api.scripting.executeScript({
               target: { tabId },
               func: showBlockScreen,
@@ -1788,7 +1933,10 @@ async function onTitle(
       // gate the recordTabStatus call above uses — clear side effects only
       // when the tab is still on this generation or the same URL (the
       // onHistoryStateUpdated re-arm case).
-      if (stillCurrentPage()) {
+      // A same-URL title update can start a NEWER evaluation while this one is
+      // still awaiting classify(); an ALLOW for the superseded title must not
+      // tear down the overlay the newer verdict just painted.
+      if (stillCurrentPage() && stillCurrentTitle() && !supersededTitle()) {
         // P2 verdict-clear: an allowed verdict releases the session rule this
         // URL may have picked up from an earlier fail-closed redirect (a
         // no-op when none exists, so non-force modes stay cheap).
@@ -1825,6 +1973,16 @@ async function onTitle(
  *  in storage.local, so already-open distracting tabs and embedded videos get
  *  blocked (or unblocked) without waiting for a navigation. */
 export async function sweepOpenTabs(): Promise<void> {
+  // Invalidate EVERY in-flight evaluation before re-deciding. A cold classify
+  // can take tens of seconds; one that started under the previous policy must
+  // not inject a block (or clear an overlay) after this sweep. Title sequence
+  // and per-frame generation are the two staleness stamps the evaluators honour.
+  for (const tabId of titleSequence.keys()) {
+    titleSequence.set(tabId, (titleSequence.get(tabId) ?? 0) + 1);
+  }
+  for (const key of subFrameGeneration.keys()) {
+    subFrameGeneration.set(key, (subFrameGeneration.get(key) ?? 0) + 1);
+  }
   const tabs = await api.tabs.query({});
   // Evaluate active/foreground tabs first so the user sees instant feedback
   // when toggling protection or categories in the Popup or Options page.
@@ -1865,6 +2023,7 @@ const SETTINGS_SWEEP_KEYS: (keyof Settings)[] = [
   'useTabContext',
   'blockAdult',
   'maskSearchElements',
+  'maskFeeds',
 ];
 
 let settingsSweepTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1926,12 +2085,29 @@ export function initBlocker() {
         (k) => JSON.stringify(oldVal[k]) !== JSON.stringify(newVal[k]),
       );
     if (shouldSweep) {
+      // Category/policy change: advance the sanitizer epoch so classifier-owned
+      // masks reset to the new scope before the sweep re-decides them.
+      advanceCategoryPolicyEpoch();
       if (settingsSweepTimer) clearTimeout(settingsSweepTimer);
       settingsSweepTimer = setTimeout(() => {
         settingsSweepTimer = undefined;
         void sweepOpenTabs();
       }, 80);
     }
+  });
+
+  // Activating (or editing) a named profile rewrites the profiles state — the
+  // ACTIVE POLICY changes (blocked labels, threshold, whitelist, rules) — but
+  // the `settings` key does not, so without this listener every open tab kept
+  // its old overlays/masks until the next navigation. Same coalesced sweep.
+  api.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes[PROFILES_STORAGE_KEY]) return;
+    advanceCategoryPolicyEpoch();
+    if (settingsSweepTimer) clearTimeout(settingsSweepTimer);
+    settingsSweepTimer = setTimeout(() => {
+      settingsSweepTimer = undefined;
+      void sweepOpenTabs();
+    }, 80);
   });
 
   api.webNavigation.onCommitted.addListener((d) => {
@@ -1976,7 +2152,11 @@ export function initBlocker() {
     inFlightKey.delete(tabId);
     navGeneration.delete(tabId);
     serpTitleGeneration.delete(tabId);
+    titleSequence.delete(tabId);
     oembedFetchesPerTab.delete(tabId);
+    for (const key of forceRedirectReloadAt.keys()) {
+      if (key.startsWith(`${tabId}|`)) forceRedirectReloadAt.delete(key);
+    }
     clearSubFrameStateForTab(tabId);
     void clearTabStatus(tabId);
   });

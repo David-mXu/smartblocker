@@ -28,7 +28,7 @@ export function showBlockScreen(
    *  callers / re-ensure paths keep working without it. */
   threshold?: number,
   /** Opt-in friction for non-locked overrides; serialized as a plain value. */
-  surrenderMode?: 'off' | 'phrase',
+  surrenderMode?: 'off' | 'pause' | 'phrase',
   /** Optional user-authored plain-text note (already sanitized by settings).
    *  Rendered through a text node only, never HTML. */
   blockMessage?: string,
@@ -179,6 +179,8 @@ export function showBlockScreen(
       : 'justify-content:center !important;padding:32px !important;') +
     'font-family:Geist,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;' +
     'box-sizing:border-box !important;text-align:center !important;-webkit-font-smoothing:antialiased';
+  // Authoritative inline declarations, re-asserted by the tamper guard below.
+  const HOST_STYLE = host.style.cssText;
   // Open shadow root: page document.querySelector/CSS stops at this boundary.
   const shadow = host.attachShadow({ mode: 'open' });
 
@@ -292,12 +294,14 @@ export function showBlockScreen(
     'letter-spacing:normal;cursor:pointer;transition:background-color .15s,border-color .15s,color .15s;' +
     (isCompact ? 'padding:7px 12px;font-size:12px;border-radius:8px;' : 'padding:11px 18px;font-size:14px;border-radius:8px;');
 
-  // Re-mount observer: if the page removes the host or re-parents it into a
-  // wrapper (to hide it behind transforms/overflow), put it straight back as
-  // a direct <html> child — where hiding it would require hiding the whole
-  // page. Guarded so our own re-append doesn't loop, and inert after a
-  // legitimate dismissal.
-  const remount = new MutationObserver(() => {
+  // Re-mount / tamper guard. childList catches removal or re-parenting into a
+  // wrapper; host attributes catch the classic hide-the-overlay bypass (a page
+  // can set display:none !important, or opacity/pointer-events/z-index/size,
+  // on this host — inline !important is page-writable); the shadow-tree
+  // observer catches shadowRoot.replaceChildren(). Idempotent: our own writes
+  // settle after one no-op delivery, and everything stops after a legitimate
+  // dismissal.
+  const reassertHost = () => {
     if (dismissed || typeof chrome === 'undefined' || !chrome.runtime?.id) {
       remount.disconnect();
       return;
@@ -307,14 +311,37 @@ export function showBlockScreen(
         document.documentElement.appendChild(host);
         pauseMedia(document, false);
       }
+      const s = host.style;
+      if (
+        s.display !== 'flex' || s.position !== 'fixed' || s.visibility !== 'visible' ||
+        s.opacity !== '1' || s.pointerEvents !== 'auto' || s.zIndex !== '2147483647' ||
+        s.transform !== 'none' || s.filter !== 'none' || s.clipPath !== 'none' ||
+        s.width !== 'auto' || s.height !== 'auto' || s.inset !== '0px' ||
+        s.backgroundImage === 'none'
+      ) {
+        // Replacing cssText drops every declaration the page added.
+        host.style.cssText = HOST_STYLE;
+      }
+      const attrs = ['class', 'hidden', 'inert', 'aria-hidden'];
+      for (let i = 0; i < attrs.length; i++) {
+        if (host.hasAttribute(attrs[i])) host.removeAttribute(attrs[i]);
+      }
+      if (!shadow.contains(card)) shadow.replaceChildren(card);
     } catch {
       // document going away — nothing left to protect
     }
-  });
+  };
+  const remount = new MutationObserver(reassertHost);
   remount.observe(document.documentElement, { childList: true, subtree: true });
+  remount.observe(host, {
+    attributes: true,
+    attributeFilter: ['style', 'class', 'hidden', 'inert', 'aria-hidden'],
+  });
+  remount.observe(shadow, { childList: true });
 
   const teardown = () => {
     dismissed = true;
+    cleanupDialog();
     stopSurrenderTimer();
     remount.disconnect();
     document.removeEventListener('play', onMediaPlay, true);
@@ -364,6 +391,10 @@ export function showBlockScreen(
     if (!e.isTrusted) return;
     if (!locked && surrenderMode === 'phrase') {
       openSurrenderWall();
+      return;
+    }
+    if (!locked && surrenderMode === 'pause') {
+      openPauseWall();
       return;
     }
     sendOverride();
@@ -550,6 +581,84 @@ export function showBlockScreen(
     restart('A mismatch restarts the full 15-second pause.');
   }
 
+  /** 10-second cool-down tier: no typing, no guilt copy. Mirrors
+   *  PAUSE_OVERRIDE_MS in shared/surrender.ts. */
+  function openPauseWall(): void {
+    if (locked || dismissed) return;
+    stopSurrenderTimer();
+    const pauseMs = 10_000;
+
+    const wall = document.createElement('div');
+    wall.id = 'smartblocker-pause-wall';
+    wall.style.cssText =
+      'display:flex;flex-direction:column;gap:10px;width:100%;text-align:left;box-sizing:border-box;';
+
+    const prompt = document.createElement('div');
+    prompt.style.cssText = 'font-size:13px;font-weight:500;line-height:1.4;color:#f4efe4;';
+    prompt.textContent = 'Take a breath before opening this page.';
+
+    const countdown = document.createElement('div');
+    countdown.id = 'smartblocker-pause-countdown';
+    countdown.setAttribute('role', 'timer');
+    // Ticks 4x/s; the completion message is the actionable announcement.
+    countdown.setAttribute('aria-live', 'off');
+    countdown.style.cssText =
+      'min-height:18px;color:#a29a89;font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums;';
+
+    const btnOpen = document.createElement('button');
+    btnOpen.id = 'smartblocker-pause-open';
+    btnOpen.type = 'button';
+    btnOpen.disabled = true;
+    btnOpen.style.cssText =
+      btnBase +
+      'background:transparent;color:#f4efe4;border:1px solid rgba(244,239,228,0.28);font-weight:500;opacity:0.45;';
+    btnOpen.textContent = 'Open anyway';
+
+    const btnCancel = document.createElement('button');
+    btnCancel.id = 'smartblocker-pause-cancel';
+    btnCancel.type = 'button';
+    btnCancel.style.cssText =
+      btnBase + 'background:transparent;color:#a29a89;border:1px solid transparent;font-weight:400;';
+    btnCancel.textContent = 'Cancel';
+
+    // Monotonic arming: a wall-clock correction must not shorten or extend the
+    // cool-down (same posture as the lock system). performance.now() is a
+    // duration source, which is exactly what this tier needs.
+    const armedAtMono = performance.now();
+    const tick = () => {
+      const remaining = Math.max(0, pauseMs - (performance.now() - armedAtMono));
+      if (remaining > 0) {
+        countdown.textContent =
+          'You can open it in ' + Math.ceil(remaining / 1000) + ' seconds.';
+        return;
+      }
+      stopSurrenderTimer();
+      countdown.textContent = 'You can open the page now.';
+      // Announce the state change once; do NOT steal focus — a keyboard user
+      // mid-Tab must not have the next Enter land on the release button.
+      countdown.setAttribute('aria-live', 'polite');
+      btnOpen.disabled = false;
+      btnOpen.style.opacity = '1';
+    };
+    surrenderTimer = setInterval(tick, 250);
+    tick();
+
+    btnOpen.addEventListener('click', (e) => {
+      if (!e.isTrusted || dismissed || locked) return;
+      if (performance.now() - armedAtMono < pauseMs) return;
+      sendOverride();
+    });
+    btnCancel.addEventListener('click', (e) => {
+      if (!e.isTrusted) return;
+      stopSurrenderTimer();
+      btnRow.replaceChildren(btnStay, btnOverride, btnDismiss);
+      btnOverride.focus();
+    });
+
+    wall.append(prompt, countdown, btnOpen, btnCancel);
+    btnRow.replaceChildren(btnStay, wall);
+  }
+
   if (locked) {
     btnRow.append(lockNote, btnStay);
   } else {
@@ -562,6 +671,53 @@ export function showBlockScreen(
   if (ms > 0) card.appendChild(meta);
   shadow.appendChild(card);
   document.documentElement.appendChild(host);
+
+  // Dialog semantics + focus handling. Without this the page's own focusables
+  // (which precede this host in tab order) stay reachable behind the curtain
+  // and AT users never learn a dialog appeared.
+  host.setAttribute('role', 'dialog');
+  host.setAttribute('aria-modal', 'true');
+  host.setAttribute('aria-label', 'SmartBlocker block screen');
+  const previousFocus = document.activeElement as HTMLElement | null;
+  const focusStay = () => {
+    try {
+      btnStay.focus({ preventScroll: true });
+    } catch {
+      // detached/failed focus is non-fatal
+    }
+  };
+  focusStay();
+  const dialogKeydown = (event: KeyboardEvent) => {
+    if (event.key !== 'Tab') return;
+    const focusables = Array.from(
+      shadow.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((el) => !el.hasAttribute('disabled'));
+    if (focusables.length === 0) {
+      event.preventDefault();
+      return;
+    }
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = shadow.activeElement;
+    if (event.shiftKey && (active === first || active === null || active === host)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+  document.addEventListener('keydown', dialogKeydown, true);
+  const cleanupDialog = () => {
+    document.removeEventListener('keydown', dialogKeydown, true);
+    try {
+      previousFocus?.focus?.({ preventScroll: true });
+    } catch {
+      // element gone with the page
+    }
+  };
 }
 
 /**
@@ -775,6 +931,8 @@ export function showClassifierUnavailableScreen(title: string): void {
       : 'justify-content:center !important;padding:32px !important;') +
     'font-family:Geist,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;' +
     'box-sizing:border-box !important;text-align:center !important;-webkit-font-smoothing:antialiased';
+  // Authoritative inline declarations, re-asserted by the tamper guard below.
+  const HOST_STYLE = host.style.cssText;
   const shadow = host.attachShadow({ mode: 'open' });
 
   const card = document.createElement('div');
@@ -825,7 +983,8 @@ export function showClassifierUnavailableScreen(title: string): void {
     'border:1px solid rgba(232,163,61,0.30);border-radius:8px;margin-bottom:4px';
   note.textContent = 'Smart Blocker is locked — bypass is disabled';
 
-  const remount = new MutationObserver(() => {
+  // Same tamper guard as showBlockScreen (see the comment there).
+  const reassertHost = () => {
     if (dismissed || typeof chrome === 'undefined' || !chrome.runtime?.id) {
       remount.disconnect();
       return;
@@ -835,14 +994,36 @@ export function showClassifierUnavailableScreen(title: string): void {
         document.documentElement.appendChild(host);
         pauseMedia(document);
       }
+      const s = host.style;
+      if (
+        s.display !== 'flex' || s.position !== 'fixed' || s.visibility !== 'visible' ||
+        s.opacity !== '1' || s.pointerEvents !== 'auto' || s.zIndex !== '2147483647' ||
+        s.transform !== 'none' || s.filter !== 'none' || s.clipPath !== 'none' ||
+        s.width !== 'auto' || s.height !== 'auto' || s.inset !== '0px' ||
+        s.backgroundImage === 'none'
+      ) {
+        host.style.cssText = HOST_STYLE;
+      }
+      const attrs = ['class', 'hidden', 'inert', 'aria-hidden'];
+      for (let i = 0; i < attrs.length; i++) {
+        if (host.hasAttribute(attrs[i])) host.removeAttribute(attrs[i]);
+      }
+      if (!shadow.contains(card)) shadow.replaceChildren(card);
     } catch {
       // document going away — nothing left to protect
     }
-  });
+  };
+  const remount = new MutationObserver(reassertHost);
   remount.observe(document.documentElement, { childList: true, subtree: true });
+  remount.observe(host, {
+    attributes: true,
+    attributeFilter: ['style', 'class', 'hidden', 'inert', 'aria-hidden'],
+  });
+  remount.observe(shadow, { childList: true });
 
   const teardown = () => {
     dismissed = true;
+    cleanupDialog();
     remount.disconnect();
     document.removeEventListener('play', onMediaPlay, true);
     document.removeEventListener('playing', onMediaPlay, true);
@@ -905,4 +1086,51 @@ export function showClassifierUnavailableScreen(title: string): void {
   card.append(pill, headline, body, pageTitle, btnRow);
   shadow.appendChild(card);
   document.documentElement.appendChild(host);
+
+  // Dialog semantics + focus handling. Without this the page's own focusables
+  // (which precede this host in tab order) stay reachable behind the curtain
+  // and AT users never learn a dialog appeared.
+  host.setAttribute('role', 'dialog');
+  host.setAttribute('aria-modal', 'true');
+  host.setAttribute('aria-label', 'SmartBlocker block screen');
+  const previousFocus = document.activeElement as HTMLElement | null;
+  const focusStay = () => {
+    try {
+      btnStay.focus({ preventScroll: true });
+    } catch {
+      // detached/failed focus is non-fatal
+    }
+  };
+  focusStay();
+  const dialogKeydown = (event: KeyboardEvent) => {
+    if (event.key !== 'Tab') return;
+    const focusables = Array.from(
+      shadow.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((el) => !el.hasAttribute('disabled'));
+    if (focusables.length === 0) {
+      event.preventDefault();
+      return;
+    }
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = shadow.activeElement;
+    if (event.shiftKey && (active === first || active === null || active === host)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+  document.addEventListener('keydown', dialogKeydown, true);
+  const cleanupDialog = () => {
+    document.removeEventListener('keydown', dialogKeydown, true);
+    try {
+      previousFocus?.focus?.({ preventScroll: true });
+    } catch {
+      // element gone with the page
+    }
+  };
 }

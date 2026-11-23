@@ -22,7 +22,7 @@ default OFF) blocks `<meta name="rating">`-declared pages and `.xxx` hosts.
 Batch 1 of Phase 5 also added **auto-resume** (`resumeMode`/`resumeAt` +
 `resume-enforcer.ts`: re-enable blocking on browser cold-start, at the next
 scheduled-block start, or at a chosen time ≤24h out). **The full
-multi-phase roadmap lives in `ROADMAP.md`.** Implemented through Phase 2.9: user-configurable categories
+multi-phase roadmap lives in `ROADMAP.md`.** Implemented through the Phase 5 parity closeout: user-configurable categories
 + onboarding, richer page signals, the **embedding-prototype classifier**
 (2026-07 bake-off winner — see Model facts), a block screen with a "this is
 actually productive" override, a **feedback loop** (corrections are stored
@@ -94,7 +94,9 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   explicit-release proofs, write-count and clock-jump tripwires.
 - `node scripts/breaks-test.mjs` — break gates and proof transitions, including
   preservation of every non-break lock field.
-- `node scripts/surrender-test.mjs` — typed-surrender phrase/timing helpers.
+- `node scripts/surrender-test.mjs` — override-friction helpers: the 10-second
+  pause tier (`PAUSE_OVERRIDE_MS`, `pauseElapsed`) and typed-surrender
+  phrase/timing math (`settings.surrenderMode: 'off' | 'pause' | 'phrase'`).
 - `node scripts/grace-math-test.mjs` — pure extension-loss grace display
   derivations (`src/shared/grace-math.ts`, same type-stripping constraint).
   Numeric countdowns require daemon-observed grace state; protocol v2 does not
@@ -137,10 +139,61 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   build:chrome`): real download bytes, corrupt-import rejection, merge and
   confirmed replace applies, lock refusal with no live writes, and pre-restore
   recovery. Writes `docs/audits/assets/2026-11-09-backup.png`.
+- `node scripts/e2e-dashboard-test.mjs` — Now/Next/Relief dashboard suite
+  (run after `npm run build:chrome`): route/default ordering, live lock and
+  expired-timer refresh, schedule lanes, no URL/title leakage, and 390px
+  no-horizontal-scroll. Uses a throwaway `/tmp` profile.
+- `node scripts/e2e-profiles.mjs` — named-profile suite: create/rename/
+  duplicate/activate/delete, policy overlay isolation, and active-profile
+  chip. Rebinds settings, so it owns a throwaway `/tmp` profile; honors
+  `SB_SKIP_BUILD=1`.
+- `node scripts/e2e-schedule-prefs.mjs` — focused schedule lead-in +
+  display-preference + custom-block-message suite (deterministic blocklist
+  matches only — no model download). Uses `.e2e-profile-prefs`.
+- `node scripts/e2e-partner-test.mjs` — accountability-partner enrollment
+  and offline-signed release codes against the real browser flow, plus the
+  24-hour activation delay. Uses throwaway `/tmp` profile + data dir.
+- `node scripts/e2e-reward-test.mjs` — productive-work reward accrual and
+  relief flow (seeds `{enabled,onboarded}` explicitly — blocking defaults
+  OFF). Uses a throwaway `/tmp` profile.
+- `node scripts/build-centroid-cache.mjs` — regenerates
+  `src/shared/seed-centroid-vectors.json`, the precomputed BASE seed embeddings
+  produced by the REAL Chromium/WASM runtime through the extension's offscreen
+  EMBED path. Run after any `prototype-seeds.json` or
+  `EMBED_MODEL_REVISION` change, then run the asset test below.
+- `node scripts/centroid-asset-test.mjs` — fails if the shipped seed-vector
+  asset is stale (model id/revision, seed hashes/order, dimensions,
+  normalization) or unexpectedly large. This is the tripwire that makes the
+  precomputed cache safe to ship.
+- `node scripts/warm-model-cache.mjs` — the nightly lane's hard warm-up: loads
+  the built extension, runs one real classification, and fails non-zero unless
+  the model CacheStorage is populated (so a failed early run can never save a
+  model-less profile under the warm-cache key).
 - `node scripts/rules-test.mjs` — pure unit tests for the deterministic rule
   core: title-rule compiler/matcher + channel rules (`src/shared/rules.ts`,
   same type-stripping constraints), the shared classifier block predicate, and
   proof-of-protection configuration/verdict policy.
+- `node scripts/overrides-test.mjs` — mocked-storage tests for the override
+  store: NFKC/Cf normalization, host scoping vs legacy host-less entries,
+  refresh-in-place, concurrent-add serialization, the 1,000 cap, and
+  failed-write cache invalidation.
+- `node scripts/feedback-test.mjs` — mocked-storage tests for the feedback
+  store + on-device learning fold: field caps, 500-record bound, concurrent
+  appends, uploaded/skipped ts identities, failed-write invalidation, and
+  `getPrototypeExamples` (FP → user-approved neutral, FN → corrected label,
+  newest-24 cap, unusable records skipped).
+- `node scripts/focus-session-test.mjs` — harness for the 60-second deferred
+  Focus session commit: defers with no lock write, undo, no-op before the
+  deadline, fixed end time at commit, idempotent re-commit, expired sessions,
+  and the alarm path.
+- `node scripts/protection-health-test.mjs` — pure tests for the dashboard's
+  protection-health derivation (revoked site access, unfinished setup, missing
+  model files, companion drift, paused vs locked precedence) plus a source
+  tripwire for the health DOM ids.
+- `node scripts/titles-test.mjs` — pure tests for the title pipeline
+  (`src/shared/titles.ts` `cleanTitle`): suffix stripping, generic/URL
+  rejection, CJK, the 300/512 length bounds, surrogate-safe truncation, and a
+  timing guard proving a page-controlled whitespace flood is linear.
 - `node scripts/wildcards-test.mjs` — pure unit tests for URL/title blocklist
   and whitelist wildcard grammar + legacy normalization, safe allow rejection,
   popup shared-API wiring, and direct serialized-sanitizer matcher parity.
@@ -225,10 +278,11 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
   the network (cache URL assertion).
 - `node scripts/e2e-security-blockscreen.mjs` + `python3
   scripts/security-companion-test.py` — the ported red-team PoCs (blockscreen
-  tamper resistance; daemon IPC 9/9 defenses). CI runs both plus
-  `cargo audit` (`.github/workflows/security.yml`); the Playwright extension
-  e2es are deliberately excluded from CI (model download + persistent
-  profiles = flake farm).
+  tamper resistance; daemon IPC 14/14 defenses). `security.yml` runs the
+  companion cargo audit/test pair plus the IPC PoC and `lock-math`; the
+  Playwright extension suites (including the blockscreen one) run in the
+  nightly lane, never in PR CI (model download + persistent profiles = flake
+  farm).
 
 Run typecheck + build + e2e before considering any background change done
 (+ `npm run eval` when anything touching classification changed: seeds,
@@ -246,14 +300,16 @@ Commit and push when appropriate.
       (`prototypes.ts`). Centroid vectors are cached in storage.local
       (`centroidCache`), version-keyed over model id + active labels + seed
       and user-correction texts + `CENTROID_CACHE_FORMAT` (in
-      `shared/prototype-cache.ts`) — a full cold rebuild re-embeds all ~600
-      seed texts: ~2.5s in Node, **~30s once in real Chromium** (measured
-      2026-11-14), so the FIRST classification after any cache-format bump can
-      be tens of seconds; suite waits need real timeouts and a re-run. Cached
-      seed vectors are hash-verified per position (2026-11-14) — seed edits
-      now rebuild only the changed categories and unchanged categories reuse
-      their caches, so the format tag only needs bumping for cache-SHAPE
-      changes, not seed additions.
+      `shared/prototype-cache.ts`). Since 2026-11-22 the BASE seed vectors ship
+      precomputed in `src/shared/seed-centroid-vectors.json` (generated in real
+      Chromium by `scripts/build-centroid-cache.mjs`), so a fresh install does
+      NOT re-embed ~600 seed texts — a cold build with default labels decodes
+      the asset and embeds only user corrections/seed edits (measured ~100ms of
+      decode + any missing texts, vs the old **~30s** cold rebuild). Cached
+      seed vectors are hash-verified per position, and the asset is trusted
+      only for an exact model id+revision match, so a stale asset degrades to a
+      normal rebuild. Regenerate it after seed/model changes;
+      `scripts/centroid-asset-test.mjs` fails until you do.
     - `'nli'` (legacy fallback): zero-shot NLI, one pass PER label.
     On Chrome/Edge inference runs in the **offscreen document** via
     `classify-client.ts` (`EMBED`/`CLASSIFY` RPC); on Firefox in-process.
@@ -384,8 +440,8 @@ Commit and push when appropriate.
   merge stay monotonic). No diagnostics in the popup.
 - `src/options/` (`OptionsApp.tsx` shell, `useOptionsState.ts`, `format.ts`,
   `pages/*`, `welcome/*`) — sidebar settings, ONE page at a time via hash
-  routes: `#dashboard` (read-only Now / Next / Relief plus today's focus-hours
-  and category timeline), `#blocking` (switch, strictness presets, categories,
+  routes: `#dashboard` (read-only Protection-health row, Now / Next /
+  Relief, plus today's focus-hours and category timeline), `#blocking` (switch, strictness presets, categories,
   history review), `#profiles` (named settings snapshots: Activate /
   Duplicate / Rename / two-step Delete, active profile's desktop apps and
   connection status), `#sites` (`ListEditor` Always allow / Always block), `#focus`,
@@ -501,9 +557,10 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   cleanup delete expired rows, export excludes them, and `POST /v1/delete`
   removes an installId's rows (rate-limited 1/hr; unverifiable-token honest
   weakness documented in wrangler.toml + PRIVACY). NOT part of the extension build;
-  deploy is manual (see wrangler.toml header; set `FEEDBACK_ENDPOINT` after
-  deploying). **Not deployed yet** — `database_id` is still a placeholder and
-  `FEEDBACK_ENDPOINT` is `''`, so no real records flow. Full network
+  deploy is manual, but it IS deployed: `wrangler.toml` carries the real
+  `database_id` and `FEEDBACK_ENDPOINT` is the live worker URL (updated
+  2026-11-21 — earlier notes claiming otherwise were stale). Nothing flows
+  unless the user opts in (`shareFeedback`, default OFF). Full network
   inventory (enforced by the `extension_pages` CSP in `manifests/*`):
   one-time HF model download, opt-in `resolveEmbedTitles` oEmbed lookups
   (default false; never for nocookie/facade sources), and this worker —
@@ -527,9 +584,12 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   to the companion itself — any OTHER process wearing a protected stem is a
   decoy and is killed during locks; autostart launches the `watchdog`
   supervisor and daemon/watchdog respawn each other
-  (`SMARTBLOCKER_WATCHDOG_PID`); the daemon anchors to a monotonic clock with
+  (`SMARTBLOCKER_WATCHDOG_PID`); the daemon anchors to a **boot-relative**
+  monotonic clock (Linux `/proc/uptime`, Windows `GetTickCount64`) with
   wall-clock-jump compensation plus a persisted cumulative-drift anchor
-  (`clock-anchor.json`, defeats sub-tolerance forward ratchets);
+  (`clock-anchor.json`, defeats sub-tolerance forward ratchets even when a
+  ratchet is chained with watchdog respawns — a process-relative clock used to
+  reset the baseline on every restart; legacy anchors re-anchor once);
   `merge.rs merge_in` reverse-syncs the
   daemon's persisted state into a wiped extension and mid-lock
   `config.json` edits self-heal; `license.rs` verifies
@@ -539,7 +599,13 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   bounded per-conn outbound queues (never write under the merge lock),
   a 64-conn cap with unauthenticated idle reaping, and an
   authenticated PING/PONG liveness frame the watchdog probes with (a
-  socket squatter reads as dead); `uninstall` refuses on
+  silent socket squatter reads as dead, and since 2026-11-22 the PONG's pid
+  must also be a real `smartblocker-daemon` image — an arbitrary process
+  answering the probe no longer suppresses respawn); corrupt
+  `partner-state.json` / `allowance-state.json` degrade only that subsystem
+  (partner/allowance commands refused, nothing minted, file left untouched)
+  instead of exiting the daemon, so locks and kills keep running;
+  `uninstall` refuses on
   `settings_locked`; `is_pro` fails CLOSED on a missing key
   (`SBPRO_DEV_OPEN=1` dev escape hatch, pending user ratification) with
   a 7-day expiry grace and mid-lock `license_key` heal. `usage.rs` keeps a
@@ -650,7 +716,7 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   programming/science titles sometimes landing in neutral documentation/work
   centroids — harmless for blocking (neutral never blocks), visible in top-1.
 - 2026-07-29 measurement overhaul + `v2` eval slice (121 url-bearing cases,
-  104 grounded by real `--capture` scrapes). Metrics are reported PER SLICE so
+  98 grounded by real `--capture` scrapes; 23 carry `noCapture`). Metrics are reported PER SLICE so
   the v1 numbers above stay directly comparable; `v1` is unchanged at
   **88.8 / 2.1 / 80.5**. New figures: `v2` **83.6% top-1, 0.0% productive FP,
   62.8% must-block recall, 85.8% e2e**; combined (395 cases) **87.4% top-1,
@@ -716,6 +782,12 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   "pure" tile around any remaining video/social/gaming/gambling link. When
   Google changes markup, inspect the live DOM (browser-use) before adding
   selectors.
+- **YouTube home/feed cards are masked only when `settings.maskFeeds` is on**
+  (opt-in, default OFF; profile-scoped like `maskSearchElements`). The PAGE
+  stays a browsing surface; the sanitizer classifies individual
+  `ytd-rich-item-renderer` / video / reel / Shorts-lockup cards, masks blocked
+  ones in place, and reveals them when the setting is turned off. The same
+  card path runs on YouTube `/results` under `maskSearchElements`.
 - **Browser blocking is a post-navigation overlay with selective pre-curtain.**
   `blocker.ts` listens for navigation, title changes, and `status === 'complete'`.
   On deterministic blocklist hits, mixed high-risk hosts (YouTube, Reddit, X,
@@ -765,7 +837,13 @@ titles NFKC/zero-width-normalized; legacy hostless entries still honored),
   you touch it, change `lock-math.ts` AND `merge.rs` together and extend the
   shared fixtures, or the two stores drift and never converge. Password
   arm/unlock is ordered by a `passwordTs` tombstone stamp (greater stamp
-  wins; tie → armed; both armed → lex-smaller hash) and schedules by
+  wins; tie → armed; both armed → lex-smaller hash). Every ordered write
+  (password, delay, random-text, breaks, schedules) uses `nextOrderedStamp`
+  (`max(now, previous + 1)`, lock-math.ts) so a clock corrected BACKWARDS
+  after an ahead-stamped arm cannot leave a lock unreleasable; the daemon
+  accepts an authenticated downside release stamp that is one step beyond its
+  own (anything further is clamped, so a forged far-future stamp still can't
+  hold an operation hostage). Schedules by
   `schedulesUpdatedAt` — both stamps clamp to `now` on both sides, and when
   exactly one side is settings-locked the locked side's schedules win.
 - **Companion connections are only "a browser" after an AUTHENTICATED

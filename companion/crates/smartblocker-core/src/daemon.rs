@@ -136,6 +136,10 @@ struct Shared {
     /// Public-only partner trust state. Command decisions acquire lock_state
     /// before this mutex so arm/current-operation checks are one atomic view.
     partner: Mutex<PartnerState>,
+    /// Why partner trust state could not be loaded (corrupt file). The
+    /// subsystem is disabled but enforcement keeps running; the corrupt file
+    /// is never overwritten or replaced with a fresh trust root.
+    partner_unavailable: Option<String>,
     /// Test-only pause after A's begin has persisted but before its status is
     /// captured, allowing B to prove exact result identity under concurrency.
     #[cfg(test)]
@@ -143,6 +147,10 @@ struct Shared {
     /// Absence distinguishes an uninitialized daemon from an initialized rev-0
     /// ledger. Lock configuration decisions acquire lock_state first too.
     allowance: Mutex<Option<AllowanceAuthorityState>>,
+    /// Why the allowance ledger could not be loaded (corrupt file). Commands
+    /// and bootstrap are refused (never mint a fresh daily pool), but locking
+    /// and enforcement continue.
+    allowance_unavailable: Option<String>,
     /// `None` means no browser or CLI has initialized ordinary blocking yet.
     /// Lock ordering is always lock_state -> blocking for coherent decisions.
     blocking: Mutex<Option<BlockingState>>,
@@ -160,7 +168,6 @@ struct Shared {
     /// Ordered under enforcer_state with the remainder capture, so a larger
     /// sequence always represents a chronologically newer observation.
     next_extension_loss_sequence: AtomicU64,
-    started: Instant,
     /// Wall clock at daemon start (status snapshot `startedAtMs`).
     started_wall_ms: i64,
     version: &'static str,
@@ -170,7 +177,9 @@ struct Shared {
 
 impl Shared {
     fn mono_ms(&self) -> u64 {
-        self.started.elapsed().as_millis() as u64
+        // Boot-relative, so the persisted drift anchor stays comparable across
+        // daemon restarts (see clock.rs).
+        crate::clock::boot_mono_ms()
     }
 
     fn wall_ms(&self) -> i64 {
@@ -203,8 +212,16 @@ impl Shared {
         // command acknowledgement is one coherent view of all three slices.
         let lock = self.lock_state.lock().unwrap();
         let blocking = *self.blocking.lock().unwrap();
-        let partner = self.partner.lock().unwrap().clone();
-        let allowance = self.allowance.lock().unwrap().clone();
+        let partner = if self.partner_unavailable.is_some() {
+            None
+        } else {
+            Some(self.partner.lock().unwrap().clone())
+        };
+        let allowance = if self.allowance_unavailable.is_some() {
+            None
+        } else {
+            self.allowance.lock().unwrap().clone()
+        };
         let lock_state = lock.clone();
         CompanionStatus {
             companion_version: self.version.to_string(),
@@ -221,7 +238,7 @@ impl Shared {
             // Anonymous greetings and degraded relay statuses carry no
             // recipient-specific enforcement observation.
             extension_loss: None,
-            partner: Some(partner),
+            partner,
             allowance,
             app_blocklist: crate::apps::normalize_app_blocklist(&config.app_blocklist),
             app_blocklist_updated_at: config.app_blocklist_updated_at.max(0),
@@ -557,6 +574,47 @@ impl Shared {
                 sanitized.random_text_updated_at = current.random_text_updated_at;
                 sanitized.schedules = current.schedules.clone();
                 sanitized.schedules_updated_at = current.schedules_updated_at;
+                // Category-scoped schedules are the same ordered-operation
+                // class: an anonymous peer could otherwise replace the list
+                // (or its stamp) and delete an INACTIVE window before it ever
+                // fires. Pin both, like the legacy pair above.
+                sanitized.category_schedules = current.category_schedules.clone();
+                sanitized.category_schedules_updated_at = current.category_schedules_updated_at;
+            } else {
+                // Strictly-upward release stamps: the extension writes ordered
+                // operations as max(now, previous + 1). After a wall clock is
+                // corrected backwards, that legitimate release stamp is still
+                // "future" relative to the corrected now, and sanitize clamps
+                // every future stamp down to now — where it would LOSE to an
+                // arm stamped while the clock was ahead (an unreleasable
+                // password/delay/random-text lock until that date). An
+                // AUTHENTICATED peer may therefore advance each ordered stamp
+                // by exactly one step; anything further is clamped, so a
+                // forged far-future stamp still cannot hold an operation
+                // hostage. (Unauthenticated peers were pinned above.)
+                let now_now = self.wall_ms().max(0) as u64;
+                let step = |raw: u64, current: u64| -> u64 {
+                    if raw > now_now {
+                        current.saturating_add(1).max(now_now)
+                    } else {
+                        raw
+                    }
+                };
+                sanitized.password_ts = step(remote.password_ts, current.password_ts);
+                sanitized.break_updated_at =
+                    step(remote.break_updated_at, current.break_updated_at);
+                sanitized.delay_updated_at =
+                    step(remote.delay_updated_at, current.delay_updated_at);
+                sanitized.random_text_updated_at = step(
+                    remote.random_text_updated_at,
+                    current.random_text_updated_at,
+                );
+                sanitized.schedules_updated_at =
+                    step(remote.schedules_updated_at, current.schedules_updated_at);
+                sanitized.category_schedules_updated_at = step(
+                    remote.category_schedules_updated_at,
+                    current.category_schedules_updated_at,
+                );
             }
             let merged = merge_lock_states(&current, &sanitized, self.wall_ms());
             if merged == *current {
@@ -877,9 +935,22 @@ impl Shared {
             return;
         }
         let incoming = crate::apps::normalize_app_blocklist(&apps);
-        let stamp = updated_at.max(0).min(MAX_JS_SAFE_INTEGER as i64);
+        // A far-future stamp (a corrupted/imported backup can carry 9e15)
+        // would freeze cross-browser app-list sync forever: every honest
+        // edit at now loses. Clamp to our own clock, the same policy as
+        // passwordTs/schedulesUpdatedAt elsewhere in this file.
+        let now_wall = self.wall_ms().max(0);
+        let stamp = updated_at
+            .max(0)
+            .min(now_wall)
+            .min(MAX_JS_SAFE_INTEGER as i64);
         let mut config = self.store.load_config();
-        let current_stamp = config.app_blocklist_updated_at.max(0);
+        // Heal a previously persisted future stamp the same way.
+        let current_stamp = config
+            .app_blocklist_updated_at
+            .max(0)
+            .min(now_wall)
+            .min(MAX_JS_SAFE_INTEGER as i64);
         let mut changed = false;
         if stamp >= current_stamp {
             let locked = {
@@ -1170,6 +1241,18 @@ impl Shared {
             );
             return;
         }
+        if let Some(reason) = &self.allowance_unavailable {
+            self.reply_to(
+                conn_id,
+                &CompanionMessage::Error {
+                    v: PROTOCOL_VERSION,
+                    message: format!(
+                        "Allowance state is unavailable ({reason}); relief is refused and enforcement continues."
+                    ),
+                },
+            );
+            return;
+        }
         let Some(incoming) = allowance::normalize_allowance_authority_state(raw) else {
             self.log_event("allowance-bootstrap-refused", "malformed recovery snapshot");
             return;
@@ -1218,6 +1301,18 @@ impl Shared {
                 &CompanionMessage::Error {
                     v: PROTOCOL_VERSION,
                     message: "allowance commands require an authenticated browser".into(),
+                },
+            );
+            return;
+        }
+        if let Some(reason) = &self.allowance_unavailable {
+            self.reply_to(
+                conn_id,
+                &CompanionMessage::Error {
+                    v: PROTOCOL_VERSION,
+                    message: format!(
+                        "Allowance state is unavailable ({reason}); relief is refused and enforcement continues."
+                    ),
                 },
             );
             return;
@@ -1357,6 +1452,9 @@ impl Shared {
     /// second. This is what turns a completed elapsed 24h wait into durable
     /// proof even when the user issues no command at that exact instant.
     fn observe_partner_at(&self, now: i64, now_mono: u64) {
+        if self.partner_unavailable.is_some() {
+            return;
+        }
         let changed = {
             let mut current = self.partner.lock().unwrap();
             match partner::observe_at(&current, now, now_mono) {
@@ -1400,6 +1498,18 @@ impl Shared {
     }
 
     fn partner_add_key_at(&self, conn_id: u64, public_key: &str, now: i64, now_mono: u64) {
+        if let Some(reason) = &self.partner_unavailable {
+            self.reply_to(
+                conn_id,
+                &CompanionMessage::Error {
+                    v: PROTOCOL_VERSION,
+                    message: format!(
+                        "Accountability-partner state is unavailable ({reason}); other locks and enforcement continue."
+                    ),
+                },
+            );
+            return;
+        }
         let result: Result<(bool, String), String> = {
             // Lock ordering is intentional even though adding a key is allowed
             // during any lock: it cannot race an arm/redeem decision.
@@ -1454,6 +1564,18 @@ impl Shared {
     }
 
     fn partner_arm_at(&self, conn_id: u64, now: i64, now_mono: u64) {
+        if let Some(reason) = &self.partner_unavailable {
+            self.reply_to(
+                conn_id,
+                &CompanionMessage::Error {
+                    v: PROTOCOL_VERSION,
+                    message: format!(
+                        "Accountability-partner state is unavailable ({reason}); other locks and enforcement continue."
+                    ),
+                },
+            );
+            return;
+        }
         let now_stamp = match u64::try_from(now) {
             Ok(now_stamp) => now_stamp,
             Err(_) => {
@@ -1573,6 +1695,18 @@ impl Shared {
     }
 
     fn partner_begin_at(&self, conn_id: u64, now: i64, now_mono: u64) {
+        if let Some(reason) = &self.partner_unavailable {
+            self.reply_to(
+                conn_id,
+                &CompanionMessage::Error {
+                    v: PROTOCOL_VERSION,
+                    message: format!(
+                        "Accountability-partner state is unavailable ({reason}); other locks and enforcement continue."
+                    ),
+                },
+            );
+            return;
+        }
         let result = (|| -> Result<PendingPartnerOperation, String> {
             let lock = self.lock_state.lock().unwrap();
             let mut current = self.partner.lock().unwrap();
@@ -1655,6 +1789,18 @@ impl Shared {
     }
 
     fn partner_redeem_at(&self, conn_id: u64, token: &str, now: i64, now_mono: u64) {
+        if let Some(reason) = &self.partner_unavailable {
+            self.reply_to(
+                conn_id,
+                &CompanionMessage::Error {
+                    v: PROTOCOL_VERSION,
+                    message: format!(
+                        "Accountability-partner state is unavailable ({reason}); other locks and enforcement continue."
+                    ),
+                },
+            );
+            return;
+        }
         let result = (|| -> Result<(LockState, String), String> {
             let mut lock = self.lock_state.lock().unwrap();
             let mut current = self.partner.lock().unwrap();
@@ -1859,6 +2005,11 @@ struct ClockAnchor {
     /// start — a daemon restart moves mono BACKWARDS against the anchor,
     /// which is exactly the re-anchor signature `clock_anchor_step` checks.
     mono0: i64,
+    /// True when mono0 came from the boot-relative clock. Legacy anchors were
+    /// process-relative and must re-anchor once after upgrading (their mono0
+    /// is not comparable with the new base).
+    #[serde(default)]
+    boot_based: bool,
 }
 
 const CLOCK_ANCHOR_FILE: &str = "clock-anchor.json";
@@ -1927,6 +2078,7 @@ fn clock_anchor_step(
 ) -> ClockAnchorStep {
     match anchor {
         None => ClockAnchorStep::Create,
+        Some(a) if !a.boot_based => ClockAnchorStep::Reanchor,
         Some(a) if now_mono_ms < a.mono0 => ClockAnchorStep::Reanchor,
         Some(a) => {
             let unexplained = (now_wall_ms - a.wall0) - (now_mono_ms - a.mono0);
@@ -1954,7 +2106,16 @@ fn apply_clock_compensation(
     let shifted = {
         let mut current = shared.lock_state.lock().unwrap();
         let mut next = current.clone();
-        for slot in [&mut next.timer_until, &mut next.frozen_until] {
+        // delay_until is a wall-clock unlock deadline like the other two:
+        // leaving it un-shifted made the daemon report a delay as ready
+        // immediately after a forward jump (the extension normally masks it,
+        // but a disconnected browser or older peer would not). Some(0) means
+        // "armed, still waiting" and is inert under the > test.
+        for slot in [
+            &mut next.timer_until,
+            &mut next.frozen_until,
+            &mut next.delay_until,
+        ] {
             if matches!(*slot, Some(t) if t > reference_wall_ms) {
                 *slot = slot.map(|t| t + shift_ms);
             }
@@ -2133,6 +2294,42 @@ fn heal_lock_file(shared: &Shared, now_wall_ms: i64) {
     }
 }
 
+/// Load the allowance ledger, degrading ONLY that subsystem when the file is
+/// present but unreadable. A missing file still means "uninitialized" (a fresh
+/// install may mint its first pool); an unreadable one must never be replaced
+/// by a fresh daily pool, but it must not stop locks or enforcement either.
+fn load_allowance_or_degrade(store: &Store) -> (Option<AllowanceAuthorityState>, Option<String>) {
+    let loaded = store.load_allowance_state();
+    // A metadata error is treated as "exists" (fail closed: refuse to mint).
+    let exists = store.allowance_state_file_exists().unwrap_or(true);
+    match loaded {
+        Some(state) => (Some(state), None),
+        None if exists => (
+            None,
+            Some(
+                "allowance-state.json is corrupt; refusing to mint a fresh daily pool".to_string(),
+            ),
+        ),
+        None => (None, None),
+    }
+}
+
+/// Inert placeholder when partner state is corrupt. Never persisted and never
+/// used for a decision: every partner command path checks
+/// `partner_unavailable` first. The sentinel installation id is all zeros so
+/// it cannot collide with a real random id.
+fn unavailable_partner_state() -> PartnerState {
+    PartnerState {
+        version: 1,
+        installation_id: "0".repeat(32),
+        public_keys: vec![],
+        pending_operations: vec![],
+        spent_codes: vec![],
+        last_observed_at_ms: 0,
+        last_observed_mono_ms: None,
+    }
+}
+
 /// Load and migrate public partner trust state, or create a fresh installation
 /// only when no file exists. Every startup clears unsigned pending operations
 /// and persists a current-runtime monotonic rehydration BEFORE commands bind.
@@ -2188,23 +2385,29 @@ fn sample_usage(shared: &Shared, probe: &mut dyn ForegroundProbe, now_wall_ms: i
 /// Runs forever (accept loop on the calling thread). Returns only on a bind
 /// error — `AddrInUse` means another daemon instance is already running.
 pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
-    let started = Instant::now();
     let started_wall_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
-    let initial_partner = load_or_initialize_partner_state(&opts.store, started_wall_ms, 0)?;
+    // Corrupt AUXILIARY state must never take hard enforcement down with it.
+    // Partner trust and the allowance ledger fail closed *within their
+    // subsystem* (commands refused, nothing minted, the corrupt file left
+    // untouched) while locks, kills and the watchdog keep running.
+    let (initial_partner, partner_unavailable) =
+        match load_or_initialize_partner_state(&opts.store, started_wall_ms, 0) {
+            Ok(state) => (state, None),
+            Err(error) => {
+                eprintln!(
+                    "[daemon] partner state unavailable ({error}); continuing with enforcement only"
+                );
+                (unavailable_partner_state(), Some(error.to_string()))
+            }
+        };
     let listener = ipc::listen(&opts.socket_name)?;
     let initial = opts.store.load_lock_state();
     let initial_blocking = opts.store.load_blocking_state();
-    let initial_allowance = opts.store.load_allowance_state();
     let initial_config = opts.store.load_config();
-    if initial_allowance.is_none() && opts.store.allowance_state_file_exists()? {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "allowance-state.json is corrupt; refusing to mint a fresh daily pool",
-        ));
-    }
+    let (initial_allowance, allowance_unavailable) = load_allowance_or_degrade(&opts.store);
     // Best-effort managed-browser policy hardening (off until policy_enforce
     // + a real update_url are configured; no-op on non-Windows).
     let _ = crate::policy::apply_configured_policies(&initial_config);
@@ -2222,9 +2425,11 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
         #[cfg(test)]
         lock_state_save_gate: Mutex::new(None),
         partner: Mutex::new(initial_partner),
+        partner_unavailable: partner_unavailable.clone(),
         #[cfg(test)]
         partner_result_gate: Mutex::new(None),
         allowance: Mutex::new(initial_allowance),
+        allowance_unavailable: allowance_unavailable.clone(),
         store: opts.store,
         blocking: Mutex::new(initial_blocking),
         conns: Mutex::new(HashMap::new()),
@@ -2232,13 +2437,20 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
         usage: Mutex::new(usage),
         extension_loss_revision: AtomicU64::new(0),
         next_extension_loss_sequence: AtomicU64::new(0),
-        started,
         started_wall_ms,
         version: env!("CARGO_PKG_VERSION"),
         extra_incompatible: opts.extra_incompatible,
         dry_run_kills: opts.dry_run_kills,
     });
     shared.log_event("daemon-start", &format!("socket {}", opts.socket_name));
+    // Degraded subsystems are visible in the audit log (and therefore in the
+    // UI's recent-events view) rather than looking like plain "not armed".
+    if let Some(reason) = &shared.partner_unavailable {
+        shared.log_event("partner-state-unavailable", reason);
+    }
+    if let Some(reason) = &shared.allowance_unavailable {
+        shared.log_event("allowance-state-unavailable", reason);
+    }
 
     // Enforcement loop: cheap status + license-posture derivation while
     // idle, process snapshots + enforcer ticks whenever ANY lock is armed.
@@ -2337,6 +2549,7 @@ pub fn run_daemon(opts: DaemonOptions) -> io::Result<()> {
                         let fresh = ClockAnchor {
                             wall0: now_wall,
                             mono0: now_mono as i64,
+                            boot_based: true,
                         };
                         clock_anchor = Some(fresh);
                         save_clock_anchor(&shared.store, &fresh);
@@ -2850,7 +3063,7 @@ fn replace_conn(
             browser,
             ext_version,
             authed: authed.unwrap_or(old.authed),
-            last_seen_mono_ms: shared.started.elapsed().as_millis() as u64,
+            last_seen_mono_ms: shared.mono_ms(),
             last_extension_loss_sequence: Arc::clone(&old.last_extension_loss_sequence),
         });
         conns.insert(id, entry);
@@ -3090,6 +3303,7 @@ pub fn spawn_daemon(opts: DaemonOptions) -> bool {
 mod tests {
     use super::*;
     use crate::ipc::traits::Listener as _;
+    use crate::lock_math::CategoryScheduleRule;
     use crate::lock_math::ScheduleRule;
     use serde_json::json;
 
@@ -3098,6 +3312,13 @@ mod tests {
     struct Outbox(mpsc::Receiver<Arc<Vec<u8>>>);
 
     fn test_shared() -> (tempfile::TempDir, Arc<Shared>) {
+        test_shared_with(None, None)
+    }
+
+    fn test_shared_with(
+        partner_unavailable: Option<&str>,
+        allowance_unavailable: Option<&str>,
+    ) -> (tempfile::TempDir, Arc<Shared>) {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
         let partner =
@@ -3109,15 +3330,16 @@ mod tests {
             lock_state: Mutex::new(LockState::default()),
             lock_state_save_gate: Mutex::new(None),
             partner: Mutex::new(partner),
+            partner_unavailable: partner_unavailable.map(str::to_string),
             partner_result_gate: Mutex::new(None),
             allowance: Mutex::new(None),
+            allowance_unavailable: allowance_unavailable.map(str::to_string),
             blocking: Mutex::new(None),
             conns: Mutex::new(HashMap::new()),
             enforcer_state: Mutex::new(EnforcerState::default()),
             usage: Mutex::new(usage),
             extension_loss_revision: AtomicU64::new(0),
             next_extension_loss_sequence: AtomicU64::new(0),
-            started: Instant::now(),
             started_wall_ms: 0,
             version: "test",
             extra_incompatible: vec![],
@@ -3472,6 +3694,7 @@ mod tests {
         let anchor = ClockAnchor {
             wall0: base_wall,
             mono0: 0,
+            boot_based: true,
         };
         // Tick 1: 55_000 wall − 5_000 mono = 50_000 unexplained → quiet.
         assert_eq!(
@@ -3494,6 +3717,7 @@ mod tests {
         let mut anchor = ClockAnchor {
             wall0: base_wall,
             mono0: 0,
+            boot_based: true,
         };
         let step = clock_anchor_step(Some(&anchor), base_wall + 110_000, 10_000);
         let ClockAnchorStep::Compensate(unexplained) = step else {
@@ -3503,6 +3727,23 @@ mod tests {
         assert_eq!(
             clock_anchor_step(Some(&anchor), base_wall + 115_000, 15_000),
             ClockAnchorStep::Quiet
+        );
+    }
+
+    #[test]
+    fn legacy_process_relative_anchor_reanchors_once_after_upgrade() {
+        // Pre-2026-11-22 anchors stored a process-relative mono0 that is not
+        // comparable with the boot-relative clock; trusting it would either
+        // disable drift detection (huge negative unexplained) or misfire.
+        let base_wall = 1_800_000_000_000_i64;
+        let legacy = ClockAnchor {
+            wall0: base_wall,
+            mono0: 5_000,
+            boot_based: false,
+        };
+        assert_eq!(
+            clock_anchor_step(Some(&legacy), base_wall + 20_000_000, 20_005_000),
+            ClockAnchorStep::Reanchor
         );
     }
 
@@ -3517,9 +3758,10 @@ mod tests {
         let anchor = ClockAnchor {
             wall0: base_wall,
             mono0: 500_000,
+            boot_based: true,
         };
-        // Mono BACKWARDS vs the anchor = the daemon restarted (its monotonic
-        // uptime zeroed) → silent re-anchor, never a false compensation.
+        // Mono BACKWARDS vs the anchor = the OS rebooted (boot-relative
+        // uptime restarted) → silent re-anchor, never a false compensation.
         assert_eq!(
             clock_anchor_step(Some(&anchor), base_wall + 9_999_000, 5_000),
             ClockAnchorStep::Reanchor
@@ -3548,6 +3790,7 @@ mod tests {
         let anchor = ClockAnchor {
             wall0: 1_800_000_000_000,
             mono0: 42_000,
+            boot_based: true,
         };
         save_clock_anchor(&store, &anchor);
         // A reopened store (= daemon restart on the same data dir) sees the
@@ -3577,6 +3820,7 @@ mod tests {
         *shared.lock_state.lock().unwrap() = LockState {
             timer_until: Some(now_wall - 5_000), // already over
             frozen_until: Some(now_wall + 600_000),
+            delay_until: Some(now_wall + 120_000), // active delay gate
             ..LockState::default()
         };
         // Sanity: the persisted anchor file must not be touched by shifting —
@@ -3591,6 +3835,11 @@ mod tests {
         let now = shared.lock_state.lock().unwrap().clone();
         assert_eq!(now.timer_until, Some(now_wall - 5_000));
         assert_eq!(now.frozen_until, Some(now_wall + 700_000));
+        assert_eq!(
+            now.delay_until,
+            Some(now_wall + 220_000),
+            "an active delay deadline shifts with the same compensation"
+        );
         assert_eq!(shared.store.load_lock_state(), now);
         let frames = frames_in(&cap);
         assert_eq!(frames.len(), 1);
@@ -3598,6 +3847,136 @@ mod tests {
             frames[0]["lockState"]["frozenUntil"],
             json!(now.frozen_until)
         );
+    }
+
+    #[test]
+    fn startup_allowance_load_degrades_only_on_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        // Fresh install: uninitialized, not degraded.
+        assert_eq!(load_allowance_or_degrade(&store), (None, None));
+        // Corrupt file: degraded with a reason, still no state.
+        std::fs::write(dir.path().join("allowance-state.json"), b"{ nope").unwrap();
+        let (state, reason) = load_allowance_or_degrade(&store);
+        assert!(state.is_none());
+        assert!(reason.unwrap().contains("corrupt"));
+    }
+
+    #[test]
+    fn authenticated_release_wins_over_a_future_stamped_arm() {
+        // The clock was ahead when the password was armed, then corrected
+        // backwards. The extension's release is written as previous + 1, which
+        // is still "future" relative to the corrected wall clock; it must win
+        // the merge or the lock is unreleasable until that date.
+        let (_dir, shared) = test_shared();
+        add_conn(&shared, 7, true);
+        let future = (shared.wall_ms() + 3_600_000) as u64;
+        *shared.lock_state.lock().unwrap() = LockState {
+            password_hash: Some("ab".repeat(32)),
+            password_ts: future,
+            ..LockState::default()
+        };
+        shared.merge_in(
+            &LockState {
+                password_hash: None,
+                password_ts: future + 1,
+                ..LockState::default()
+            },
+            7,
+            true,
+        );
+        assert_eq!(shared.lock_state.lock().unwrap().password_hash, None);
+        assert!(shared.lock_state.lock().unwrap().password_ts > future);
+    }
+
+    #[test]
+    fn authenticated_far_future_stamp_is_clamped_near_now() {
+        // A forged far-future stamp may advance by ONE step, never billions of
+        // milliseconds, so it cannot hold an operation hostage.
+        let (_dir, shared) = test_shared();
+        add_conn(&shared, 7, true);
+        let now = shared.wall_ms().max(0) as u64;
+        shared.merge_in(
+            &LockState {
+                password_hash: Some("cd".repeat(32)),
+                password_ts: u64::MAX / 2,
+                ..LockState::default()
+            },
+            7,
+            true,
+        );
+        let stored = shared.lock_state.lock().unwrap().password_ts;
+        assert!(
+            stored <= now + 2,
+            "forged future stamp persisted as {stored} (now {now})"
+        );
+    }
+
+    #[test]
+    fn corrupt_partner_state_disables_partner_commands_but_keeps_enforcement() {
+        let (_dir, shared) = test_shared_with(Some("partner-state.json is corrupt"), None);
+        let cap = add_conn(&shared, 7, true);
+
+        shared.partner_add_key_at(7, &"ab".repeat(32), shared.wall_ms(), 0);
+        let frames = frames_in(&cap);
+        assert_eq!(frames.last().unwrap()["type"], "error");
+        assert!(
+            frames.last().unwrap().to_string().contains("unavailable"),
+            "refusal must name the unavailable subsystem"
+        );
+        // The placeholder never gets keys, and status hides partner state.
+        assert!(shared.partner.lock().unwrap().public_keys.is_empty());
+        assert!(shared.status().partner.is_none());
+
+        // Enforcement is untouched: an authenticated frozen lock still merges
+        // and is reported.
+        shared.merge_in(
+            &LockState {
+                frozen_until: Some(shared.wall_ms() + 60_000),
+                ..LockState::default()
+            },
+            7,
+            true,
+        );
+        assert!(shared.lock_state.lock().unwrap().frozen_until.is_some());
+    }
+
+    #[test]
+    fn corrupt_allowance_state_refuses_bootstrap_and_commands_but_keeps_lock_writes() {
+        let (_dir, shared) = test_shared_with(None, Some("allowance-state.json is corrupt"));
+        let cap = add_conn(&shared, 9, true);
+
+        shared.allowance_bootstrap(
+            9,
+            &serde_json::json!({ "version": 1, "revision": 1, "categories": {}, "receipts": [] }),
+        );
+        let boot = frames_in(&cap);
+        assert_eq!(boot.last().unwrap()["type"], "error");
+        assert!(boot.last().unwrap().to_string().contains("unavailable"));
+
+        shared.allowance_command_intent(
+            9,
+            &serde_json::json!({ "kind": "configure", "operationId": "op-1", "category": "video games", "config": {} }),
+            0,
+        );
+        let cmd = frames_in(&cap);
+        assert_eq!(cmd.last().unwrap()["type"], "error");
+        assert!(
+            shared.allowance.lock().unwrap().is_none(),
+            "never mint a fresh pool"
+        );
+        assert!(shared.status().allowance.is_none());
+
+        // Locks remain writable.
+        shared.merge_in(
+            &LockState {
+                timer_until: Some(shared.wall_ms() + 60_000),
+                ..LockState::default()
+            },
+            9,
+            true,
+        );
+        assert!(shared.lock_state.lock().unwrap().timer_until.is_some());
     }
 
     #[test]
@@ -3668,6 +4047,44 @@ mod tests {
         );
         assert_eq!(shared.lock_state.lock().unwrap().schedules.len(), 1);
         assert_eq!(shared.lock_state.lock().unwrap().schedules[0].id, "keep");
+
+        // Category-scoped schedules are the same forgeable-stamp class: an
+        // anonymous empty list + fresh stamp must not delete an INACTIVE
+        // scoped window before it fires (2026-11-21 audit).
+        let base2 = shared.lock_state.lock().unwrap().clone();
+        *shared.lock_state.lock().unwrap() = LockState {
+            category_schedules: Some(vec![CategoryScheduleRule {
+                schedule: ScheduleRule {
+                    id: "keep-cat".into(),
+                    label: None,
+                    days: vec![1, 2, 3, 4, 5],
+                    start_minutes: 540,
+                    end_minutes: 1020,
+                    lead_minutes: None,
+                    tz_offset_minutes: None,
+                    tz_name: None,
+                },
+                categories: vec!["video games".into()],
+            }]),
+            category_schedules_updated_at: 100,
+            ..base2
+        };
+        shared.merge_in(
+            &LockState {
+                category_schedules: Some(vec![]),
+                category_schedules_updated_at: 9_999_999,
+                ..LockState::default()
+            },
+            7,
+            false,
+        );
+        let kept = shared.lock_state.lock().unwrap().category_schedules.clone();
+        assert_eq!(kept.as_ref().map(|v| v.len()), Some(1));
+        assert_eq!(
+            kept.unwrap()[0].schedule.id,
+            "keep-cat",
+            "anonymous rewrite must not delete a scoped window"
+        );
 
         // Timer/frozen still merge from anonymous writers (strictening-only).
         shared.merge_in(

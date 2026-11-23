@@ -25,6 +25,9 @@ function check(name, ok, detail = '') {
 
 mkdirSync(SHOTS, { recursive: true });
 rmSync(resolve(PROFILE, 'Default/Service Worker/ScriptCache'), { recursive: true, force: true });
+// A killed Chromium can leave a broken SW registration; drop the
+// registration DB too (CacheStorage = the model stays).
+rmSync(resolve(PROFILE, 'Default/Service Worker/Database'), { recursive: true, force: true });
 
 async function launchWithServiceWorker() {
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -152,7 +155,12 @@ try {
     .locator('.schedule-row')
     .first()
     .getByRole('checkbox', { name: todayName, exact: true });
-  if (!(await todayBox.isChecked())) await todayBox.check();
+  // The real input is `sr-only` inside a labelled day chip; the visible
+  // letter span intercepts pointer events at the input's box, so Playwright's
+  // actionability check never passes. Real users click the chip (the label),
+  // and keyboard users focus the input — force-clicking the input directly
+  // exercises the same onChange without the interception race.
+  await todayBox.check({ force: true });
   await page.locator('.schedule-row input[type="time"]').nth(0).fill(hhmm(start));
   await page.locator('.schedule-row input[type="time"]').nth(1).fill(hhmm(end));
   await page.locator('.schedule-row input[aria-label="Minutes to lock settings before this window"]').fill('30');

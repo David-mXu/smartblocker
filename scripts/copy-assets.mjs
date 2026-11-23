@@ -25,6 +25,12 @@ for (const size of [16, 32, 48, 128]) {
 }
 console.log(`[copy-assets] ${target}: icons -> ${join(dist, 'icons')}`);
 
+// Precomputed base seed embeddings (see scripts/build-centroid-cache.mjs).
+// Fetched lazily by the classifier on the first centroid build; it is
+// extension-local, so the SW/offscreen fetch needs no web_accessible_resources.
+copyFileSync(join('src', 'shared', 'seed-centroid-vectors.json'), join(dist, 'seed-centroid-vectors.json'));
+console.log(`[copy-assets] ${target}: seed-centroid-vectors.json -> ${dist}`);
+
 if (target === 'chrome') {
   copyFileSync(join('src', 'background', 'offscreen', 'offscreen.html'), join(dist, 'offscreen.html'));
   console.log(`[copy-assets] ${target}: offscreen.html -> ${dist}`);

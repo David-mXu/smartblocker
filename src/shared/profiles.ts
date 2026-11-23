@@ -40,6 +40,7 @@ import {
 import { appBlocklistEqual, normalizeAppBlocklist } from './apps';
 import { sanitizeBlockMessage } from './display-prefs';
 import type { Settings } from './settings';
+import { normalizeOverrideFriction } from './surrender';
 
 export const PROFILES_SCHEMA_VERSION = 1;
 /** Deliberately a NEW key: an absent value migrates to "Default is active",
@@ -82,6 +83,7 @@ export const PROFILE_POLICY_FIELDS = [
   'useTabContext',
   'blockAdult',
   'maskSearchElements',
+  'maskFeeds',
   'surrenderMode',
   'blockMessage',
   'breakMode',
@@ -232,7 +234,9 @@ function normalizeListEntry(value: string): string {
 }
 
 function normalizeAppBlocklistTimestamp(value: unknown): number {
-  return safeTimestamp(value, 0);
+  // Never trust a future stamp: it would make every later real edit (and the
+  // companion's clamp-free comparison) lose the LWW race forever.
+  return Math.min(safeTimestamp(value, 0), Date.now());
 }
 
 /** v1 → v2 whitelist migration (moved from settings.ts so profiles and the
@@ -339,6 +343,7 @@ export function defaultProfilePolicy(
     useTabContext: false,
     blockAdult: false,
     maskSearchElements: true,
+    maskFeeds: false,
     surrenderMode: 'off',
     blockMessage: '',
     breakMode: 'off',
@@ -440,12 +445,11 @@ export function sanitizeProfilePolicy(
     useTabContext: safeBoolean(source.useTabContext, fallback.useTabContext),
     blockAdult: safeBoolean(source.blockAdult, fallback.blockAdult),
     maskSearchElements: safeBoolean(source.maskSearchElements, fallback.maskSearchElements),
+    maskFeeds: safeBoolean(source.maskFeeds, fallback.maskFeeds),
     surrenderMode:
-      source.surrenderMode === 'phrase'
-        ? 'phrase'
-        : source.surrenderMode === 'off'
-          ? 'off'
-          : fallback.surrenderMode,
+      source.surrenderMode === undefined
+        ? fallback.surrenderMode
+        : normalizeOverrideFriction(source.surrenderMode),
     blockMessage:
       source.blockMessage === undefined
         ? fallback.blockMessage
@@ -483,6 +487,7 @@ export function extractProfilePolicy(settings: Settings): ProfilePolicy {
     useTabContext: settings.useTabContext,
     blockAdult: settings.blockAdult,
     maskSearchElements: settings.maskSearchElements,
+    maskFeeds: settings.maskFeeds,
     surrenderMode: settings.surrenderMode,
     blockMessage: settings.blockMessage,
     breakMode: settings.breakMode,

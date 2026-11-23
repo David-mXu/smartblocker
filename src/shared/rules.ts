@@ -42,6 +42,13 @@ const SITE_MARKER_RE = /\s*\((?:[\w-]+\.)+[\w-]{2,}\)\s*$/;
  */
 function canonicalChannel(raw: string): string {
   return raw
+    // Invisible format characters (zero-width space, ZWJ, soft hyphen, LRM)
+    // and NFKC compatibility forms are exactly how a scraper-level channel
+    // name can LOOK identical and still fail a stored rule: "Mr​Beast"
+    // (with U+200B) or "ＭｒＢｅａｓｔ" must match "mrbeast". Same normalization
+    // family as overrides.ts / title rules.
+    .replace(/\p{Cf}/gu, '')
+    .normalize('NFKC')
     .trim()
     .replace(/^@+/, '')
     .replace(SITE_MARKER_RE, '')
@@ -174,14 +181,35 @@ function compileTitleRuleUncached(rule: string): RegExp | null {
   }
 }
 
+/** Linear ordered-literal match: the exact semantics the old
+ *  `escapeRegex(part).join('[\\s\\S]*')` regex had, without the regex engine.
+ *  Sequential earliest-match is optimal for ordered literals, so this is
+ *  O(haystack × parts) with no backtracking at all — a stored rule such as
+ *  `a*b*c*d` can no longer be turned into a service-worker stall by a hostile
+ *  page title (measured 57s via the regex on 300 chars). */
+function matchesTitleRuleParts(haystack: string, rule: string): boolean {
+  const parts = normalizeForTitleRule(rule)
+    .split(/\*+/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+  if (parts.length === 0) return false;
+  let cursor = 0;
+  for (let i = 0; i < parts.length; i++) {
+    const at = haystack.indexOf(parts[i], cursor);
+    if (at < 0) return false;
+    cursor = at + parts[i].length;
+  }
+  return true;
+}
+
 /** The matched rule's trimmed raw text (for the block screen/reason/logs), or null. */
 export function matchTitleRule(title: string | null | undefined, rules: string[]): string | null {
   if (!title || !Array.isArray(rules) || rules.length === 0) return null;
   const haystack = normalizeForTitleRule(title);
   if (!haystack) return null;
   for (const raw of rules) {
-    const re = compileTitleRule(raw);
-    if (re && re.test(haystack)) return raw.trim();
+    if (typeof raw !== 'string') continue;
+    if (matchesTitleRuleParts(haystack, raw)) return raw.trim();
   }
   return null;
 }
@@ -211,7 +239,10 @@ export function matchTitleRule(title: string | null | undefined, rules: string[]
  * validated these entries: trim + lowercase + whitespace collapse.
  */
 export function normalizeTitleRule(input: string): NormalizeResult {
-  const value = input.trim().toLowerCase().replace(/\s+/g, ' ');
+  // Normalize exactly like the matcher does BEFORE counting gaps, so a
+  // fullwidth `＊` (NFKC → `*`) or an invisible Cf character can neither
+  // smuggle a wildcard past the cap nor change the stored spelling.
+  const value = normalizeForTitleRule(input);
   if (!value) return { ok: false, error: 'Enter a title pattern, like minecraft*speedrun' };
   if (value.length < 3) {
     return { ok: false, error: 'Use at least 3 characters so it doesn’t block everything' };

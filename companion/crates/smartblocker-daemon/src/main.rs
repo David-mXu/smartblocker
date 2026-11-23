@@ -23,6 +23,7 @@ use smartblocker_core::enforcer;
 use smartblocker_core::ipc::DEFAULT_SOCKET_NAME;
 use smartblocker_core::lock_math::derive_lock_status;
 use smartblocker_core::partner::generate_signing_material;
+use smartblocker_core::procwatch;
 use smartblocker_core::protocol::{BlockAction, CompanionMessage, PROTOCOL_VERSION};
 use smartblocker_core::registration;
 use smartblocker_core::store::Store;
@@ -116,9 +117,30 @@ fn spawn_background_child(subcommand: &str, socket: &str, data_dir: Option<&Path
 /// fails the probe, so the watchdog respawns — the respawned daemon then
 /// exits AddrInUse while the squatter holds the name and binds cleanly the
 /// moment the squatter dies.
+/// A PONG is only evidence of a HEALTHY daemon when the pid it reports is
+/// actually a companion daemon image. A socket squatter can answer the probe
+/// (or forward it) with an arbitrary pid; without this check the watchdog
+/// would never respawn and hard enforcement would silently stop. Unreadable
+/// evidence (process exited between frames, permissions) is treated as ours
+/// so a transient race cannot cause respawn churn — only a positively
+/// different executable image does.
+fn pong_is_our_daemon(pid: u32) -> bool {
+    let Some(candidate) = procwatch::pid_exe(pid) else {
+        return true;
+    };
+    let Ok(ours) = std::env::current_exe() else {
+        return true;
+    };
+    procwatch::exe_file_names_match(&candidate, &ours)
+}
+
 fn run_watchdog(socket: &str, data_dir: Option<PathBuf>) -> ! {
     loop {
-        if daemon::probe_ping(socket, PROBE_LEG_TIMEOUT).is_none() {
+        let healthy = matches!(
+            daemon::probe_ping(socket, PROBE_LEG_TIMEOUT),
+            Some((pid, _)) if pong_is_our_daemon(pid)
+        );
+        if !healthy {
             let _ = spawn_background_child("run", socket, data_dir.as_deref());
         }
         std::thread::sleep(WATCHDOG_TICK);

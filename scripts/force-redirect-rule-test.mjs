@@ -100,6 +100,19 @@ await test('only the exact owner ID can remove a rule; ordinary allowed clearing
   await clearForceRedirectRule(70, 'https://example.test/static');
   assert.equal(rules.some((rule) => rule.id === existing.id), false);
 });
+await test('fragments are stripped from the match filter (a fragment never hits the network)', async () => {
+  const withHash = await addForceRedirectRule(71, 'https://example.test/watch?v=1#t=30', info);
+  assert.equal(withHash.status, 'installed');
+  const rule = rules.find((r) => r.id === withHash.ruleId);
+  assert.equal(rule.condition.urlFilter, '|https://example.test/watch?v=1|');
+  // A second evaluation of the same URL with a different fragment is the same
+  // network request — it must dedupe, not install a second dead rule.
+  assert.deepEqual(
+    await addForceRedirectRule(71, 'https://example.test/watch?v=1#t=90', info),
+    { status: 'already-enforced' },
+  );
+  assert.equal(rules.filter((r) => r.condition.urlFilter === '|https://example.test/watch?v=1|').length, 1);
+});
 await test('invalid/capability failures return failed rather than fabricated ownership', async () => {
   assert.deepEqual(await addForceRedirectRule(70, 'not a URL', info), { status: 'failed' });
   assert.deepEqual(

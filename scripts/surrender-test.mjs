@@ -3,9 +3,13 @@
 //
 //   node scripts/surrender-test.mjs
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   canSubmit,
   isPhraseMatch,
+  normalizeOverrideFriction,
+  PAUSE_OVERRIDE_MS,
+  pauseElapsed,
   SURRENDER_DELAY_MS,
   SURRENDER_PHRASE,
   surrenderDeadline,
@@ -102,5 +106,28 @@ test('a wrong-entry restart requires a fresh full delay with no partial credit',
   assert.equal(canSubmit(restartedAt + SURRENDER_DELAY_MS, restartedAt, SURRENDER_PHRASE), true);
 });
 
+test('pause tier is 10 seconds and needs no phrase', () => {
+  assert.equal(PAUSE_OVERRIDE_MS, 10_000);
+  assert.equal(pauseElapsed(START + 9_999, START), false);
+  assert.equal(pauseElapsed(START + 10_000, START), true);
+});
+
+test('override friction normalizes unknown values to off, keeps both tiers', () => {
+  assert.equal(normalizeOverrideFriction('pause'), 'pause');
+  assert.equal(normalizeOverrideFriction('phrase'), 'phrase');
+  assert.equal(normalizeOverrideFriction('off'), 'off');
+  assert.equal(normalizeOverrideFriction('maybe'), 'off');
+  assert.equal(normalizeOverrideFriction(undefined), 'off');
+});
+
+test('THE INJECTED PAUSE CONSTANT MATCHES THE SHARED ONE (source tripwire)', () => {
+  // blockscreen.ts is serialized into the page and cannot import surrender.ts,
+  // so the constant is mirrored; a silent drift would make the wall and the
+  // tested contract disagree.
+  const source = readFileSync(new URL('../src/background/blockscreen.ts', import.meta.url), 'utf8');
+  assert.match(source, /const pauseMs = 10_000;/);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exitCode = 1;
+

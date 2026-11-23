@@ -126,7 +126,11 @@ function patchSnapshot(patch: Partial<CompanionSnapshot>): void {
   // Repeated no-op snapshot writes can therefore wake the event page again on
   // every idle shutdown, preventing a quiet event-page lifecycle entirely.
   if (previous && JSON.stringify(previous) === JSON.stringify(snapshot)) return;
-  void api.storage.local.set({ [SNAPSHOT_KEY]: snapshot });
+  // Fire-and-forget snapshot cache; a quota/teardown rejection must not
+  // surface as an unhandled promise rejection in the service worker.
+  void api.storage.local
+    .set({ [SNAPSHOT_KEY]: snapshot })
+    .catch((e) => console.warn('[SmartBlocker] companion snapshot write failed:', e));
 }
 
 function send(msg: CompanionMessage): boolean {

@@ -26,6 +26,7 @@ import {
   deriveLockStatus,
   makeBreakOperation,
   mergeLockStates,
+  nextOrderedStamp,
   sanitizeLockState,
   sanitizeScheduleLabel,
   validateCategoryScheduleRule,
@@ -201,7 +202,7 @@ export function armDelayLock(durationMs: number): Promise<void> {
       ...state,
       delayUntil: 0,
       delayDurationMs,
-      delayUpdatedAt: gateNow(),
+      delayUpdatedAt: nextOrderedStamp(state.delayUpdatedAt, gateNow()),
     });
   });
 }
@@ -215,7 +216,11 @@ export function startDelayUnlock(): Promise<LockStatus> {
     const delay = armedDelayLock(state);
     if (!delay) throw new Error('A delay lock is not armed.');
     if (delay.until !== 0) throw new Error('The unlock countdown has already started.');
-    const next = { ...state, delayUntil: now + delay.durationMs, delayUpdatedAt: now };
+    const next = {
+      ...state,
+      delayUntil: now + delay.durationMs,
+      delayUpdatedAt: nextOrderedStamp(state.delayUpdatedAt, now),
+    };
     await writeLockState(next);
     return deriveLockStatus(next, now);
   });
@@ -229,7 +234,11 @@ export function cancelDelayUnlock(): Promise<LockStatus> {
     const state = await readLockState(true);
     const delay = armedDelayLock(state);
     if (!delay || delay.until === 0) throw new Error('No unlock countdown is running.');
-    const next = { ...state, delayUntil: 0, delayUpdatedAt: now };
+    const next = {
+      ...state,
+      delayUntil: 0,
+      delayUpdatedAt: nextOrderedStamp(state.delayUpdatedAt, now),
+    };
     await writeLockState(next);
     return deriveLockStatus(next, now);
   });
@@ -248,7 +257,7 @@ export function completeDelayUnlock(): Promise<LockStatus> {
       ...state,
       delayUntil: null,
       delayDurationMs: null,
-      delayUpdatedAt: now,
+      delayUpdatedAt: nextOrderedStamp(state.delayUpdatedAt, now),
     };
     await writeLockState(next);
     return deriveLockStatus(next, now);
@@ -271,7 +280,7 @@ export function armRandomTextLock(length: number): Promise<void> {
     await writeLockState({
       ...state,
       randomTextLen,
-      randomTextUpdatedAt: gateNow(),
+      randomTextUpdatedAt: nextOrderedStamp(state.randomTextUpdatedAt, gateNow()),
     });
   });
 }
@@ -291,7 +300,11 @@ export function releaseRandomTextLock(expectedArmStamp: number): Promise<LockSta
     ) {
       throw new Error('This unlock text belongs to an older lock. Request a fresh one.');
     }
-    const next = { ...state, randomTextLen: null, randomTextUpdatedAt: now };
+    const next = {
+      ...state,
+      randomTextLen: null,
+      randomTextUpdatedAt: nextOrderedStamp(state.randomTextUpdatedAt, now),
+    };
     await writeLockState(next);
     return deriveLockStatus(next, now);
   });
@@ -320,7 +333,11 @@ export function startBreak(delayMs: number, durationMs: number): Promise<LockSta
     if (status.breakEndsAt !== null && status.breakEndsAt > now) {
       throw new Error('A break is already pending or active.');
     }
-    const next = { ...state, ...makeBreakOperation(now, delayMs, durationMs) };
+    const next = {
+      ...state,
+      ...makeBreakOperation(now, delayMs, durationMs),
+      breakUpdatedAt: nextOrderedStamp(state.breakUpdatedAt, now),
+    };
     await writeLockState(next);
     return deriveLockStatus(next, now);
   });
@@ -336,7 +353,7 @@ export function cancelBreak(): Promise<LockStatus> {
       breakStartedAt: null,
       breakNotBefore: null,
       breakEndsAt: null,
-      breakUpdatedAt: Date.now(),
+      breakUpdatedAt: nextOrderedStamp(state.breakUpdatedAt, Date.now()),
     };
     await writeLockState(next);
     return deriveLockStatus(next, Date.now());
@@ -447,7 +464,7 @@ async function migrateToV2Hash(pw: string): Promise<void> {
   await writeLockState({
     ...state,
     passwordHash: await pbkdf2HashHex(pw, kdf.salt, kdf.iterations),
-    passwordTs: Date.now(),
+    passwordTs: nextOrderedStamp(state.passwordTs, Date.now()),
   });
 }
 
@@ -498,7 +515,7 @@ export function armPasswordLock(password: string): Promise<void> {
     await writeLockState({
       ...state,
       passwordHash: await pbkdf2HashHex(pw, kdf.salt, kdf.iterations),
-      passwordTs: Date.now(),
+      passwordTs: nextOrderedStamp(state.passwordTs, Date.now()),
     });
   });
 }
@@ -514,10 +531,13 @@ export function attemptPasswordUnlock(password: string): Promise<boolean> {
     // Tombstone: the unlock must WIN the companion merge, so clearing the hash
     // stamps passwordTs — otherwise the peer's armed copy re-arms us on sync.
     // Re-read: a legacy→v2 migration inside the verify just rewrote state.
+    // The stamp is strictly upward so a clock corrected backwards after an
+    // ahead-stamped arm cannot make this tombstone lose.
+    const latest = await readLockState(true);
     await writeLockState({
-      ...(await readLockState(true)),
+      ...latest,
       passwordHash: null,
-      passwordTs: Date.now(),
+      passwordTs: nextOrderedStamp(latest.passwordTs, Date.now()),
     });
     return true;
   });
@@ -571,7 +591,7 @@ export function setSchedules(rules: ScheduleRule[]): Promise<void> {
     await writeLockState({
       ...state,
       schedules: pinned,
-      schedulesUpdatedAt: Date.now(),
+      schedulesUpdatedAt: nextOrderedStamp(state.schedulesUpdatedAt, Date.now()),
     });
   });
 }
@@ -607,7 +627,7 @@ export function setCategorySchedules(rules: CategoryScheduleRule[]): Promise<voi
     await writeLockState({
       ...state,
       categorySchedules: pinned,
-      categorySchedulesUpdatedAt: now,
+      categorySchedulesUpdatedAt: nextOrderedStamp(state.categorySchedulesUpdatedAt, now),
     });
   });
 }

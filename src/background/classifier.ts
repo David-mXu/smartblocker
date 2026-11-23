@@ -19,7 +19,13 @@ import {
   meanNormalize,
   prototypesVersion,
 } from '../shared/prototypes';
-import { buildSpecVectors, CENTROID_CACHE_FORMAT, type CachedSeedVectors } from '../shared/prototype-cache';
+import {
+  buildSpecVectors,
+  CENTROID_CACHE_FORMAT,
+  seedVectorsFromAsset,
+  type CachedSeedVectors,
+  type SeedVectorAsset,
+} from '../shared/prototype-cache';
 import type { ClassifyInput, ClassifyOutcome, InferResult } from '../shared/messages';
 import { classifyViaOffscreen, embedViaOffscreen, supportsOffscreen } from './classify-client';
 
@@ -143,6 +149,26 @@ async function embedTexts(
   return { vectors, loadMs: tLoaded - t0, inferMs: performance.now() - tLoaded };
 }
 
+// ---- Precomputed base seed vectors ----
+// Fetched lazily from the extension bundle on the first centroid build. This is
+// what removes the one-time ~30s cold rebuild on a fresh install: all BASE
+// seeds have vectors already, so only user corrections (and any seed edits made
+// after the asset was generated) are embedded. Failure is silent — the build
+// path below is unchanged and simply embeds what the asset could not provide.
+let seedAssetPromise: Promise<SeedVectorAsset | null> | null = null;
+function getSeedVectorAsset(): Promise<SeedVectorAsset | null> {
+  seedAssetPromise ??= (async () => {
+    try {
+      const response = await fetch(api.runtime.getURL('seed-centroid-vectors.json'));
+      if (!response.ok) return null;
+      return (await response.json()) as SeedVectorAsset;
+    } catch {
+      return null;
+    }
+  })();
+  return seedAssetPromise;
+}
+
 // ---- Centroid store (embed backend) ----
 // Centroid vectors are derived data: rebuilt whenever their version (model id
 // + active labels + seed/user-correction texts + CENTROID_CACHE_FORMAT)
@@ -156,6 +182,12 @@ type CentroidCache = {
   vectors: number[][];
   seedVectors?: number[][][];
   seedHashes?: string[][];
+  /** Which model produced these seed vectors. Absent on pre-2026-11-21
+   *  caches; those are grandfathered once (the shipped revision is unique),
+   *  then written on the next build so a later revision bump can never
+   *  silently reuse vectors from a different model. */
+  modelId?: string;
+  modelRevision?: string;
 };
 
 let centroidsInFlight: Promise<CentroidCache> | null = null;
@@ -172,7 +204,16 @@ async function getCentroids(labels: string[]): Promise<CentroidCache & { buildMs
 
   const stored = await api.storage.local.get('centroidCache');
   const cached = stored.centroidCache as CentroidCache | undefined;
-  if (cached && cached.version === version && cached.seedVectors) {
+  // Seed vectors are only comparable across cosines when they came from the
+  // SAME model weights. The version hash spans seed TEXT and model id, not
+  // the pinned revision, so a revision bump alone used to reuse every cached
+  // seed vector under the new model — systematically wrong similarities that
+  // no test could see. Gate on the recorded producer; a legacy cache without
+  // the fields is trusted once and then upgraded in place.
+  const cacheMatchesModel =
+    (!cached?.modelId || cached.modelId === EMBED_MODEL_ID) &&
+    (!cached?.modelRevision || cached.modelRevision === EMBED_MODEL_REVISION);
+  if (cached && cached.version === version && cached.seedVectors && cacheMatchesModel) {
     return { ...cached, buildMs: 0 };
   }
 
@@ -210,8 +251,22 @@ async function getCentroids(labels: string[]): Promise<CentroidCache & { buildMs
     // old code special-cased away — fails its position hash and forces a
     // full rebuild of that category; only a verified prefix + fresh tail is
     // incrementally embedded.
-    const prevByName = new Map<string, CachedSeedVectors>();
-    if (cached && cached.seedVectors && cached.names.length === cached.seedVectors.length) {
+    // Start from the precomputed BASE vectors, then overlay this profile's
+    // cached vectors (which include user corrections and are hash-verified
+    // below). The asset is gated on the exact model id+revision; cached
+    // vectors are gated the same way (cacheMatchesModel), so a model bump can
+    // never mix vector spaces.
+    const asset = await getSeedVectorAsset();
+    const prevByName = seedVectorsFromAsset(specs, asset, {
+      id: EMBED_MODEL_ID,
+      revision: EMBED_MODEL_REVISION,
+    });
+    if (
+      cacheMatchesModel &&
+      cached &&
+      cached.seedVectors &&
+      cached.names.length === cached.seedVectors.length
+    ) {
       for (let i = 0; i < cached.names.length; i++) {
         prevByName.set(cached.names[i], {
           seedVecs: cached.seedVectors[i],
@@ -231,7 +286,15 @@ async function getCentroids(labels: string[]): Promise<CentroidCache & { buildMs
       seedVectors.push(vecs);
       seedHashes.push(hashes);
     }
-    const built: CentroidCache = { version, names, vectors, seedVectors, seedHashes };
+    const built: CentroidCache = {
+      version,
+      names,
+      vectors,
+      seedVectors,
+      seedHashes,
+      modelId: EMBED_MODEL_ID,
+      modelRevision: EMBED_MODEL_REVISION,
+    };
     await api.storage.local.set({ centroidCache: built });
     return built;
   })();
@@ -327,11 +390,22 @@ async function getTitleCache(): Promise<Map<string, CacheEntry>> {
   return titleCache;
 }
 
+// Coalesce the whole-map write: a SERP can produce 20 misses in one burst,
+// and each used to stringify+write the entire cache. A short debounce keeps
+// the last (freshest) snapshot and avoids racing snapshots resurrecting an
+// older map on disk.
+let titleCacheWriteTimer: ReturnType<typeof setTimeout> | undefined;
 function persistTitleCache(cache: Map<string, CacheEntry>) {
   while (cache.size > TITLE_CACHE_MAX) {
     cache.delete(cache.keys().next().value!); // Map iterates insertion-order: drop oldest
   }
-  void api.storage.local.set({ titleCache: Object.fromEntries(cache) });
+  if (titleCacheWriteTimer) clearTimeout(titleCacheWriteTimer);
+  titleCacheWriteTimer = setTimeout(() => {
+    titleCacheWriteTimer = undefined;
+    void api.storage.local
+      .set({ titleCache: Object.fromEntries(cache) })
+      .catch((e) => console.warn('[SmartBlocker] title cache write failed:', e));
+  }, 500);
 }
 
 // In-process inference (Firefox, or Chrome before the offscreen doc is wired).
@@ -391,11 +465,11 @@ export async function classify(input: ClassifyInput, bypassCache = false): Promi
   const fcKey = focusContextKey(input.focusContext);
   const modelKey =
     CLASSIFIER_BACKEND === 'embed'
-      ? `embed:${EMBED_MODEL_ID}:${prototypesVersion(
+      ? `embed:${EMBED_MODEL_ID}@${EMBED_MODEL_REVISION}:${prototypesVersion(
           EMBED_MODEL_ID,
           centroidSpecs(labels, await getPrototypeExamples()),
         )}${CENTROID_CACHE_FORMAT}:${fcKey}`
-      : `nli:${MODEL_ID}`;
+      : `nli:${MODEL_ID}@${MODEL_REVISION}`;
   const key = inputCacheKey(input, modelKey);
   const text = buildClassifierText(input);
 
