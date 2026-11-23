@@ -156,16 +156,22 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
 - `node scripts/e2e-reward-test.mjs` — productive-work reward accrual and
   relief flow (seeds `{enabled,onboarded}` explicitly — blocking defaults
   OFF). Uses a throwaway `/tmp` profile.
-- `node scripts/build-centroid-cache.mjs` — regenerates
+- `npm run build:centroid-cache` (`scripts/build-centroid-cache.mjs`) — regenerates
   `src/shared/seed-centroid-vectors.json`, the precomputed BASE seed embeddings
   produced by the REAL Chromium/WASM runtime through the extension's offscreen
   EMBED path. Run after any `prototype-seeds.json` or
   `EMBED_MODEL_REVISION` change, then run the asset test below.
-- `node scripts/centroid-asset-test.mjs` — fails if the shipped seed-vector
+- `npm run test:centroid-asset` (`scripts/centroid-asset-test.mjs`) — fails if the shipped seed-vector
   asset is stale (model id/revision, seed hashes/order, dimensions,
   normalization) or unexpectedly large. This is the tripwire that makes the
-  precomputed cache safe to ship.
-- `node scripts/warm-model-cache.mjs` — the nightly lane's hard warm-up: loads
+  precomputed cache safe to ship. Regeneration is byte-deterministic (the
+  pinned WASM runtime produced identical output across two runs, sha256
+  `68cd1b70…`), so a diff in the committed asset means seeds or the model pin
+  actually changed. Procedure after editing `prototype-seeds.json` or bumping
+  `EMBED_MODEL_REVISION`: `npm run build:centroid-cache` → `npm run
+  test:centroid-asset` → commit the asset (both are also in the nightly unit
+  battery).
+- `npm run warm:model` (`scripts/warm-model-cache.mjs`) — the nightly lane's hard warm-up: loads
   the built extension, runs one real classification, and fails non-zero unless
   the model CacheStorage is populated (so a failed early run can never save a
   model-less profile under the warm-cache key).

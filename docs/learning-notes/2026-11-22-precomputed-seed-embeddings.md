@@ -73,6 +73,17 @@ A final review of the merged tree found and fixed:
   the same source-derived revision) and caps each suite at 20 minutes so a
   hang cannot consume the 300-minute job budget.
 
+## Maintenance (finished)
+
+- `npm run build:centroid-cache` regenerates the asset; `npm run
+  test:centroid-asset` validates it (both also run in the nightly unit
+  battery, so a stale asset fails CI rather than silently slowing installs).
+- Regeneration is byte-deterministic: rerunning the generator against the same
+  seeds and the same pinned model produced an identical file (sha256
+  `68cd1b70ab198aca293a0fa3e5cf5dde83555cb035b2ecc968435337f0b70af4`), so any
+  diff in the committed asset is a real seed/model change.
+- `npm run warm:model` is the nightly's pre-chain hard gate.
+
 ## Residual
 
 The asset must be regenerated when seeds or the pinned model revision change;

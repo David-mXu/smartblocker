@@ -73,6 +73,9 @@ try {
   const id = new URL(sw.url()).host;
   const page = await ctx.newPage();
   await page.goto(`chrome-extension://${id}/options.html#advanced`);
+  // The options bundle can take a moment to mount on a loaded machine; clicking
+  // before the diagnostics card exists surfaced as a bare Playwright timeout.
+  await page.waitForSelector('#test-pair', { timeout: 60_000 });
   await page.click('#test-pair');
   console.log('… waiting for the production classifier (first run downloads the model)');
   await page.waitForFunction(

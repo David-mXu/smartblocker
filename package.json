@@ -13,7 +13,10 @@
     "eval": "node scripts/eval.mjs",
     "build:site": "vite build -c vite.config.site.ts",
     "build:desktop": "vite build -c vite.config.desktop.ts",
-    "deploy:site": "npx wrangler pages deploy dist-site --project-name=smartblocker"
+    "deploy:site": "npx wrangler pages deploy dist-site --project-name=smartblocker",
+    "build:centroid-cache": "node scripts/build-centroid-cache.mjs",
+    "test:centroid-asset": "node scripts/centroid-asset-test.mjs",
+    "warm:model": "node scripts/warm-model-cache.mjs"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
