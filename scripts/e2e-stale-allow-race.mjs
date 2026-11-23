@@ -6,9 +6,11 @@
 // armedUrl guard ("stillCurrentPage") must skip those side effects for stale
 // verdicts, and the popup recordTabStatus must keep reporting B.
 //
-// Deterministic slow-window WITHOUT test hooks: storage.local titleCache +
-// centroidCache are cleared up front so A's first classify pays the full
-// centroid rebuild (~2.5s) — B is navigated to inside that window.
+// Deterministic slow-window WITHOUT product hooks: the test clears the title
+// cache and delays EMBED RPCs inside the SW (the same runtime, not product
+// code), so A's classification is still in flight when B blocks. (Centroid
+// seeding is precomputed now, so the old ~30s rebuild window no longer
+// exists.)
 //
 // Usage: npm run build:chrome && node scripts/e2e-stale-allow-race.mjs
 // Shares .e2e-profile with e2e-test.mjs (warm model cache expected; a cold
@@ -68,6 +70,26 @@ try {
     await chrome.storage.local.set({ settings: { ...settings, enabled: true, blocklist: [kw] } });
   }, B_KEYWORD);
 
+  // Hold page A's query embedding for 1.5s. Delaying in the SW keeps this a
+  // black-box test of blocker.ts: no product test hooks, and B's
+  // deterministic blocklist path never calls EMBED so it stays instant.
+  await sw.evaluate(() => {
+    const g = globalThis;
+    if (!g.__sbRaceOriginalSend) {
+      g.__sbRaceOriginalSend = chrome.runtime.sendMessage.bind(chrome.runtime);
+    }
+    g.__sbRaceDelayMs = 1500;
+    chrome.runtime.sendMessage = (msg, ...rest) => {
+      const send = () => g.__sbRaceOriginalSend(msg, ...rest);
+      if (msg && msg.type === 'EMBED') {
+        return new Promise((resolve, reject) =>
+          setTimeout(() => send().then(resolve, reject), g.__sbRaceDelayMs),
+        );
+      }
+      return send();
+    };
+  });
+
   await context.route('**://docs.devnotes.example/**', (route) =>
     route.fulfill({
       contentType: 'text/html',
@@ -92,6 +114,10 @@ try {
 
   await tab.waitForSelector('#smartblocker-overlay', { timeout: 20_000 });
   console.log('PASS page B block screen present right after navigation');
+  await sw.evaluate(() => {
+    const g = globalThis;
+    if (g.__sbRaceOriginalSend) chrome.runtime.sendMessage = g.__sbRaceOriginalSend;
+  });
 
   // Premise check: the race only exists while page A's verdict is STILL in
   // flight (the centroid rebuild window). On an implausibly fast machine the

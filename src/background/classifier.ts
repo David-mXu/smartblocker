@@ -19,7 +19,13 @@ import {
   meanNormalize,
   prototypesVersion,
 } from '../shared/prototypes';
-import { buildSpecVectors, CENTROID_CACHE_FORMAT, type CachedSeedVectors } from '../shared/prototype-cache';
+import {
+  buildSpecVectors,
+  CENTROID_CACHE_FORMAT,
+  seedVectorsFromAsset,
+  type CachedSeedVectors,
+  type SeedVectorAsset,
+} from '../shared/prototype-cache';
 import type { ClassifyInput, ClassifyOutcome, InferResult } from '../shared/messages';
 import { classifyViaOffscreen, embedViaOffscreen, supportsOffscreen } from './classify-client';
 
@@ -143,6 +149,26 @@ async function embedTexts(
   return { vectors, loadMs: tLoaded - t0, inferMs: performance.now() - tLoaded };
 }
 
+// ---- Precomputed base seed vectors ----
+// Fetched lazily from the extension bundle on the first centroid build. This is
+// what removes the one-time ~30s cold rebuild on a fresh install: all BASE
+// seeds have vectors already, so only user corrections (and any seed edits made
+// after the asset was generated) are embedded. Failure is silent — the build
+// path below is unchanged and simply embeds what the asset could not provide.
+let seedAssetPromise: Promise<SeedVectorAsset | null> | null = null;
+function getSeedVectorAsset(): Promise<SeedVectorAsset | null> {
+  seedAssetPromise ??= (async () => {
+    try {
+      const response = await fetch(api.runtime.getURL('seed-centroid-vectors.json'));
+      if (!response.ok) return null;
+      return (await response.json()) as SeedVectorAsset;
+    } catch {
+      return null;
+    }
+  })();
+  return seedAssetPromise;
+}
+
 // ---- Centroid store (embed backend) ----
 // Centroid vectors are derived data: rebuilt whenever their version (model id
 // + active labels + seed/user-correction texts + CENTROID_CACHE_FORMAT)
@@ -225,8 +251,22 @@ async function getCentroids(labels: string[]): Promise<CentroidCache & { buildMs
     // old code special-cased away — fails its position hash and forces a
     // full rebuild of that category; only a verified prefix + fresh tail is
     // incrementally embedded.
-    const prevByName = new Map<string, CachedSeedVectors>();
-    if (cached && cached.seedVectors && cached.names.length === cached.seedVectors.length) {
+    // Start from the precomputed BASE vectors, then overlay this profile's
+    // cached vectors (which include user corrections and are hash-verified
+    // below). The asset is gated on the exact model id+revision; cached
+    // vectors are gated the same way (cacheMatchesModel), so a model bump can
+    // never mix vector spaces.
+    const asset = await getSeedVectorAsset();
+    const prevByName = seedVectorsFromAsset(specs, asset, {
+      id: EMBED_MODEL_ID,
+      revision: EMBED_MODEL_REVISION,
+    });
+    if (
+      cacheMatchesModel &&
+      cached &&
+      cached.seedVectors &&
+      cached.names.length === cached.seedVectors.length
+    ) {
       for (let i = 0; i < cached.names.length; i++) {
         prevByName.set(cached.names[i], {
           seedVecs: cached.seedVectors[i],

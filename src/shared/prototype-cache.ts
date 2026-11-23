@@ -127,3 +127,73 @@ export async function buildSpecVectors(
     embedded: plan.toEmbed.length,
   };
 }
+
+// ── Precomputed base seed vectors (scripts/build-centroid-cache.mjs) ────────
+// A fresh install would otherwise embed every seed text (~518) before its
+// first classification — measured ~30s in real Chromium. The build ships the
+// same vectors produced by the REAL Chromium/WASM runtime, so they are directly
+// comparable to query embeddings. Entries are trusted only for a matching
+// model id+revision and are still hash-verified per position by planSeedReuse;
+// a stale asset therefore degrades to a normal rebuild, never wrong math.
+
+export const SEED_VECTOR_ASSET_FORMAT = 1;
+
+export interface SeedVectorAsset {
+  format: number;
+  modelId: string;
+  modelRevision: string;
+  /** Embedding width (sanity check on every decoded vector). */
+  dim: number;
+  byName: Record<string, { hashes: string[]; vectors: string[] }>;
+}
+
+/** Decode one base64 little-endian Float32 vector into plain numbers. */
+export function decodeSeedVector(base64: string, expectedDim?: number): number[] {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  if (bytes.length % 4 !== 0) throw new Error('seed vector is not a whole Float32Array');
+  const floats = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.length / 4);
+  if (expectedDim !== undefined && floats.length !== expectedDim) {
+    throw new Error(`seed vector has ${floats.length} dims, expected ${expectedDim}`);
+  }
+  return Array.from(floats);
+}
+
+/** Build the per-category cached-seed map a fresh install can reuse without
+ *  embedding anything. Ignores the whole asset on a model mismatch or format
+ *  change, and skips individual malformed entries. */
+export function seedVectorsFromAsset(
+  specs: { name: string; texts: string[] }[],
+  asset: SeedVectorAsset | null | undefined,
+  model: { id: string; revision: string },
+): Map<string, CachedSeedVectors> {
+  const out = new Map<string, CachedSeedVectors>();
+  if (
+    !asset ||
+    asset.format !== SEED_VECTOR_ASSET_FORMAT ||
+    asset.modelId !== model.id ||
+    asset.modelRevision !== model.revision
+  ) {
+    return out;
+  }
+  for (const spec of specs) {
+    const entry = asset.byName?.[spec.name];
+    if (
+      !entry ||
+      !Array.isArray(entry.hashes) ||
+      !Array.isArray(entry.vectors) ||
+      entry.hashes.length !== entry.vectors.length ||
+      entry.vectors.length === 0
+    ) {
+      continue;
+    }
+    try {
+      const seedVecs = entry.vectors.map((vector) => decodeSeedVector(vector, asset.dim));
+      out.set(spec.name, { seedVecs, hashes: entry.hashes.slice() });
+    } catch {
+      // Malformed entry → fall back to embedding this category normally.
+    }
+  }
+  return out;
+}

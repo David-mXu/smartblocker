@@ -156,6 +156,19 @@ Remote: `origin = github.com/David-mXu/smartblocker.git` (push with plain `git`;
 - `node scripts/e2e-reward-test.mjs` — productive-work reward accrual and
   relief flow (seeds `{enabled,onboarded}` explicitly — blocking defaults
   OFF). Uses a throwaway `/tmp` profile.
+- `node scripts/build-centroid-cache.mjs` — regenerates
+  `src/shared/seed-centroid-vectors.json`, the precomputed BASE seed embeddings
+  produced by the REAL Chromium/WASM runtime through the extension's offscreen
+  EMBED path. Run after any `prototype-seeds.json` or
+  `EMBED_MODEL_REVISION` change, then run the asset test below.
+- `node scripts/centroid-asset-test.mjs` — fails if the shipped seed-vector
+  asset is stale (model id/revision, seed hashes/order, dimensions,
+  normalization) or unexpectedly large. This is the tripwire that makes the
+  precomputed cache safe to ship.
+- `node scripts/warm-model-cache.mjs` — the nightly lane's hard warm-up: loads
+  the built extension, runs one real classification, and fails non-zero unless
+  the model CacheStorage is populated (so a failed early run can never save a
+  model-less profile under the warm-cache key).
 - `node scripts/rules-test.mjs` — pure unit tests for the deterministic rule
   core: title-rule compiler/matcher + channel rules (`src/shared/rules.ts`,
   same type-stripping constraints), the shared classifier block predicate, and
@@ -287,14 +300,16 @@ Commit and push when appropriate.
       (`prototypes.ts`). Centroid vectors are cached in storage.local
       (`centroidCache`), version-keyed over model id + active labels + seed
       and user-correction texts + `CENTROID_CACHE_FORMAT` (in
-      `shared/prototype-cache.ts`) — a full cold rebuild re-embeds all ~600
-      seed texts: ~2.5s in Node, **~30s once in real Chromium** (measured
-      2026-11-14), so the FIRST classification after any cache-format bump can
-      be tens of seconds; suite waits need real timeouts and a re-run. Cached
-      seed vectors are hash-verified per position (2026-11-14) — seed edits
-      now rebuild only the changed categories and unchanged categories reuse
-      their caches, so the format tag only needs bumping for cache-SHAPE
-      changes, not seed additions.
+      `shared/prototype-cache.ts`). Since 2026-11-22 the BASE seed vectors ship
+      precomputed in `src/shared/seed-centroid-vectors.json` (generated in real
+      Chromium by `scripts/build-centroid-cache.mjs`), so a fresh install does
+      NOT re-embed ~600 seed texts — a cold build with default labels decodes
+      the asset and embeds only user corrections/seed edits (measured ~100ms of
+      decode + any missing texts, vs the old **~30s** cold rebuild). Cached
+      seed vectors are hash-verified per position, and the asset is trusted
+      only for an exact model id+revision match, so a stale asset degrades to a
+      normal rebuild. Regenerate it after seed/model changes;
+      `scripts/centroid-asset-test.mjs` fails until you do.
     - `'nli'` (legacy fallback): zero-shot NLI, one pass PER label.
     On Chrome/Edge inference runs in the **offscreen document** via
     `classify-client.ts` (`EMBED`/`CLASSIFY` RPC); on Firefox in-process.

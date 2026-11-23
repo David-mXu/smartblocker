@@ -87,20 +87,15 @@ jobs:
       - name: Restore warm model profiles
         uses: actions/cache@v4
         with:
-          # Per-suite persistent profiles. The classifier suites' CacheStorage
-          # holds the ~35MB model (see CLAUDE.md model-facts); the four
-          # non-classifier profiles are cached only for their persistent
-          # startup state (notifications/usage recreate fresh ones per run
-          # anyway, which is harmless). .dev-profile-protection is recreated
-          # per run and is not cached.
+          # Only classifier suites are cached: their CacheStorage holds the
+          # ~35MB model (see CLAUDE.md model-facts). Non-classifier profiles
+          # (schedule-ux/security/notifications/usage) never hold a model and
+          # are not worth serializing. .dev-profile-protection is recreated
+          # per run.
           path: |
             .e2e-profile
             .e2e-profile-p1
             .e2e-profile-p2
-            .e2e-profile-schedule-ux
-            .e2e-profile-security
-            .e2e-notifications-profile
-            .e2e-usage-profile
           key: embedded-model-${{ steps.model.outputs.revision }}-v1
           # Bump the -v1 suffix to force one cold re-download if a cached
           # profile is ever suspected of masking a regression.
@@ -113,6 +108,13 @@ jobs:
 
       - name: Build extension (chrome / edge target)
         run: npm run build:chrome
+
+      # HARD GATE before anything else can fail: if this step fails the job
+      # fails, and actions/cache's post-if:success() skips the save — so a run
+      # that could not download/load the model can never poison the warm-cache
+      # key with a model-less profile.
+      - name: Warm model cache (hard gate)
+        run: node scripts/warm-model-cache.mjs
 
       - name: Unit battery (pure Node)
         run: |
@@ -213,6 +215,24 @@ jobs:
           if [ "$failed" -ne 0 ]; then
             echo "$failed suite(s) failed — inspect the nightly-e2e-logs artifact."
           fi
+
+      # Defense in depth for the p1/p2 profiles (the warm step above only
+      # proves .e2e-profile): if a suite failed before its profile ever cached
+      # the model, drop that profile so the post-job cache save cannot store a
+      # model-less one under an "embedded-model-<rev>" key.
+      - name: Drop cold profiles before the cache save
+        if: always()
+        run: |
+          for p in .e2e-profile .e2e-profile-p1 .e2e-profile-p2; do
+            [ -d "$p" ] || continue
+            size=$(du -sm "$p/Default/Service Worker/CacheStorage" 2>/dev/null | cut -f1 || true)
+            if [ "${size:-0}" -lt 5 ]; then
+              echo "dropping cold profile: $p (CacheStorage ${size:-0}MB)"
+              rm -rf "$p"
+            else
+              echo "keeping warm profile: $p (CacheStorage ${size}MB)"
+            fi
+          done
 
       - name: Upload suite logs and exit codes
         if: always()
