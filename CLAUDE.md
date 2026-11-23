@@ -303,7 +303,7 @@ Commit and push when appropriate.
       `shared/prototype-cache.ts`). Since 2026-11-22 the BASE seed vectors ship
       precomputed in `src/shared/seed-centroid-vectors.json` (generated in real
       Chromium by `scripts/build-centroid-cache.mjs`), so a fresh install does
-      NOT re-embed ~600 seed texts — a cold build with default labels decodes
+      NOT re-embed all ~520 seed texts — a cold build with default labels decodes
       the asset and embeds only user corrections/seed edits (measured ~100ms of
       decode + any missing texts, vs the old **~30s** cold rebuild). Cached
       seed vectors are hash-verified per position, and the asset is trusted
